@@ -1,0 +1,31 @@
+add_test(NAME icd-drop-table-1 COMMAND ddbshtest -c "drop table if exists icd1")
+add_test(NAME icd-drop-table-2 COMMAND ddbshtest -c "drop table if exists icd2")
+add_test(NAME icd-drop-table-3 COMMAND ddbshtest -c "drop table if exists icd3")
+add_test(NAME icd-drop-table-4 COMMAND ddbshtest -c "drop table if exists icd4")
+add_test(NAME icd-drop-table-5 COMMAND ddbshtest -c "drop table if exists icd5")
+add_test(NAME icd-drop-table-6 COMMAND ddbshtest -c "drop table if exists icd6")
+add_test(NAME icd-drop-table-7 COMMAND ddbshtest -c "drop table if exists icd7")
+add_test(NAME icd-drop-table-8 COMMAND ddbshtest -c "drop table if exists icd8")
+
+add_test(NAME icd-create-table-1
+         COMMAND ddbshtest -c "create table icd1 ( pk number ) primary key ( pk hash ) billing mode on demand")
+add_test(NAME icd-create-table-2
+         COMMAND ddbshtest -c "create table icd2 ( pk number, rk number ) primary key ( pk hash, rk range ) billing mode on demand")
+
+add_test( NAME icd-create-table-3
+          COMMAND ddbshtest -c "create table icd3 ( pk number, rk number, k1 number, k2 number ) \
+                             primary key (pk hash, rk range) \
+                             billing mode on demand \
+                             gsi ( gsi1 on ( k1 hash, k2 range ) \
+                             projecting include (k3) \
+                             billing mode on demand )")
+
+add_test( NAME icd-create-table-4
+          COMMAND ddbshtest -c "create table icd4 ( pk number, rk number, k1 number, k2 number, k3 number ) \
+                             primary key (pk hash, rk range) \
+                             billing mode on demand \
+                             gsi ( gsi1 on ( k1 hash, k2 range ) \
+                             projecting include (k3) \
+                             billing mode on demand, \
+                             gsi2 on (k3 hash) projecting keys only \
+                             billing mode on demand)")

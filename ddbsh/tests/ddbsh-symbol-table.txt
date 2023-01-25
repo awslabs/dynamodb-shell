@@ -1,0 +1,12 @@
+add_test(NAME ist-drop-1 COMMAND ddbshtest -c "drop table if exists st1")
+
+add_test(NAME ist-create-1 COMMAND ddbshtest -c "create table st1 ( a number, b number ) \
+                                              primary key ( a hash, b range )
+                                              billing mode provisioned ( 10 RCU, 10 WCU )")
+
+add_test(NAME ist-1 COMMAND ddbshtest -c "explain select a, b, c from st1")
+set_property(TEST ist-1 PROPERTY PASS_REGULAR_EXPRESSION  "{\n[ ]*\"#aaaa1\":   \"a\",\n[ ]*\"#aaaa2\":   \"b\",\n[ ]*\"#aaaa3\":   \"c\"\n[ ]*}")
+
+add_test(NAME ist-2 COMMAND ddbshtest -c "explain select a, b, c from st1 where a = 3 and x = 4")
+set_property(TEST ist-2 PROPERTY PASS_REGULAR_EXPRESSION  "{\n[ ]*\"#aaaa1\":   \"a\",\n[ ]*\"#aaaa2\":   \"b\",\n[ ]*\"#aaaa3\":   \"c\",\n[ ]*\"#aaaa4\":   \"x\"\n[ ]*}")
+

@@ -1,0 +1,45 @@
+Scan({
+   "TableName":   "iut1",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "#abaa2 > :vbaa1 OR #abaa1 > :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "x"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "8"
+      },
+      ":vbaa2":   {
+         "N":   "8"
+      }
+   },
+   "ConsistentRead":   false
+})
+UpdateItem({
+   "TableName":   "iut1",
+   "Key":   {
+      "pk":   {
+         "N":   "9"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 > :vaaa2 OR #aaaa2 > :vaaa3",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "y",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "x"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "10"
+      },
+      ":vaaa2":   {
+         "N":   "8"
+      },
+      ":vaaa3":   {
+         "N":   "8"
+      }
+   }
+})

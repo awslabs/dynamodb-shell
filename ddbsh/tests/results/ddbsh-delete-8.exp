@@ -1,0 +1,42 @@
+Scan({
+   "TableName":   "idt1",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "#abaa1 BETWEEN :vbaa1 AND :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "1"
+      },
+      ":vbaa2":   {
+         "N":   "3"
+      }
+   },
+   "ConsistentRead":   false
+})
+DeleteItem({
+   "TableName":   "idt1",
+   "Key":   {
+      "pk":   {
+         "N":   "3"
+      }
+   }
+})
+DeleteItem({
+   "TableName":   "idt1",
+   "Key":   {
+      "pk":   {
+         "N":   "2"
+      }
+   }
+})
+DeleteItem({
+   "TableName":   "idt1",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      }
+   }
+})

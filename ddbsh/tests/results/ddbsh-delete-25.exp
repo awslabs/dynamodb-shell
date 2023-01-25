@@ -1,0 +1,16 @@
+Query({
+   "TableName":   "idt2",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1, #abaa2",
+   "KeyConditionExpression":   "#abaa1 = :vbaa1",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "rk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "2"
+      }
+   }
+})

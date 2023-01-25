@@ -1,0 +1,23 @@
+add_test(NAME test-cleanup COMMAND ddbshtest -c "drop table if exists nowait ddbsh_test_table_1; \
+                                              drop table if exists nowait ddbsh_test_table_1; \
+                                              drop table if exists nowait icd1; \
+                                              drop table if exists nowait icd2; \
+                                              drop table if exists nowait icd3; \
+                                              drop table if exists nowait icd4; \
+                                              drop table if exists nowait idt1; \
+                                              drop table if exists nowait idt2; \
+                                              drop table if exists nowait ipt1; \
+                                              drop table if exists nowait isel1; \
+                                              drop table if exists nowait isel2; \
+                                              drop table if exists nowait isel3; \
+                                              drop table if exists nowait isel4;
+                                              drop table if exists nowait st1; \
+                                              drop table if exists nowait iut1; \
+                                              drop table if exists nowait iut2; \
+                                              drop table if exists nowait iins3; \
+                                              drop table if exists nowait iins2; \
+                                              drop table if exists nowait iins1; \
+                                              drop table if exists nowait balances; \
+                                              drop table if exists nowait transactions; \
+                                              drop table if exists nowait itxt1; \
+                                              drop table if exists nowait itxt2;")

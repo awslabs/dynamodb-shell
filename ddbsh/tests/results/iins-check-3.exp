@@ -1,0 +1,6 @@
+{a: 16, b: 11, bo: TRUE}
+{a: 17, b: 12, bo: FALSE}
+{a: 18, b: 13, bo: TRUE}
+{a: 18, b: 15, bo: TRUE}
+{a: 19, b: 14, bo: FALSE}
+{a: 19, b: 16, bo: FALSE}

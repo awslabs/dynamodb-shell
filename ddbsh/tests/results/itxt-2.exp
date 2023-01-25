@@ -1,0 +1,2 @@
+ABORT
+The SELECT cannot be used in a transaction (it cannot be reduced to a GetItem() request).

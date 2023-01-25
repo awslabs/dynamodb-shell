@@ -1,0 +1,19 @@
+UpdateItem({
+   "TableName":   "iut1",
+   "Key":   {
+      "pk":   {
+         "N":   "3"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = #aaaa1+:vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "y",
+      "#aaaa2":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "10"
+      }
+   }
+})

@@ -1,0 +1,6 @@
+Scan({
+   "TableName":   "isel4",
+   "IndexName":   "globalsec",
+   "ReturnConsumedCapacity":   "NONE",
+   "ConsistentRead":   false
+})

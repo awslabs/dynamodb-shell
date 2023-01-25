@@ -1,0 +1,319 @@
+add_test(NAME isel-drop-1 COMMAND ddbshtest -c "drop table if exists isel1; drop table if exists isel2; drop table if exists isel3; drop table if exists isel4;")
+
+add_test(NAME isel-create-1 COMMAND ddbshtest -c "create table isel1 ( a number, b number ) primary key ( a hash, b range ) billing mode on demand; \
+                                               insert into isel1 (a, b, c) values (2, 3, 4); \
+                                               insert into isel1 (a, b, c) values (2, 4, 5); \
+                                               insert into isel1 (a, b, c) values (4, 5, 6); \
+                                               insert into isel1 (a, b, ex) values ( 3, 5, 10 ); \
+                                               insert into isel1 (a, b, ex) values ( 6, 7, \"abc\");")
+
+add_test(NAME isel-create-2 COMMAND ddbshtest -c "create table isel2 ( a number, b string ) primary key ( a hash, b range ) billing mode on demand; \
+                                               insert into isel2 ( a, b, c ) values ( 501, \"ACCOUNTINFO\", \"some stuff\" ); \
+                                               insert into isel2 ( a, b, c ) values ( 501, \"CUST#bob\", \"bobs stuff\"); \
+                                               insert into isel2 ( a, b, c ) values ( 501, \"CUST#bob#roadtrips\", \"[3, 4, 5]\");")
+
+add_test(NAME isel-create-3 COMMAND ddbshtest -c "create table isel3 ( a string, b string ) primary key ( a hash, b range ) billing mode on demand; \
+                                               insert into isel3 ( a, b, c ) values ( \"abc\", \"pqr\", 3 ); \
+                                               insert into isel3 ( a, b, c ) values ( \"abc\", \"lmno\", 4 ); \
+                                               insert into isel3 ( a, b, c ) values ( \"abc\", \"xyza\", 5 ); \
+                                               insert into isel3 ( a, b, c ) values ( \"lmn\", \"pqr\", 3 ); \
+                                               insert into isel3 ( a, b, c ) values ( \"lmnop\", \"lmno\", 4 ); \
+                                               insert into isel3 ( a, b, c ) values ( \"lm\", \"xyza\", 5 );")
+
+add_test(NAME isel-create-4 COMMAND ddbshtest -c "create table isel4 ( a number, b number, c number, d number ) \
+              primary key ( a hash, b range ) billing mode on demand gsi (globalsec on (c hash, d range) projecting all); \
+              insert into isel4 (a, b, c, d) values (2, 3, 4, 1); \
+              insert into isel4 (a, b, c, d) values (2, 4, 4, 2); \
+              insert into isel4 (a, b, c, d) values (4, 5, 6, 3); \
+              insert into isel4 (a, b, c, d) values (3, 5, 10, 4); \
+              insert into isel4 (a, b, c, d) values (6, 7, 8, 5);")
+
+add_test(NAME isel-1 COMMAND ddbshtest -T ${RD}/isel-1.exp -c "explain select * from isel1 where attribute_exists(c)")
+add_test(NAME isel-2 COMMAND ddbshtest -T ${RD}/isel-2.exp -s -c "select * from isel1 where attribute_exists(c)")
+
+add_test(NAME isel-3 COMMAND ddbshtest -T ${RD}/isel-3.exp -c "explain select * from isel1 where attribute_exists(ex)")
+add_test(NAME isel-4 COMMAND ddbshtest -T ${RD}/isel-4.exp -s -c "select * from isel1 where attribute_exists(ex)")
+
+add_test(NAME isel-5 COMMAND ddbshtest -T ${RD}/isel-5.exp -c "explain select * from isel2 where attribute_exists(c)")
+add_test(NAME isel-6 COMMAND ddbshtest -T ${RD}/isel-6.exp -s -c "select * from isel2 where attribute_exists(c)")
+
+add_test(NAME isel-7 COMMAND ddbshtest -T ${RD}/isel-7.exp -c "explain select * from isel3 where attribute_exists(c)")
+add_test(NAME isel-8 COMMAND ddbshtest -T ${RD}/isel-8.exp -s -c "select * from isel3 where attribute_exists(c)")
+
+add_test(NAME isel-9 COMMAND ddbshtest -T ${RD}/isel-9.exp -c "explain select * from isel1 where attribute_type(a, number)")
+add_test(NAME isel-10 COMMAND ddbshtest -T ${RD}/isel-10.exp -s -c "select * from isel1 where attribute_type(a, number)")
+
+add_test(NAME isel-11 COMMAND ddbshtest -T ${RD}/isel-11.exp -c "explain select * from isel1 where attribute_type(a, string)")
+add_test(NAME isel-12 COMMAND ddbshtest -T ${RD}/isel-12.exp -s -c "select * from isel1 where attribute_type(a, string)")
+
+add_test(NAME isel-13 COMMAND ddbshtest -T ${RD}/isel-13.exp -c "explain select * from isel1 where attribute_type(b, number)")
+add_test(NAME isel-14 COMMAND ddbshtest -T ${RD}/isel-14.exp -s -c "select * from isel1 where attribute_type(b, number)")
+
+add_test(NAME isel-15 COMMAND ddbshtest -T ${RD}/isel-15.exp -c "explain select * from isel1 where attribute_type(b, string)")
+add_test(NAME isel-16 COMMAND ddbshtest -T ${RD}/isel-16.exp -s -c "select * from isel1 where attribute_type(b, string)")
+
+add_test(NAME isel-17 COMMAND ddbshtest -T ${RD}/isel-17.exp -c "explain select * from isel1 where attribute_type(c, number)")
+add_test(NAME isel-18 COMMAND ddbshtest -T ${RD}/isel-18.exp -s -c "select * from isel1 where attribute_type(c, number)")
+
+add_test(NAME isel-19 COMMAND ddbshtest -T ${RD}/isel-19.exp -c "explain select * from isel1 where attribute_type(c, string)")
+add_test(NAME isel-20 COMMAND ddbshtest -T ${RD}/isel-20.exp -s -c "select * from isel1 where attribute_type(c, string)")
+
+add_test(NAME isel-21 COMMAND ddbshtest -T ${RD}/isel-21.exp -c "explain select * from isel1 where attribute_type(ex, number)")
+add_test(NAME isel-22 COMMAND ddbshtest -T ${RD}/isel-22.exp -s -c "select * from isel1 where attribute_type(ex, number)")
+
+add_test(NAME isel-23 COMMAND ddbshtest -T ${RD}/isel-23.exp -c "explain select * from isel1 where attribute_type(ex, string)")
+add_test(NAME isel-24 COMMAND ddbshtest -T ${RD}/isel-24.exp -s -c "select * from isel1 where attribute_type(ex, string)")
+
+add_test(NAME isel-25 COMMAND ddbshtest -T ${RD}/isel-25.exp -c "explain select * from isel1 where attribute_type(nop, number)")
+add_test(NAME isel-26 COMMAND ddbshtest -T ${RD}/isel-26.exp -s -c "select * from isel1 where attribute_type(nop, number)")
+
+add_test(NAME isel-27 COMMAND ddbshtest -T ${RD}/isel-27.exp -c "explain select * from isel1 where attribute_type(nop, string)")
+add_test(NAME isel-28 COMMAND ddbshtest -T ${RD}/isel-28.exp -s -c "select * from isel1 where attribute_type(nop, string)")
+
+add_test(NAME isel-29 COMMAND ddbshtest -T ${RD}/isel-29.exp -c "explain select * from isel2 where attribute_type(a, number)")
+add_test(NAME isel-30 COMMAND ddbshtest -T ${RD}/isel-30.exp -s -c "select * from isel2 where attribute_type(a, number)")
+
+add_test(NAME isel-31 COMMAND ddbshtest -T ${RD}/isel-31.exp -c "explain select * from isel2 where attribute_type(a, string)")
+add_test(NAME isel-32 COMMAND ddbshtest -T ${RD}/isel-32.exp -s -c "select * from isel2 where attribute_type(a, string)")
+
+add_test(NAME isel-33 COMMAND ddbshtest -T ${RD}/isel-33.exp -c "explain select * from isel2 where attribute_type(b, number)")
+add_test(NAME isel-34 COMMAND ddbshtest -T ${RD}/isel-34.exp -s -c "select * from isel2 where attribute_type(b, number)")
+
+add_test(NAME isel-35 COMMAND ddbshtest -T ${RD}/isel-35.exp -c "explain select * from isel2 where attribute_type(b, string)")
+add_test(NAME isel-36 COMMAND ddbshtest -T ${RD}/isel-36.exp -s -c "select * from isel2 where attribute_type(b, string)")
+
+add_test(NAME isel-37 COMMAND ddbshtest -T ${RD}/isel-37.exp -c "explain select * from isel2 where attribute_type(c, number)")
+add_test(NAME isel-38 COMMAND ddbshtest -T ${RD}/isel-38.exp -s -c "select * from isel2 where attribute_type(c, number)")
+
+add_test(NAME isel-39 COMMAND ddbshtest -T ${RD}/isel-39.exp -c "explain select * from isel2 where attribute_type(c, string)")
+add_test(NAME isel-40 COMMAND ddbshtest -T ${RD}/isel-40.exp -s -c "select * from isel2 where attribute_type(c, string)")
+
+add_test(NAME isel-41 COMMAND ddbshtest -T ${RD}/isel-41.exp -c "explain select * from isel2 where attribute_type(ex, number)")
+add_test(NAME isel-42 COMMAND ddbshtest -T ${RD}/isel-42.exp -s -c "select * from isel2 where attribute_type(ex, number)")
+
+add_test(NAME isel-43 COMMAND ddbshtest -T ${RD}/isel-43.exp -c "explain select * from isel2 where attribute_type(ex, string)")
+add_test(NAME isel-44 COMMAND ddbshtest -T ${RD}/isel-44.exp -s -c "select * from isel2 where attribute_type(ex, string)")
+
+add_test(NAME isel-45 COMMAND ddbshtest -T ${RD}/isel-45.exp -c "explain select * from isel2 where attribute_type(nop, number)")
+add_test(NAME isel-46 COMMAND ddbshtest -T ${RD}/isel-46.exp -s -c "select * from isel2 where attribute_type(nop, number)")
+
+add_test(NAME isel-47 COMMAND ddbshtest -T ${RD}/isel-47.exp -c "explain select * from isel2 where attribute_type(nop, string)")
+add_test(NAME isel-48 COMMAND ddbshtest -T ${RD}/isel-48.exp -s -c "select * from isel2 where attribute_type(nop, string)")
+
+add_test(NAME isel-49 COMMAND ddbshtest -T ${RD}/isel-49.exp -c "explain select * from isel3 where attribute_type(a, number)")
+add_test(NAME isel-50 COMMAND ddbshtest -T ${RD}/isel-50.exp -s -c "select * from isel3 where attribute_type(a, number)")
+
+add_test(NAME isel-51 COMMAND ddbshtest -T ${RD}/isel-51.exp -c "explain select * from isel3 where attribute_type(a, string)")
+add_test(NAME isel-52 COMMAND ddbshtest -T ${RD}/isel-52.exp -s -c "select * from isel3 where attribute_type(a, string)")
+
+add_test(NAME isel-53 COMMAND ddbshtest -T ${RD}/isel-53.exp -c "explain select * from isel3 where attribute_type(b, number)")
+add_test(NAME isel-54 COMMAND ddbshtest -T ${RD}/isel-54.exp -s -c "select * from isel3 where attribute_type(b, number)")
+
+add_test(NAME isel-55 COMMAND ddbshtest -T ${RD}/isel-55.exp -c "explain select * from isel3 where attribute_type(b, string)")
+add_test(NAME isel-56 COMMAND ddbshtest -T ${RD}/isel-56.exp -s -c "select * from isel3 where attribute_type(b, string)")
+
+add_test(NAME isel-57 COMMAND ddbshtest -T ${RD}/isel-57.exp -c "explain select * from isel3 where attribute_type(c, number)")
+add_test(NAME isel-58 COMMAND ddbshtest -T ${RD}/isel-58.exp -s -c "select * from isel3 where attribute_type(c, number)")
+
+add_test(NAME isel-59 COMMAND ddbshtest -T ${RD}/isel-59.exp -c "explain select * from isel3 where attribute_type(c, string)")
+add_test(NAME isel-60 COMMAND ddbshtest -T ${RD}/isel-60.exp -s -c "select * from isel3 where attribute_type(c, string)")
+
+add_test(NAME isel-61 COMMAND ddbshtest -T ${RD}/isel-61.exp -c "explain select * from isel3 where attribute_type(ex, number)")
+add_test(NAME isel-62 COMMAND ddbshtest -T ${RD}/isel-62.exp -s -c "select * from isel3 where attribute_type(ex, number)")
+
+add_test(NAME isel-63 COMMAND ddbshtest -T ${RD}/isel-63.exp -c "explain select * from isel3 where attribute_type(ex, string)")
+add_test(NAME isel-64 COMMAND ddbshtest -T ${RD}/isel-64.exp -s -c "select * from isel3 where attribute_type(ex, string)")
+
+add_test(NAME isel-65 COMMAND ddbshtest -T ${RD}/isel-65.exp -c "explain select * from isel1 where begins_with(a, \"a\")")
+add_test(NAME isel-66 COMMAND ddbshtest -T ${RD}/isel-66.exp -s -c "select * from isel1 where begins_with(a, \"a\")")
+
+add_test(NAME isel-67 COMMAND ddbshtest -T ${RD}/isel-67.exp -c "explain select * from isel1 where begins_with(b, \"a\")")
+add_test(NAME isel-68 COMMAND ddbshtest -T ${RD}/isel-68.exp -s -c "select * from isel1 where begins_with(b, \"a\")")
+
+add_test(NAME isel-69 COMMAND ddbshtest -T ${RD}/isel-69.exp -c "explain select * from isel1 where begins_with(ex, \"a\")")
+add_test(NAME isel-70 COMMAND ddbshtest -T ${RD}/isel-70.exp -s -c "select * from isel1 where begins_with(ex, \"a\")")
+
+add_test(NAME isel-71 COMMAND ddbshtest -T ${RD}/isel-71.exp -c "explain select * from isel2 where begins_with(a, \"a\")")
+add_test(NAME isel-72 COMMAND ddbshtest -T ${RD}/isel-72.exp -s -c "select * from isel2 where begins_with(a, \"a\")")
+
+add_test(NAME isel-73 COMMAND ddbshtest -T ${RD}/isel-73.exp -c "explain select * from isel2 where begins_with(b, \"a\")")
+add_test(NAME isel-74 COMMAND ddbshtest -T ${RD}/isel-74.exp -s -c "select * from isel2 where begins_with(b, \"a\")")
+
+add_test(NAME isel-75 COMMAND ddbshtest -T ${RD}/isel-75.exp -c "explain select * from isel2 where begins_with(ex, \"a\")")
+add_test(NAME isel-76 COMMAND ddbshtest -T ${RD}/isel-76.exp -s -c "select * from isel2 where begins_with(ex, \"a\")")
+
+add_test(NAME isel-77 COMMAND ddbshtest -T ${RD}/isel-77.exp -c "explain select * from isel2 where a = 501 and begins_with(a, \"a\")")
+add_test(NAME isel-78 COMMAND ddbshtest -T ${RD}/isel-78.exp -s -c "select * from isel2 where a = 501 and begins_with(a, \"a\")")
+
+add_test(NAME isel-79 COMMAND ddbshtest -T ${RD}/isel-79.exp -c "explain select * from isel2 where a = 501 and begins_with(b, \"a\")")
+add_test(NAME isel-80 COMMAND ddbshtest -T ${RD}/isel-80.exp -s -c "select * from isel2 where a = 501 and begins_with(b, \"a\")")
+
+add_test(NAME isel-81 COMMAND ddbshtest -T ${RD}/isel-81.exp -c "explain select * from isel2 where a = 501 and begins_with(ex, \"a\")")
+add_test(NAME isel-82 COMMAND ddbshtest -T ${RD}/isel-82.exp -s -c "select * from isel2 where a = 501 and begins_with(ex, \"a\")")
+
+add_test(NAME isel-83 COMMAND ddbshtest -T ${RD}/isel-83.exp -c "explain select * from isel2 where a = 501 and begins_with(a, \"CUST#\")")
+add_test(NAME isel-84 COMMAND ddbshtest -T ${RD}/isel-84.exp -s -c "select * from isel2 where a = 501 and begins_with(a, \"CUST#\")")
+
+add_test(NAME isel-85 COMMAND ddbshtest -T ${RD}/isel-85.exp -c "explain select * from isel2 where a = 501 and begins_with(b, \"CUST#\")")
+add_test(NAME isel-86 COMMAND ddbshtest -T ${RD}/isel-86.exp -s -c "select * from isel2 where a = 501 and begins_with(b, \"CUST#\")")
+
+add_test(NAME isel-87 COMMAND ddbshtest -T ${RD}/isel-87.exp -c "explain select * from isel2 where a = 501 and begins_with(c, \"CUST#\")")
+add_test(NAME isel-88 COMMAND ddbshtest -T ${RD}/isel-88.exp -s -c "select * from isel2 where a = 501 and begins_with(c, \"CUST#\")")
+
+add_test(NAME isel-89 COMMAND ddbshtest -T ${RD}/isel-89.exp -c "explain select * from isel2 where a = 501 and begins_with(a, \"bob\")")
+add_test(NAME isel-90 COMMAND ddbshtest -T ${RD}/isel-90.exp -s -c "select * from isel2 where a = 501 and begins_with(a, \"bob\")")
+
+add_test(NAME isel-91 COMMAND ddbshtest -T ${RD}/isel-91.exp -c "explain select * from isel2 where a = 501 and begins_with(b, \"bob\")")
+add_test(NAME isel-92 COMMAND ddbshtest -T ${RD}/isel-92.exp -s -c "select * from isel2 where a = 501 and begins_with(b, \"bob\")")
+
+add_test(NAME isel-93 COMMAND ddbshtest -T ${RD}/isel-93.exp -c "explain select * from isel2 where a = 501 and begins_with(c, \"bob\")")
+add_test(NAME isel-94 COMMAND ddbshtest -T ${RD}/isel-94.exp -s -c "select * from isel2 where a = 501 and begins_with(c, \"bob\")")
+
+add_test(NAME isel-95 COMMAND ddbshtest -T ${RD}/isel-95.exp -c "explain select * from isel1 where a between 3 and 5")
+add_test(NAME isel-96 COMMAND ddbshtest -T ${RD}/isel-96.exp -s -c "select * from isel1 where a between 3 and 5")
+
+add_test(NAME isel-97 COMMAND ddbshtest -T ${RD}/isel-97.exp -c "explain select * from isel1 where a in (3, 5)")
+add_test(NAME isel-98 COMMAND ddbshtest -T ${RD}/isel-98.exp -s -c "select * from isel1 where a in (3, 5)")
+
+add_test(NAME isel-99 COMMAND ddbshtest -T ${RD}/isel-99.exp -c "explain select * from isel1 where b between 3 and 5")
+add_test(NAME isel-100 COMMAND ddbshtest -T ${RD}/isel-100.exp -s -c "select * from isel1 where b between 3 and 5")
+
+add_test(NAME isel-101 COMMAND ddbshtest -T ${RD}/isel-101.exp -c "explain select * from isel1 where b in (3, 5)")
+add_test(NAME isel-102 COMMAND ddbshtest -T ${RD}/isel-102.exp -s -c "select * from isel1 where b in (3, 5)")
+
+add_test(NAME isel-103 COMMAND ddbshtest -T ${RD}/isel-103.exp -c "explain select * from isel1 where c between 3 and 5")
+add_test(NAME isel-104 COMMAND ddbshtest -T ${RD}/isel-104.exp -s -c "select * from isel1 where c between 3 and 5")
+
+add_test(NAME isel-105 COMMAND ddbshtest -T ${RD}/isel-105.exp -c "explain select * from isel1 where c in (3, 5)")
+add_test(NAME isel-106 COMMAND ddbshtest -T ${RD}/isel-106.exp -s -c "select * from isel1 where c in (3, 5)")
+
+add_test(NAME isel-107 COMMAND ddbshtest -T ${RD}/isel-107.exp -c "explain select * from isel1 where a = 2 and b between 3 and 5")
+add_test(NAME isel-108 COMMAND ddbshtest -T ${RD}/isel-108.exp -s -c "select * from isel1 where a = 2 and b between 3 and 5")
+
+add_test(NAME isel-109 COMMAND ddbshtest -T ${RD}/isel-109.exp -c "explain select * from isel1 where a = 2 and b in (3, 5)")
+add_test(NAME isel-110 COMMAND ddbshtest -T ${RD}/isel-110.exp -s -c "select * from isel1 where a = 2 and b in (3, 5)")
+
+add_test(NAME isel-111 COMMAND ddbshtest -T ${RD}/isel-111.exp -c "explain select * from isel1 where a = 2 and c between 3 and 5")
+add_test(NAME isel-112 COMMAND ddbshtest -T ${RD}/isel-112.exp -s -c "select * from isel1 where a = 2 and c between 3 and 5")
+
+add_test(NAME isel-113 COMMAND ddbshtest -T ${RD}/isel-113.exp -c "explain select * from isel1 where a = 2 and c in (3, 5)")
+add_test(NAME isel-114 COMMAND ddbshtest -T ${RD}/isel-114.exp -s -c "select * from isel1 where a = 2 and c in (3, 5)")
+
+add_test(NAME isel-115 COMMAND ddbshtest -T ${RD}/isel-115.exp -c "explain select * from isel1 where ex between \"ab\" and \"abd\"")
+add_test(NAME isel-116 COMMAND ddbshtest -T ${RD}/isel-116.exp -s -c "select * from isel1 where ex between \"ab\" and \"abd\"")
+
+add_test(NAME isel-117 COMMAND ddbshtest -T ${RD}/isel-117.exp -c "explain select * from isel1 where ex in (\"abc\", \"abd\", \"abe\")")
+add_test(NAME isel-118 COMMAND ddbshtest -T ${RD}/isel-118.exp -s -c "select * from isel1 where ex in (\"abc\", \"abd\", \"abe\")")
+
+add_test(NAME isel-119 COMMAND ddbshtest -T ${RD}/isel-119.exp -c "explain select * from isel1 where a = 6 and ex between \"ab\" and \"abd\"")
+add_test(NAME isel-120 COMMAND ddbshtest -T ${RD}/isel-120.exp -s -c "select * from isel1 where a = 6 and ex between \"ab\" and \"abd\"")
+
+add_test(NAME isel-121 COMMAND ddbshtest -T ${RD}/isel-121.exp -c "explain select * from isel1 where a = 6 and ex in (\"abc\", \"abd\", \"abe\")")
+add_test(NAME isel-122 COMMAND ddbshtest -T ${RD}/isel-122.exp -s -c "select * from isel1 where a = 6 and ex in (\"abc\", \"abd\", \"abe\")")
+
+add_test(NAME isel-123 COMMAND ddbshtest -T ${RD}/isel-123.exp -c "explain select * from isel1 where b = 7 and ex between \"ab\" and \"abd\"")
+add_test(NAME isel-124 COMMAND ddbshtest -T ${RD}/isel-124.exp -s -c "select * from isel1 where b = 7 and ex between \"ab\" and \"abd\"")
+
+add_test(NAME isel-125 COMMAND ddbshtest -T ${RD}/isel-125.exp -c "explain select * from isel1 where b = 7 and ex in (\"abc\", \"abd\", \"abe\")")
+add_test(NAME isel-126 COMMAND ddbshtest -T ${RD}/isel-126.exp -s -c "select * from isel1 where b = 7 and ex in (\"abc\", \"abd\", \"abe\")")
+
+add_test(NAME isel-127 COMMAND ddbshtest -T ${RD}/isel-127.exp -c "explain select * from isel1 where c in (4, 5)")
+add_test(NAME isel-128 COMMAND ddbshtest -T ${RD}/isel-128.exp -s -c "select * from isel1 where c in (4, 5)")
+
+add_test(NAME isel-129 COMMAND ddbshtest -T ${RD}/isel-129.exp -c "explain select * from isel1 where a = 2 and c in (4, 5)")
+add_test(NAME isel-130 COMMAND ddbshtest -T ${RD}/isel-130.exp -s -c "select * from isel1 where a = 2 and c in (4, 5)")
+
+add_test(NAME isel-131 COMMAND ddbshtest -T ${RD}/isel-131.exp -c "explain select * from isel2 where a = 501 and begins_with(b, \"CUST#\")")
+add_test(NAME isel-132 COMMAND ddbshtest -T ${RD}/isel-132.exp -s -c "select * from isel2 where a = 501 and begins_with(b, \"CUST#\")")
+
+add_test(NAME isel-133 COMMAND ddbshtest -T ${RD}/isel-133.exp -c "explain select * from isel2 where a = 501 and begins_with(c, \"bob\")")
+add_test(NAME isel-134 COMMAND ddbshtest -T ${RD}/isel-134.exp -s -c "select * from isel2 where a = 501 and begins_with(c, \"bob\")")
+
+add_test(NAME isel-135 COMMAND ddbshtest -T ${RD}/isel-135.exp -c "explain select * from isel1 where attribute_exists(ex)")
+add_test(NAME isel-136 COMMAND ddbshtest -T ${RD}/isel-136.exp -s -c "select * from isel1 where attribute_exists(ex)")
+
+add_test(NAME isel-137 COMMAND ddbshtest -T ${RD}/isel-137.exp -c "explain select a, ex from isel1 where attribute_exists(ex)")
+add_test(NAME isel-138 COMMAND ddbshtest -T ${RD}/isel-138.exp -s -c "select a, ex from isel1 where attribute_exists(ex)")
+
+add_test(NAME isel-139 COMMAND ddbshtest -T ${RD}/isel-139.exp -c "explain select a, ex from isel1 where not attribute_exists(ex)")
+add_test(NAME isel-140 COMMAND ddbshtest -T ${RD}/isel-140.exp -s -c "select a, ex from isel1 where not attribute_exists(ex)")
+
+add_test(NAME isel-141 COMMAND ddbshtest -T ${RD}/isel-141.exp -c "explain select * from isel1 where not attribute_exists(ex)")
+add_test(NAME isel-142 COMMAND ddbshtest -T ${RD}/isel-142.exp -s -c "select * from isel1 where not attribute_exists(ex)")
+
+add_test(NAME isel-143 COMMAND ddbshtest -T ${RD}/isel-143.exp -c "explain select * from isel1 where attribute_type(ex, number)")
+add_test(NAME isel-144 COMMAND ddbshtest -T ${RD}/isel-144.exp -s -c "select * from isel1 where attribute_type(ex, number)")
+
+add_test(NAME isel-145 COMMAND ddbshtest -T ${RD}/isel-145.exp -c "explain select * from isel1 where attribute_type(ex, string)")
+add_test(NAME isel-146 COMMAND ddbshtest -T ${RD}/isel-146.exp -s -c "select * from isel1 where attribute_type(ex, string)")
+
+add_test(NAME isel-147 COMMAND ddbshtest -T ${RD}/isel-147.exp -c "explain select * from isel1 where a between 3 and 5")
+add_test(NAME isel-148 COMMAND ddbshtest -T ${RD}/isel-148.exp -s -c "select * from isel1 where a between 3 and 5")
+
+add_test(NAME isel-149 COMMAND ddbshtest -T ${RD}/isel-149.exp -c "explain select * from isel1 where b between 3 and 5")
+add_test(NAME isel-150 COMMAND ddbshtest -T ${RD}/isel-150.exp -s -c "select * from isel1 where b between 3 and 5")
+
+add_test(NAME isel-151 COMMAND ddbshtest -T ${RD}/isel-151.exp -c "explain select * from isel1 where a = 3 and b between 3 and 5")
+add_test(NAME isel-152 COMMAND ddbshtest -T ${RD}/isel-152.exp -s -c "select * from isel1 where a = 3 and b between 3 and 5")
+
+add_test(NAME isel-153 COMMAND ddbshtest -T ${RD}/isel-153.exp -c "explain select * from isel1 where a = 3 and ex between 3 and 30")
+add_test(NAME isel-154 COMMAND ddbshtest -T ${RD}/isel-154.exp -s -c "select * from isel1 where a = 3 and ex between 3 and 30")
+
+add_test(NAME isel-155 COMMAND ddbshtest -T ${RD}/isel-155.exp -c "explain select * from isel1 where ex between 3 and 30")
+add_test(NAME isel-156 COMMAND ddbshtest -T ${RD}/isel-156.exp -s -c "select * from isel1 where ex between 3 and 30")
+
+add_test(NAME isel-157 COMMAND ddbshtest -T ${RD}/isel-157.exp -c "explain select * from isel1 where a = 6 and contains(ex, \"ab\")")
+add_test(NAME isel-158 COMMAND ddbshtest -T ${RD}/isel-158.exp -s -c "select * from isel1 where a = 6 and contains(ex, \"ab\")")
+
+add_test(NAME isel-159 COMMAND ddbshtest -T ${RD}/isel-159.exp -c "explain select * from isel1 where contains(ex, \"bc\")")
+add_test(NAME isel-160 COMMAND ddbshtest -T ${RD}/isel-160.exp -s -c "select * from isel1 where contains(ex, \"bc\")")
+
+add_test(NAME isel-161 COMMAND ddbshtest -T ${RD}/isel-161.exp -c "explain select * from isel3 where contains(a, \"bc\")")
+add_test(NAME isel-162 COMMAND ddbshtest -T ${RD}/isel-162.exp -s -c "select * from isel3 where contains(a, \"bc\")")
+
+add_test(NAME isel-163 COMMAND ddbshtest -T ${RD}/isel-163.exp -c "explain select * from isel3 where contains(a, \"lm\")")
+add_test(NAME isel-164 COMMAND ddbshtest -T ${RD}/isel-164.exp -s -c "select * from isel3 where contains(a, \"lm\")")
+
+add_test(NAME isel-165 COMMAND ddbshtest -T ${RD}/isel-165.exp -c "explain select * from isel3 where contains(a, \"lmno\")")
+add_test(NAME isel-166 COMMAND ddbshtest -T ${RD}/isel-166.exp -s -c "select * from isel3 where contains(a, \"lmno\")")
+
+# these should result in Query()
+add_test(NAME isel-167 COMMAND ddbshtest -T ${RD}/isel-167.exp -c "explain select * from isel1 where a = 1 and b = 2 and c = 3")
+add_test(NAME isel-168 COMMAND ddbshtest -T ${RD}/isel-168.exp -s -c "select * from isel1 where a = 2 and b = 3 and c = 4")
+
+# these should result in Scan()
+add_test(NAME isel-169 COMMAND ddbshtest -T ${RD}/isel-169.exp -c "explain select * from isel1 where a = 1 and b != 2 and c = 3")
+add_test(NAME isel-170 COMMAND ddbshtest -T ${RD}/isel-170.exp -s -c "select * from isel1 where a = 2 and b != 2 and c = 4")
+
+# these should result in Scan()
+add_test(NAME isel-171 COMMAND ddbshtest -T ${RD}/isel-171.exp -c "explain select * from isel1 where a = 2 and b != 2")
+add_test(NAME isel-172 COMMAND ddbshtest -T ${RD}/isel-172.exp -s -c "select * from isel1 where a = 2 and b != 2")
+
+# these should result in Query()
+add_test(NAME isel-173 COMMAND ddbshtest -T ${RD}/isel-173.exp -c "explain select * from isel1 where a = 2 and b > 2 and c = 4")
+add_test(NAME isel-174 COMMAND ddbshtest -T ${RD}/isel-174.exp -s -c "select * from isel1 where a = 2 and b > 2 and c = 3")
+
+# these should result in Query()
+add_test(NAME isel-175 COMMAND ddbshtest -T ${RD}/isel-175.exp -c "explain select * from isel1 where a = 2 and b < 5 and c = 4")
+add_test(NAME isel-176 COMMAND ddbshtest -T ${RD}/isel-176.exp -s -c "select * from isel1 where a = 2 and b < 5 and c = 4")
+
+# add negation into the range key to ensure that we don't Query
+add_test(NAME isel-177 COMMAND ddbshtest -T ${RD}/isel-177.exp -c "explain select * from isel1 where a = 2 and b != 3")
+add_test(NAME isel-178 COMMAND ddbshtest -T ${RD}/isel-178.exp -c "select * from isel1 where a = 2 and b != 3")
+
+add_test(NAME isel-179 COMMAND ddbshtest -T ${RD}/isel-179.exp -c "explain select * from isel1 where a = 2 and not b between 1 and 5")
+add_test(NAME isel-180 COMMAND ddbshtest -T ${RD}/isel-180.exp -c "select * from isel1 where a = 2 and not b between 1 and 5")
+
+add_test(NAME isel-181 COMMAND ddbshtest -T ${RD}/isel-181.exp -c "explain select * from isel2 where a = 501 and not begins_with(b, \"ACCO\")")
+add_test(NAME isel-182 COMMAND ddbshtest -T ${RD}/isel-182.exp -c "select * from isel2 where a = 501 and not begins_with(b, \"ACCO\")")
+
+add_test(NAME isel-183 COMMAND ddbshtest -T ${RD}/isel-183.exp -c "explain select * from isel4.globalsec")
+add_test(NAME isel-184 COMMAND ddbshtest -T ${RD}/isel-184.exp -c "select * from isel4.globalsec")
+
+add_test(NAME isel-185 COMMAND ddbshtest -T ${RD}/isel-185.exp -c "explain select * from isel4.globalsec where c = 4")
+add_test(NAME isel-186 COMMAND ddbshtest -T ${RD}/isel-186.exp -c "select * from isel4.globalsec where c = 4")
+
+add_test(NAME isel-187 COMMAND ddbshtest -T ${RD}/isel-187.exp -c "explain select * from isel4.globalsec where c = 4 and d = 2")
+add_test(NAME isel-188 COMMAND ddbshtest -T ${RD}/isel-188.exp -c "select * from isel4.globalsec where c = 4 and d = 2")
+
+

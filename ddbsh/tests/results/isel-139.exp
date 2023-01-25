@@ -1,0 +1,11 @@
+Scan({
+   "TableName":   "isel1",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#aaaa1, #aaaa2",
+   "FilterExpression":   "NOT (attribute_exists(#aaaa2))",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a",
+      "#aaaa2":   "ex"
+   },
+   "ConsistentRead":   false
+})

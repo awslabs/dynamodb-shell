@@ -1,0 +1,16 @@
+Scan({
+   "TableName":   "idt1",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "#abaa2 = :vbaa1",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "y"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "14"
+      }
+   },
+   "ConsistentRead":   false
+})

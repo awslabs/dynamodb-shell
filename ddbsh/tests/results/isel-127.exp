@@ -1,0 +1,17 @@
+Scan({
+   "TableName":   "isel1",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 IN (:vaaa1, :vaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "c"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "4"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   },
+   "ConsistentRead":   false
+})

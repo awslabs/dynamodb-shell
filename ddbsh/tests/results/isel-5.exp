@@ -1,0 +1,9 @@
+Scan({
+   "TableName":   "isel2",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "attribute_exists(#aaaa1)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "c"
+   },
+   "ConsistentRead":   false
+})

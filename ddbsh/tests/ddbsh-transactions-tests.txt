@@ -1,0 +1,60 @@
+add_test(NAME itxt-1 COMMAND ddbshtest -T ${RD}/itxt-1.exp -c "begin; rollback;")
+
+add_test(NAME itxt-drop-1 COMMAND ddbshtest -c "drop table if exists itxt1")
+add_test(NAME itxt-drop-2 COMMAND ddbshtest -c "drop table if exists itxt2")
+
+add_test(NAME itxt-create-1 COMMAND ddbshtest -c "create table if not exists itxt1 (a  number) primary key (a hash) billing mode on demand")
+add_test(NAME itxt-create-2 COMMAND ddbshtest -c "create table if not exists itxt2 (a  number, b number) primary key (a hash, b range) billing mode on demand")
+
+add_test(NAME itxt-load-1 COMMAND ddbshtest -c "insert into itxt1 (a, b) values (1, 1), (2, 1); insert into itxt1(a, c) values(3, 2), (4, 3)")
+
+add_test(NAME itxt-load-2 COMMAND ddbshtest -c "insert into itxt2 (a, b, c) values (1, 1, 2), (2, 1, 3); insert into itxt2(a, b, d) values(3, 2, 4), (4, 3, 5)")
+
+add_test(NAME itxt-2 COMMAND ddbshtest -s -T ${RD}/itxt-2.exp -c "begin; select * from itxt1 where a = 1 and b = 2; commit")
+add_test(NAME itxt-3 COMMAND ddbshtest -s -T ${RD}/itxt-3.exp -c "begin; select * from itxt1 where a = 1; commit")
+add_test(NAME itxt-4 COMMAND ddbshtest -s -T ${RD}/itxt-4.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; commit")
+
+add_test(NAME itxt-5 COMMAND ddbshtest -s -T ${RD}/itxt-5.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; select * from itxt2 where a = 2 and b = 1; commit")
+
+add_test(NAME itxt-6 COMMAND ddbshtest -s -T ${RD}/itxt-6.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; select * from itxt2 where a = 2 and b = 1; rollback")
+
+add_test(NAME itxt-drop-3 COMMAND ddbshtest -c "drop table if exists balances")
+add_test(NAME itxt-drop-4 COMMAND ddbshtest -c "drop table if exists transactions")
+
+add_test(NAME itxt-create-3 COMMAND ddbshtest -c "create table balances ( id string ) \
+                                                   primary key (id hash) billing mode on demand;")
+add_test(NAME itxt-create-4 COMMAND ddbshtest -c "create table transactions ( id number ) \
+                                                   primary key (id hash) billing mode on demand")
+
+add_test(NAME itxt-load-3 COMMAND ddbshtest -c "begin; \
+                                                 insert into balances (id, balance) \
+                                                 values (\"alice\", 300), \
+                                                        (\"bob\", 200), \
+                                                        (\"charlie\", 500), \
+                                                        (\"dave\", 400); \
+                                                 commit;")
+
+add_test(NAME itxt-load-4 COMMAND ddbshtest -c "begin; \
+                                                 insert into transactions (id, ida, idb, amount, processed) \
+                                                 values (101, \"alice\", \"bob\", 50, \"N\"), \
+                                                        (102, \"bob\", \"charlie\", 10, \"N\"), \
+                                                        (103, \"charlie\", \"alice\", 20, \"N\"), \
+                                                        (104, \"dave\", \"charlie\", 40, \"N\"); \
+                                                 commit;")
+
+add_test(NAME itxt-7 COMMAND ddbshtest -s -T ${RD}/itxt-7.exp -c "begin; select * from balances where id = \"dave\"; commit")
+
+add_test(NAME itxt-8 COMMAND ddbshtest -s -T ${RD}/itxt-8.exp -c "begin; \
+                                                                   update balances set balance = balance + 50 \
+                                                                   where id = \"bob\"; \
+                                                                   update balances set balance = balance - 50 \
+                                                                   where id = \"alice\" and balance > 50; \
+                                                                   update transactions set processed = \"Y\" \
+                                                                   where id = 101 and ida = \"alice\" \
+                                                                   and idb = \"bob\" and amount = 50 and \
+                                                                   processed = \"N\"; \
+                                                                   commit;")
+
+add_test(NAME itxt-9 COMMAND ddbshtest -s -T ${RD}/itxt-9.exp -c "begin; select * from balances where id = \"bob\"; \
+                                                                   select * from balances where id = \"alice\"; commit;")
+add_test(NAME itxt-10 COMMAND ddbshtest -s -T ${RD}/itxt-10.exp -c "begin; select * from transactions where id = 101; commit;")

@@ -1,0 +1,86 @@
+add_test(NAME ddbsh-delete-drop-1 COMMAND ddbshtest -c "drop table if exists idt1")
+add_test(NAME ddbsh-delete-drop-2 COMMAND ddbshtest -c "drop table if exists idt2")
+
+add_test(NAME ddbsh-delete-create-1
+         COMMAND ddbshtest -c "create table idt1 (pk number) primary key (pk hash) billing mode on demand")
+add_test(NAME ddbsh-delete-create-2
+         COMMAND ddbshtest -c "create table idt2 (pk number, rk number) primary key (pk hash, rk range) billing mode on demand")
+
+add_test(NAME ddbsh-delete-load-1 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-1.sql)
+add_test(NAME ddbsh-delete-load-2 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-2.sql)
+
+add_test(NAME ddbsh-delete-load-1-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-1-check.exp -c "select * from idt1")
+add_test(NAME ddbsh-delete-load-2-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-2-check.exp -c "select * from idt2")
+
+add_test(NAME ddbsh-delete-0 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-0.exp -c "select * from idt1; select * from idt2;")
+
+add_test(NAME ddbsh-delete-1 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-1.exp -c "explain delete from idt1 where pk = 0")
+add_test(NAME ddbsh-delete-2 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-2.exp -c "delete from idt1 where pk = 0")
+
+add_test(NAME ddbsh-delete-3 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-3.exp -c "explain delete from idt1 where y = 14")
+add_test(NAME ddbsh-delete-4 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-4.exp -c "delete from idt1 where y = 14")
+
+add_test(NAME ddbsh-delete-5 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-5.exp -c "select * from idt1")
+
+# since this uniquely identifies an item, it is a direct delete with a CCF
+add_test(NAME ddbsh-delete-6 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-6.exp -c "explain delete from idt1 where pk = 0 and x = 3")
+add_test(NAME ddbsh-delete-7 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-7.exp -c "delete from idt1 where pk = 0 and x = 3")
+
+add_test(NAME ddbsh-delete-8 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-8.exp -c "explain delete from idt1 where pk between 1 and 3")
+add_test(NAME ddbsh-delete-9 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-9.exp -c "delete from idt1 where pk between 1 and 3")
+
+add_test(NAME ddbsh-delete-10 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-10.exp -c "explain delete from idt1 where not pk between 2 and 9")
+add_test(NAME ddbsh-delete-11 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-11.exp -c "delete from idt1 where not pk between 2 and 9")
+
+# modified count will be 1 in this test because it will attempt to modify pk = 1000 which does not exist.
+add_test(NAME ddbsh-delete-12 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-12.exp -c "delete from idt1 where pk = 1000")
+
+add_test(NAME ddbsh-delete-13 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-13.exp -c "explain delete from idt1 where x > 8 or pk > 8")
+add_test(NAME ddbsh-delete-14 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-14.exp -c "delete from idt1 where x > 8 or pk > 8")
+
+add_test(NAME ddbsh-delete-21 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-21.exp -c "select * from idt1 where pk = 1000")
+
+add_test(NAME ddbsh-delete-22 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-22.exp -c "explain delete from idt2 where pk = 1 and rk = 2")
+
+add_test(NAME ddbsh-delete-23 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-23.exp -c "delete from idt2 where pk = 1 and rk = 2;")
+
+add_test(NAME ddbsh-delete-24 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-24.exp -c "select * from idt2 where pk = 1")
+
+add_test(NAME ddbsh-delete-25 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-25.exp -c "explain delete from idt2 where pk = 2")
+add_test(NAME ddbsh-delete-26 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-26.exp -c "delete from idt2 where pk = 2")
+add_test(NAME ddbsh-delete-27 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-27.exp -c "select * from idt2 where pk = 2")
+
+add_test(NAME ddbsh-delete-28 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-28.exp -c "explain delete from idt2 where rk = 6")
+add_test(NAME ddbsh-delete-29 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-29.exp -c "select * from idt2 where rk = 6")
+add_test(NAME ddbsh-delete-30 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-30.exp -c "delete from idt2 where rk = 6")
+add_test(NAME ddbsh-delete-31 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-delete-31.exp -c "select * from idt2 where rk = 6")
+
+# since the query below is a partial key, it'll turn into a scan and
+# delete. Since the scan returns nothing, there is no delete.
+add_test(NAME ddbsh-delete-32 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-32.exp -c "explain delete from idt2 where rk = 6 and z = 12")
+
+# here the item is uniquely identified (this is against idt1). So it
+# turns into a direct delete with condition expression. CCF should
+# result.
+
+add_test(NAME ddbsh-delete-33 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-33.exp -c "explain delete from idt1 where pk = 6 and z = 12")
+
+
+add_test(NAME ddbsh-delete-34 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-34.exp -c "delete from idt1 where pk = 6 and z = 12")
+
+# add_test(NAME ddbsh-delete-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-35.exp -c
+# add_test(NAME ddbsh-delete-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-36.exp -c
+# add_test(NAME ddbsh-delete-37 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-37.exp -c
+# add_test(NAME ddbsh-delete-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-38.exp -c
+# add_test(NAME ddbsh-delete-39 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-39.exp -c
+# add_test(NAME ddbsh-delete-40 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-40.exp -c
+# add_test(NAME ddbsh-delete-41 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-41.exp -c
+# add_test(NAME ddbsh-delete-42 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-42.exp -c
+# add_test(NAME ddbsh-delete-43 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-43.exp -c
+# add_test(NAME ddbsh-delete-44 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-44.exp -c
+# add_test(NAME ddbsh-delete-45 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-45.exp -c
+# add_test(NAME ddbsh-delete-46 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-46.exp -c
+# add_test(NAME ddbsh-delete-47 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-47.exp -c
+# add_test(NAME ddbsh-delete-48 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-48.exp -c
+# add_test(NAME ddbsh-delete-49 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-49.exp -c
+# 

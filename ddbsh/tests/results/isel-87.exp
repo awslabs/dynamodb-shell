@@ -1,0 +1,19 @@
+Query({
+   "TableName":   "isel2",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "begins_with(#aaaa2, :vaaa2)",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a",
+      "#aaaa2":   "c"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "501"
+      },
+      ":vaaa2":   {
+         "S":   "CUST#"
+      }
+   }
+})

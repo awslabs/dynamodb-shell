@@ -1,0 +1,11 @@
+DeleteItem({
+   "TableName":   "idt2",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "rk":   {
+         "N":   "2"
+      }
+   }
+})

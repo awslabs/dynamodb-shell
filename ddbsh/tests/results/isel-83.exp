@@ -1,0 +1,17 @@
+Scan({
+   "TableName":   "isel2",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 = :vaaa1 AND begins_with(#aaaa1, :vaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "501"
+      },
+      ":vaaa2":   {
+         "S":   "CUST#"
+      }
+   },
+   "ConsistentRead":   false
+})

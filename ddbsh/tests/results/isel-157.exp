@@ -1,0 +1,19 @@
+Query({
+   "TableName":   "isel1",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "contains(#aaaa2, :vaaa2)",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a",
+      "#aaaa2":   "ex"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "6"
+      },
+      ":vaaa2":   {
+         "S":   "ab"
+      }
+   }
+})

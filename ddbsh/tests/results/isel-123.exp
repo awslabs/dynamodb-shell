@@ -1,0 +1,21 @@
+Scan({
+   "TableName":   "isel1",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 BETWEEN :vaaa2 AND :vaaa3",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "b",
+      "#aaaa2":   "ex"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "7"
+      },
+      ":vaaa2":   {
+         "S":   "ab"
+      },
+      ":vaaa3":   {
+         "S":   "abd"
+      }
+   },
+   "ConsistentRead":   false
+})

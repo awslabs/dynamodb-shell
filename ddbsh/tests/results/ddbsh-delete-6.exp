@@ -1,0 +1,17 @@
+DeleteItem({
+   "TableName":   "idt1",
+   "Key":   {
+      "pk":   {
+         "N":   "0"
+      }
+   },
+   "ConditionExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "x"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "3"
+      }
+   }
+})

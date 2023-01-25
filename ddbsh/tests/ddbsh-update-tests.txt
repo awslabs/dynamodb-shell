@@ -1,0 +1,96 @@
+add_test(NAME iut-drop-1 COMMAND ddbshtest -c "drop table if exists iut1")
+add_test(NAME iut-drop-2 COMMAND ddbshtest -c "drop table if exists iut2")
+
+add_test(NAME iut-create-1
+         COMMAND ddbshtest -c "create table iut1 (pk number) primary key (pk hash) billing mode on demand")
+add_test(NAME iut-create-2
+         COMMAND ddbshtest -c "create table iut2 (pk number, rk number) primary key (pk hash, rk range) billing mode on demand")
+
+add_test(NAME ddbsh-load-1 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-1.sql)
+add_test(NAME ddbsh-load-2 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-2.sql)
+
+add_test(NAME ddbsh-load-1-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-1-check.exp -c "select * from iut1")
+add_test(NAME ddbsh-load-2-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-2-check.exp -c "select * from iut2")
+
+add_test(NAME iut-0 COMMAND ddbshtest -s -q -T ${RD}/iut-0.exp -c "select * from iut1; select * from iut2;")
+
+add_test(NAME iut-1 COMMAND ddbshtest -q -T ${RD}/iut-1.exp -c "explain update iut1 set y = 14 where pk = 0")
+add_test(NAME iut-2 COMMAND ddbshtest -q -T ${RD}/iut-2.exp -c "update iut1 set y = 14 where pk = 0")
+
+add_test(NAME iut-3 COMMAND ddbshtest -q -T ${RD}/iut-3.exp -c "explain update iut1 set x = 3 where y = 14")
+add_test(NAME iut-4 COMMAND ddbshtest -q -T ${RD}/iut-4.exp -c "update iut1 set x = 3 where y = 14")
+
+add_test(NAME iut-5 COMMAND ddbshtest -s -q -T ${RD}/iut-5.exp -c "select * from iut1")
+
+add_test(NAME iut-6 COMMAND ddbshtest -q -T ${RD}/iut-6.exp -c "explain update iut1 set y = 15 where pk = 0 and x = 3")
+add_test(NAME iut-7 COMMAND ddbshtest -q -T ${RD}/iut-7.exp -c "update iut1 set y = 15 where pk = 0 and x = 3")
+
+add_test(NAME iut-8 COMMAND ddbshtest -q -T ${RD}/iut-8.exp -c "explain update iut1 set y = 10 where pk between 1 and 3")
+add_test(NAME iut-9 COMMAND ddbshtest -q -T ${RD}/iut-9.exp -c "update iut1 set y = 10 where pk between 1 and 3")
+
+add_test(NAME iut-10 COMMAND ddbshtest -q -T ${RD}/iut-10.exp -c "explain update iut1 set y = 10 where not pk between 2 and 9")
+add_test(NAME iut-11 COMMAND ddbshtest -q -T ${RD}/iut-11.exp -c "update iut1 set y = 10 where not pk between 2 and 9")
+
+add_test(NAME iut-12 COMMAND ddbshtest -q -T ${RD}/iut-12.exp -c "update iut1 set y = 10 where pk = 1000")
+
+add_test(NAME iut-13 COMMAND ddbshtest -q -T ${RD}/iut-13.exp -c "explain update iut1 set y = 10 where x > 8 or pk > 8")
+add_test(NAME iut-14 COMMAND ddbshtest -q -T ${RD}/iut-14.exp -c "update iut1 set y = 10 where x > 8 or pk > 8")
+
+add_test(NAME iut-15 COMMAND ddbshtest -q -T ${RD}/iut-15.exp -c "explain upsert iut1 set y = 14 where pk = 1")
+add_test(NAME iut-16 COMMAND ddbshtest -q -T ${RD}/iut-16.exp -c "upsert iut1 set y = 14 where pk = 1")
+
+
+add_test(NAME iut-17 COMMAND ddbshtest -q -T ${RD}/iut-17.exp -c "explain upsert iut1 set x = 3 where pk = 3 and y = 14")
+# test 18 should ccf
+add_test(NAME iut-18 COMMAND ddbshtest -q -T ${RD}/iut-18.exp -c "upsert iut1 set x = 3 where pk = 3 and y = 14")
+
+add_test(NAME iut-19 COMMAND ddbshtest -q -T ${RD}/iut-19.exp -c "explain upsert iut1 set y = 10 where pk = 1000")
+add_test(NAME iut-20 COMMAND ddbshtest -q -T ${RD}/iut-20.exp -c "upsert iut1 set y = 10 where pk = 1000")
+add_test(NAME iut-21 COMMAND ddbshtest -s -q -T ${RD}/iut-21.exp -c "select * from iut1 where pk = 1000")
+
+add_test(NAME iut-22 COMMAND ddbshtest -q -T ${RD}/iut-22.exp -c "explain update iut2 set y = 14 where pk = 1 and rk = 2")
+
+add_test(NAME iut-23 COMMAND ddbshtest -q -T ${RD}/iut-23.exp -c "update iut2 set y = 14 where pk = 1 and rk = 2;")
+
+add_test(NAME iut-24 COMMAND ddbshtest -s -q -T ${RD}/iut-24.exp -c "select * from iut2 where pk = 1")
+
+add_test(NAME iut-25 COMMAND ddbshtest -q -T ${RD}/iut-25.exp -c "explain update iut2 set y = 14 where pk = 2")
+add_test(NAME iut-26 COMMAND ddbshtest -q -T ${RD}/iut-26.exp -c "update iut2 set y = 14 where pk = 2")
+add_test(NAME iut-27 COMMAND ddbshtest -s -q -T ${RD}/iut-27.exp -c "select * from iut2 where pk = 2")
+
+add_test(NAME iut-28 COMMAND ddbshtest -q -T ${RD}/iut-28.exp -c "explain update iut2 set y = 15 where rk = 6")
+add_test(NAME iut-29 COMMAND ddbshtest -s -q -T ${RD}/iut-29.exp -c "select * from iut2 where rk = 6")
+add_test(NAME iut-30 COMMAND ddbshtest -q -T ${RD}/iut-30.exp -c "update iut2 set y = 15 where rk = 6")
+add_test(NAME iut-31 COMMAND ddbshtest -s -q -T ${RD}/iut-31.exp -c "select * from iut2 where rk = 6")
+
+# since the query below is a partial key, it'll turn into a scan and
+# update. Since the scan returns nothing, there is no update.
+add_test(NAME iut-32 COMMAND ddbshtest -q -T ${RD}/iut-32.exp -c "explain update iut2 set y = 15 where rk = 6 and z = 12")
+
+# here the item is uniquely identified (this is against iut1). So it
+# turns into a direct update with condition expression. CCF should
+# result.
+
+add_test(NAME iut-33 COMMAND ddbshtest -q -T ${RD}/iut-33.exp -c "explain update iut1 set y = 21 where pk = 6 and z = 12")
+
+
+add_test(NAME iut-34 COMMAND ddbshtest -q -T ${RD}/iut-34.exp -c "update iut1 set y = 21 where pk = 6 and z = 12")
+
+add_test(NAME iut-35 COMMAND ddbshtest -q -T ${RD}/iut-35.exp -c "explain update iut1 set y = y + 10 where pk = 3")
+
+add_test(NAME iut-36 COMMAND ddbshtest -s -q -T ${RD}/iut-36.exp -c "update iut1 set y = y + 10 where pk = 3")
+
+# add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c
+# add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c
+# add_test(NAME iut-39 COMMAND ddbshtest -q -T ${RD}/iut-39.exp -c
+# add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c
+# add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c
+# add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c
+# add_test(NAME iut-43 COMMAND ddbshtest -q -T ${RD}/iut-43.exp -c
+# add_test(NAME iut-44 COMMAND ddbshtest -q -T ${RD}/iut-44.exp -c
+# add_test(NAME iut-45 COMMAND ddbshtest -q -T ${RD}/iut-45.exp -c
+# add_test(NAME iut-46 COMMAND ddbshtest -q -T ${RD}/iut-46.exp -c
+# add_test(NAME iut-47 COMMAND ddbshtest -q -T ${RD}/iut-47.exp -c
+# add_test(NAME iut-48 COMMAND ddbshtest -q -T ${RD}/iut-48.exp -c
+# add_test(NAME iut-49 COMMAND ddbshtest -q -T ${RD}/iut-49.exp -c
+#

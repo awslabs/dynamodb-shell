@@ -1,0 +1,2 @@
+#define VERSION_MAJOR @ddbsh_VERSION_MAJOR@
+#define VERSION_MINOR @ddbsh_VERSION_MINOR@

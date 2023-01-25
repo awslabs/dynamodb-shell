@@ -1,0 +1,18 @@
+Scan({
+   "TableName":   "idt1",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "NOT (#abaa1 BETWEEN :vbaa1 AND :vbaa2)",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "2"
+      },
+      ":vbaa2":   {
+         "N":   "9"
+      }
+   },
+   "ConsistentRead":   false
+})

@@ -1,0 +1,20 @@
+add_test(NAME ipt-drop-table COMMAND ddbshtest -c "drop table if exists ipt1")
+
+add_test(NAME ipt-create-table COMMAND ddbshtest -c "create table ipt1 ( a number, b number ) \
+                                                  primary key ( a hash, b range ) \
+                                                  billing mode provisioned ( 10 rcu, 10 wcu )")
+
+add_test(NAME ipt-pitr-disabled-by-default COMMAND ddbshtest -c "describe ipt1")
+set_property(TEST ipt-pitr-disabled-by-default PROPERTY PASS_REGULAR_EXPRESSION "PITR is Disabled.")
+
+add_test(NAME ipt-pitr-enable-sleep COMMAND sleep 10)
+add_test(NAME ipt-pitr-enable COMMAND ddbshtest -c "alter table ipt1 set pitr enabled")
+
+add_test(NAME ipt-pitr-enabled COMMAND ddbshtest -c "describe ipt1")
+set_property(TEST ipt-pitr-enabled PROPERTY PASS_REGULAR_EXPRESSION "PITR is Enabled")
+
+add_test(NAME ipt-pitr-disable COMMAND ddbshtest -c "alter table ipt1 set pitr disabled")
+
+add_test(NAME ipt-pitr-disable-sleep COMMAND sleep 10)
+add_test(NAME ipt-pitr-disabled COMMAND ddbshtest -c "describe ipt1")
+set_property(TEST ipt-pitr-disabled PROPERTY PASS_REGULAR_EXPRESSION "PITR is Disabled.")

@@ -1,0 +1,41 @@
+add_test(NAME ddbsh-basic-cli COMMAND ddbshtest -c "show tables")
+
+add_test(NAME ddbsh-basic-invalid-cli COMMAND ddbshtest -c "show tablas")
+set_property(TEST ddbsh-basic-invalid-cli PROPERTY WILL_FAIL PROPERTY PASS_REGULAR_EXPRESSION "syntax error at ;")
+
+add_test(NAME ddbsh-basic-delete-test-table-1 COMMAND ddbshtest -c "drop table if exists ddbsh_test_table_1")
+
+# table was deleted, can't delete it a second time
+add_test(NAME ddbsh-basic-delete-test-table-1-fail COMMAND ddbshtest -c "drop table ddbsh_test_table_1")
+set_property(TEST ddbsh-basic-delete-test-table-1-fail PROPERTY PASS_REGULAR_EXPRESSION "Table: ddbsh_test_table_1 not found")
+
+add_test(NAME ddbsh-basic-create-test-table-1 COMMAND ddbshtest -c "create table ddbsh_test_table_1 ( a number ) primary key ( a hash ) billing mode provisioned ( 200 RCU, 200 WCU )")
+
+add_test(NAME ddbsh-basic-create-test-table-1-fail COMMAND ddbshtest -c "create table ddbsh_test_table_1 ( a number ) primary key ( a hash ) billing mode provisioned ( 200 RCU, 200 WCU )")
+set_property(TEST ddbsh-basic-create-test-table-1-fail PROPERTY PASS_REGULAR_EXPRESSION "Table already exists: ddbsh_test_table_1")
+
+# insert a few items
+add_test(NAME ddbsh-basic-insert-test-1 COMMAND ddbshtest -c "insert into ddbsh_test_table_1 (a, b, c) values (3, 4, 5); insert into ddbsh_test_table_1 (a, b, c) values (4, 5, 6); insert into ddbsh_test_table_1 (a, b, c) values (5, 6, 7);")
+
+# check that the data exists now
+add_test(NAME ddbsh-basic-test-1 COMMAND ddbshtest -s -T ${RD}/ddbsh-basic-test-1.exp -q -c "select * from ddbsh_test_table_1")
+
+add_test(NAME ddbsh-basic-test-2 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-2.exp -c "explain select * from ddbsh_test_table_1")
+
+add_test(NAME ddbsh-basic-test-3 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-basic-test-3.exp -c "select a from ddbsh_test_table_1")
+
+add_test(NAME ddbsh-basic-test-4 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-basic-test-4.exp -c "select a, b from ddbsh_test_table_1")
+
+add_test(NAME ddbsh-basic-test-5 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-basic-test-5.exp -c "select * from ddbsh_test_table_1 where a = 3")
+
+add_test(NAME ddbsh-basic-test-6 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-6.exp -c "explain select * from ddbsh_test_table_1 where a = 3")
+
+add_test(NAME ddbsh-basic-test-7 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-basic-test-7.exp -c "select * from ddbsh_test_table_1 where a = 3 and b = 4")
+
+add_test(NAME ddbsh-basic-test-8 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-8.exp -c "explain select * from ddbsh_test_table_1 where a = 3 and b = 4")
+
+
+
+
+
+

@@ -1,0 +1,15 @@
+Query({
+   "TableName":   "isel4",
+   "IndexName":   "globalsec",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "c"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "4"
+      }
+   }
+})

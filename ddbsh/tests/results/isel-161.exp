@@ -1,0 +1,14 @@
+Scan({
+   "TableName":   "isel3",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "contains(#aaaa1, :vaaa1)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "S":   "bc"
+      }
+   },
+   "ConsistentRead":   false
+})

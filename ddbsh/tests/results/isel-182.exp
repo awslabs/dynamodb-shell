@@ -1,0 +1,2 @@
+{a: 501, b: CUST#bob, c: "bobs stuff"}
+{a: 501, b: CUST#bob#roadtrips, c: "[3, 4, 5]"}

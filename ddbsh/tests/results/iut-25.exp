@@ -1,0 +1,82 @@
+Query({
+   "TableName":   "iut2",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1, #abaa2",
+   "KeyConditionExpression":   "#abaa1 = :vbaa1",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "rk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "2"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "iut2",
+   "Key":   {
+      "pk":   {
+         "N":   "2"
+      },
+      "rk":   {
+         "N":   "3"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "y",
+      "#aaaa2":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "14"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "iut2",
+   "Key":   {
+      "pk":   {
+         "N":   "2"
+      },
+      "rk":   {
+         "N":   "4"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "y",
+      "#aaaa2":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "14"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "iut2",
+   "Key":   {
+      "pk":   {
+         "N":   "2"
+      },
+      "rk":   {
+         "N":   "5"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "y",
+      "#aaaa2":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "14"
+      }
+   }
+})

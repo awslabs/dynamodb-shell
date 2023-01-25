@@ -1,0 +1,3 @@
+{a: 501, b: ACCOUNTINFO, c: "some stuff"}
+{a: 501, b: CUST#bob#roadtrips, c: "[3, 4, 5]"}
+{a: 501, b: CUST#bob, c: "bobs stuff"}

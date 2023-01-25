@@ -1,0 +1,21 @@
+Query({
+   "TableName":   "isel1",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 BETWEEN :vaaa2 AND :vaaa3",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a",
+      "#aaaa2":   "b"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "2"
+      },
+      ":vaaa2":   {
+         "N":   "3"
+      },
+      ":vaaa3":   {
+         "N":   "5"
+      }
+   }
+})

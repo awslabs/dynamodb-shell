@@ -1,0 +1,17 @@
+UpdateItem({
+   "TableName":   "iut1",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "y"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "14"
+      }
+   }
+})

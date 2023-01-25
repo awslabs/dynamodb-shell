@@ -1,0 +1,5 @@
+Scan({
+   "TableName":   "ddbsh_test_table_1",
+   "ReturnConsumedCapacity":   "NONE",
+   "ConsistentRead":   false
+})
