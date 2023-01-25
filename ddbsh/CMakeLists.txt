@@ -139,3 +139,4 @@ target_include_directories(ddbshtest PUBLIC "${PROJECT_BINARY_DIR}")
 
 include(${CMAKE_SOURCE_DIR}/tests/ddbsh-tests.txt)
 
+install(TARGETS ddbsh DESTINATION bin)

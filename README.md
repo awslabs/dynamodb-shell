@@ -4,17 +4,17 @@ ddbsh is a simple CLI for DynamoDB modeled on isql, and the MySQL CLIs. ddbsh is
 
 ddbsh presents the user with a simple command line interface. Here the user can enter SQL-like commands to DynamoDB. The output is presented in the same window. ddbsh supports many Data Definition Language ([DDL](#ddl)) and Data Manipulation Language ([DML](#dml)) commands.
 
-# <a name="installation-0">Installation</a>
+# Installation
 
-## <a name="installation-10">Download the software</a>
+## Download the software
 
 Clone the source code repository from github.
 
 $ git clone https://github.com/awslabs/dynamodb-shell.git
 
-## <a name="installation-20">Build the software</a>
+## Build the software
 
-### <a name="installation-30">Pre-requisites</a>
+### Pre-requisites
 
 1. You need to get cmake version >= 3.21
 
@@ -22,17 +22,17 @@ $ git clone https://github.com/awslabs/dynamodb-shell.git
 
 3. You need the AWS SDK installed
 
-### <a name="installation-40">Building on Ubuntu</a>
+### Building on Ubuntu
 
 To get the latest version of cmake, follow instructions on kitware's website, or in [this](https://askubuntu.com/questions/355565/how-do-i-install-the-latest-version-of-cmake-from-the-command-line} answer.
 
 To get the AWS SDK installed follow instructions [here](https://docs.aws.amazon.com/rekognition/latest/dg/setup-awscli-sdk.html). Detailed setup information can be found [here](https://docs.aws.amazon.com/sdk-for-cpp/v1/developer-guide/setup-linux.html).
 
-### <a name="installation-50">Building on Mac</a>
+### Building on Mac
 
 To get the latest version of cmake, follow instructions [here](https://cmake.org/install/).
 
-### <a name="installation-60">Common build steps</a>
+### Common build steps
 
 Once all pre-requisites are installed and available, the build is performed with cmake.
 
@@ -50,7 +50,52 @@ Cloning into 'dynamodb-shell'...
 % make
 ```
 
-### <a name="installation-70">Running tests</a>
+### More build steps
+
+1. Building the SDK. I have found the following to work reliably.
+
+```
+% git clone https://github.com/aws/aws-sdk-cpp.git
+
+% mkdir aws-sdk-build
+
+% cd aws-sdk-cpp
+
+% git submodule update --init --recursive
+
+% cd ../aws-sdk-build
+
+% cmake ../aws-sdk-cpp -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH=/usr/local/ \
+        -DCMAKE_INSTALL_PREFIX=/usr/local/ \
+        -DBUILD_ONLY="dynamodb" \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DENABLE_TESTING=OFF \
+        -DFORCE_SHARED_CRT=OFF
+
+% make
+
+% sudo make install
+
+```
+
+2. Building ddbsh. I have found teh following to work reliably
+
+```
+% git clone https://github.com/awslabs/dynamodb-shell.git
+
+% cd dynamodb-shell
+
+% mkdir build && cd build
+
+% cmake ../ddbsh -DCMAKE_BUILD_TYPE=Release
+
+% make
+
+% sudo make install
+```
+
+### Running tests
 
 Once you complete a build you can run the unit tests as shown below.
 
@@ -62,7 +107,7 @@ Test project /Users/amrithie/source/github/dynamodb-shell/build
 [...]
 ```
 
-# <a name="getting-started-0">Getting Started</a>
+# Getting Started
 
 Running ddbsh is as simple as executing the ddbsh command. ddbsh is written in C++ and uses the DynamoDB API through the AWS DynamoDB SDK.
 
@@ -83,9 +128,9 @@ output=text
 
 For more information visit [AWS configuration and credentials files](https://docs.aws.amazon.com/sdkref/latest/guide/file-format.html).
 
-## <a name="getting-started-10">Environment Variables</a>
+## Environment Variables
 
-### <a name="getting-started-20">DDBSH\_DEFAULT\_REGION</a>
+### DDBSH\_DEFAULT\_REGION
 
 If there are multiple regions listed in ~/.aws/config file, and you would like to connect to a region other than the default, you can do this by setting the environment variable DDBSH_DEFAULT_REGION.
 
@@ -96,7 +141,7 @@ ddbsh - version 0.2
 us-west-1>
 ```
 
-### <a name="getting-started-30">DDBSH\_ENDPOINT\_OVERRIDE</a>
+### DDBSH\_ENDPOINT\_OVERRIDE
 
 If you wish to connect to a non-default endpoint for DynamoDB, you can specify an environment override here. For example, DynamoDB has zeta clusters which are used for testing and this option allows you to connect to a zeta cluster.
 
@@ -109,15 +154,15 @@ us-east-1 (*)>
 
 When you connect to non-default endpoint,  the (*) appears in the prompt to alert you to this.
 
-# <a name="getting-started-40">Interface</a>
+# Interface
 
 ddbsh exposes a readline based interface. The UP-ARROW and DOWN-ARROW keys allow you to view previous commands, and pick a previous command to reexecute.
 
 Commands are terminated with the ';' character.
 
-# <a name="control-commands-0">Control Commands</a>
+# Control Commands
 
-## <a name="control-commands-10">CONNECT</a>
+## CONNECT
 
 **Purpose:** Connect to a different region or endpoint
 
@@ -135,21 +180,21 @@ us-east-1>
 
 The prompt shows the region name, and the additional (*) if you are connected to a non-standard endpoint.
 
-## <a name="control-commands-20">QUIT</a>
+## QUIT
 
 **Purpose:** You have had a good day, and you want to do something else.
 
 **Syntax:** QUIT
 
-# <a name="ddl-0">Data Definition Language</a>
+# Data Definition Language
 
-## <a name="ddl-10">ALTER TABLE</a>
+## ALTER TABLE
 
 **Purpose:** Make changes to a tables settings including billing mode, table class, streams, and TTL. Also create and drop Local Secondary Indexes (LSI) and Global Secondary Indexes (GSI).
 
 **Syntax:** ALTER TABLE *table* [alter-table-options]
 
-### <a name="ddl-20">SET billing\_mode\_and\_throughput </a>
+### SET billing\_mode\_and\_throughput 
 
 Sets table and index billing mode and throughput. 
 
@@ -186,7 +231,7 @@ Billing Mode: Provisioned (200 RCU, 300 WCU)
 us-east-1> 
 ```
 
-### <a name="ddl-30">SET TABLE CLASS *class*</a>
+### SET TABLE CLASS *class*
 
 Alters the table class.
 
@@ -230,7 +275,7 @@ Error: Subscriber limit exceeded: Updates to TableClass are limited to 2 times i
 us-east-1> 
 ```
 
-### <a name="ddl-40">SET STREAM</a>
+### SET STREAM
 
 Sets options related to DynamoDB Streams.
 
@@ -279,7 +324,7 @@ Stream: Disabled
 us-east-1> 
 ```
 
-### <a name="ddl-50">CREATE GSI</a>
+### CREATE GSI
 
 CREATE GSI *name* ON *key\_schema* *projection* *optional\_billing\_mode\_and\_throughput*
 
@@ -338,7 +383,7 @@ ALTER
 us-east-1> 
 ```
 
-### <a name="ddl-60">SET *billing\_mode\_and\_throughput*</a>
+### SET *billing\_mode\_and\_throughput*
 
 You can change the billing mode and throughput on a table, and its associated GSIs, all in one command.
 
@@ -378,7 +423,7 @@ us-east-1> update gsi (pqgsi set billing mode provisioned (20 rcu, 30 wcu), xyke
 ALTER
 ```
 
-### <a name="ddl-70">SET PITR [ENABLED|DISABLED]</a>
+### SET PITR [ENABLED|DISABLED]
 
 Enables or disables the setting for PITR (Point In Time Recovery) for a table.
 
@@ -407,7 +452,7 @@ us-east-1>
 
 
 
-## <a name="ddl-80">BACKUP TABLE</a>
+## BACKUP TABLE
 
 **Purpose:** Take a backup of a table.
 
@@ -432,7 +477,7 @@ Table: lsitest, Backup: lsitest-backup, Status: AVAILABLE, ARN: arn:aws:dynamodb
 us-east-1> 
 ```
 
-## <a name="ddl-90">CREATE TABLE</a>
+## CREATE TABLE
 
 **Purpose:** Creates a table (and GSIs, LSIs, and sets other initial parameters).
 
@@ -465,7 +510,7 @@ CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
 ```
 
 
-## <a name="ddl-100">DESCRIBE</a>
+## DESCRIBE
 
 **Purpose:** Provides a description of a table.
 
@@ -473,7 +518,7 @@ CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
 
 Provides a description of a table.
 
-## <a name="ddl-110">DESCRIBE BACKUPS</a>
+## DESCRIBE BACKUPS
 
 **Purpose:** Describes a backup.
 
@@ -502,7 +547,7 @@ Backup Expiry Date/Time: 1970-01-01T00:00:00Z
 us-east-1> 
 ```
 
-## <a name="ddl-120">DROP BACKUP</a>
+## DROP BACKUP
 
 **Purpose:** Deletes a previously created backup.
 
@@ -518,7 +563,7 @@ DROP BACKUP
 us-east-1> 
 ```
 
-## <a name="ddl-130">DROP TABLE</a>
+## DROP TABLE
 
 **Purpose:** Drops a table.
 
@@ -549,7 +594,7 @@ DROP
 us-east-1> 
 ```
 
-## <a name="ddl-140">RESTORE TABLE</a>
+## RESTORE TABLE
 
 **Purpose:** Restores a backup and creates a new table.
 
@@ -632,7 +677,7 @@ us-east-1>
 ```
 
 
-## <a name="ddl-150">SHOW BACKUPS</a>
+## SHOW BACKUPS
 
 **Purpose:** Lists backups.
 
@@ -650,7 +695,7 @@ Table: singlekey, Backup: backup71, Status: AVAILABLE, ARN: arn:aws:dynamodb:us-
 
 The output lists the table name, the backup name, status, ARN, and the timestamps (creation, and expiry).
 
-## <a name="ddl-160">SHOW LIMITS</a>
+## SHOW LIMITS
 
 **Purpose:** Shows limits for the connected user.
 
@@ -671,7 +716,7 @@ Total (RCU, WCU): 543, 865
 us-east-1> 
 ```
 
-## <a name="ddl-170">SHOW TABLES</a>
+## SHOW TABLES
 
 **Purpose:** Lists tables.
 
@@ -688,7 +733,7 @@ us-east-1> show tables;
  
 The output lists the table name, its current status, billing mode, table class, table-id, table-arn, TTL status, and counts of GSIs and LSIs.
 
-## <a name="ddl-180">EXPLAIN</a>
+## EXPLAIN
 
 **Purpose:** Explain the API calls performed to execute a DDL or DML command.
 
@@ -762,7 +807,7 @@ CreateTable({
 CREATE
 ```
 
-# <a name="dml-0">Data Manipulation Language</a>
+# Data Manipulation Language
 
 For the examples that follow, we use a table (sampletable) created as shown below.
 
@@ -788,7 +833,7 @@ Some sample data is loaded into this table.
 {pk: 1, rk: two, y: 12}
 ```
 
-## <a name="dml-10">DELETE</a>
+## DELETE
 
 **Purpose:** Delete data from a table.
 
@@ -992,7 +1037,7 @@ us-east-1>
 
 The PK is specified, so we are able to perform a Query() which returns two rows which are then deleted one at a time.
 
-## <a name="dml-20">INSERT</a>
+## INSERT
 
 **Purpose:** Inserts an item into a table.
 
@@ -1019,7 +1064,7 @@ us-east-1> insert into sampletable (pk, rk, conflict) values ( 3, "three", "conf
 [run, 83] INSERT failed. The conditional request failed
 us-east-1> 
 ```
-## <a name="dml-30">REPLACE</a>
+## REPLACE
 
 **Purpose:** Replaces an item in a table, if one exists. Creates a new one if one does not exist.
 
@@ -1045,7 +1090,7 @@ us-east-1>
 ```
 
 
-## <a name="dml-40">SELECT</a>
+## SELECT
 
 **Purpose:** Selects items from a table or index.
 
@@ -1083,7 +1128,7 @@ us-east-1>
 
 SELECT will execute either a GetItem(), Query() or Scan() depending on whether the request specifies a complete primary key (or not) and whether the request targets a table or index.
 
-## <a name="dml-50">UPDATE</a>
+## UPDATE
 
 **Purpose:** Update items in a table.
 
@@ -1135,7 +1180,7 @@ us-east-1> select * from sampletable where pk = 1;
 us-east-1> 
 ```
 
-## <a name="dml-60">UPSERT</a>
+## UPSERT
 
 **Purpose:** Performs an UPDATE or INSERT
 
@@ -1168,7 +1213,7 @@ us-east-1> select * from sampletable where pk = 7;
 us-east-1> 
 ```
 
-## <a name="dml-70">EXPLAIN</a>
+## EXPLAIN
 
 **Purpose:** Explain the API calls performed to execute a DDL or DML command.
 
@@ -1282,11 +1327,11 @@ UpdateItem({
 UPDATE
 ```
 
-# <a name="contributing-0">Contributing</a>
+# Contributing
 
 If you find bugs or errors of any kind, please do let the maintainers know. If you are so inclined, please let the maintainers know that you would like to submit pull-requests. We will do our best to respond in a timely manner and where possible accept pull-requests and changes.
 
-# <a name="direction-0">Direction</a>
+# Direction
 
 Here are some things that need to be done:
 
@@ -1304,7 +1349,7 @@ Here are some things that need to be done:
 
 7. Distribute signed binaries.
 
-# <a name="licensing-0">Licensing</a>
+# Licensing
 
 ddbsh is licensed under the terms of the Apache Version 2.0 (January 2004) license. See the License file [here](LICENSE).
 
