@@ -47,8 +47,8 @@ CDDBSh::CDDBSh()
         m_config_file += "/.ddbsh_config";
     }
 
-    if (std::getenv("DDBSH_DEFAULT_REGION") != nullptr)
-        m_region = std::getenv("DDBSH_DEFAULT_REGION");
+    if (std::getenv("AWS_DEFAULT_REGION") != nullptr)
+        m_region = std::getenv("AWS_DEFAULT_REGION");
     else
         m_region = "us-east-1";
 

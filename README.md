@@ -130,29 +130,7 @@ For more information visit [AWS configuration and credentials files](https://doc
 
 ## Environment Variables
 
-### DDBSH\_DEFAULT\_REGION
-
-If there are multiple regions listed in ~/.aws/config file, and you would like to connect to a region other than the default, you can do this by setting the environment variable DDBSH_DEFAULT_REGION.
-
-```
-$ export DDBSH_DEFAULT_REGION=us-west-1
-$ ./ddbsh
-ddbsh - version 0.2
-us-west-1>
-```
-
-### DDBSH\_ENDPOINT\_OVERRIDE
-
-If you wish to connect to a non-default endpoint for DynamoDB, you can specify an environment override here. For example, DynamoDB has zeta clusters which are used for testing and this option allows you to connect to a zeta cluster.
-
-```
-$ export DDBSH_ENDPOINT_OVERRIDE=bigbird-zeta. ... .com
-$ ./ddbsh
-ddbsh - version 0.2
-us-east-1 (*)>
-```
-
-When you connect to non-default endpoint,  the (*) appears in the prompt to alert you to this.
+ddbsh respects the default AWS environment variables, see [How to set environment variables](https://docs.aws.amazon.com/sdkref/latest/guide/environment-variables.html).
 
 # Interface
 
@@ -171,11 +149,9 @@ Commands are terminated with the ';' character.
 ```
 $ ./ddbsh
 ddbsh - version 0.2
-us-east-1> connect eu-west-1 with endpoint "https://bigbird-zeta. ... .com";
+us-east-1> connect us-west-1;
 CONNECT
-eu-west-1 (*)> connect us-east-1;
-CONNECT
-us-east-1> 
+us-west-1> 
 ```
 
 The prompt shows the region name, and the additional (*) if you are connected to a non-standard endpoint.
@@ -190,7 +166,7 @@ The prompt shows the region name, and the additional (*) if you are connected to
 
 ## ALTER TABLE
 
-**Purpose:** Make changes to a tables settings including billing mode, table class, streams, and TTL. Also create and drop Local Secondary Indexes (LSI) and Global Secondary Indexes (GSI).
+**Purpose:** Make changes to a tables settings including billing mode, table class, streams, and TTL. Also create and drop Global Secondary Indexes (GSI).
 
 **Syntax:** ALTER TABLE *table* [alter-table-options]
 
@@ -932,65 +908,6 @@ Now consider another example of a partial primary key, this time specifying the 
 **Example: 3**
 
 ```
-us-east-1> explain delete from sampletable where rk = "two";
-Scan({
-   "TableName":   "sampletable",
-   "ReturnConsumedCapacity":   "NONE",
-   "ProjectionExpression":   "#a1, #a2",
-   "FilterExpression":   "#a3 = :v1",
-   "ExpressionAttributeNames":   {
-      "#a1":   "pk",
-      "#a2":   "rk",
-      "#a3":   "rk"
-   },
-   "ExpressionAttributeValues":   {
-      ":v1":   {
-         "S":   "two"
-      }
-   },
-   "ConsistentRead":   false
-})
-DeleteItem({
-   "TableName":   "sampletable",
-   "Key":   {
-      "pk":   {
-         "N":   "4"
-      },
-      "rk":   {
-         "S":   "two"
-      }
-   },
-   "ConditionExpression":   "#a1 = :v1",
-   "ExpressionAttributeNames":   {
-      "#a1":   "rk"
-   },
-   "ExpressionAttributeValues":   {
-      ":v1":   {
-         "S":   "two"
-      }
-   }
-})
-DeleteItem({
-   "TableName":   "sampletable",
-   "Key":   {
-      "pk":   {
-         "N":   "1"
-      },
-      "rk":   {
-         "S":   "two"
-      }
-   },
-   "ConditionExpression":   "#a1 = :v1",
-   "ExpressionAttributeNames":   {
-      "#a1":   "rk"
-   },
-   "ExpressionAttributeValues":   {
-      ":v1":   {
-         "S":   "two"
-      }
-   }
-})
-DELETE
 us-east-1> explain delete from sampletable where pk = 4;
 Query({
    "TableName":   "sampletable",
