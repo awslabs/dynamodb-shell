@@ -4,13 +4,13 @@ cmake_minimum_required(VERSION 3.21)
 set(CMAKE_C_COMPILER "gcc")
 set(CMAKE_CXX_COMPILER "g++")
 
-add_compile_options(-g)
-add_link_options(-lc -g)
+# add_compile_options(-g)
+# add_link_options(-lc -g)
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 project(ddbsh
-        VERSION 0.1
+        VERSION 0.2.0.0
         DESCRIPTION "A DynamoDB interactive shell"
         HOMEPAGE_URL "https://www.ddbsh.org/")
 
@@ -78,6 +78,7 @@ add_executable(ddbsh
                dynamodb/table_exists.cpp
                ddbsh/ddbsh.cpp
                ddbsh/main.cpp
+               ddbsh/version.cpp
                parser/input-source.cpp
                parser/keywords.cpp
                util/logging.cpp
@@ -117,6 +118,7 @@ add_executable(ddbshtest
                dynamodb/table_exists.cpp
                ddbsh/ddbsh.cpp
                ddbsh/main.cpp
+               ddbsh/version.cpp
                parser/input-source.cpp
                parser/keywords.cpp
                util/allocation.cpp

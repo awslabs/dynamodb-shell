@@ -11,7 +11,6 @@
  */
 
 #include "ddbsh.hpp"
-#include "version.h"
 #include "command.hpp"
 #include <parser-defs.hpp>
 #include <string>

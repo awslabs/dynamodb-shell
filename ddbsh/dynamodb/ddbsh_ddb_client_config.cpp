@@ -17,8 +17,18 @@ using namespace ddbsh;
 CDDBShDDBClientConfig::CDDBShDDBClientConfig(std::string region, std::string endpoint)
 {
     char userAgent[128];
-    sprintf(userAgent, "ddbsh version %d.%d", VERSION_MAJOR, VERSION_MINOR);
+    strcat(userAgent, ddbsh_version());
     this->userAgent = userAgent;
-    this->endpointOverride = endpoint;
     this->region = region;
+    if (!endpoint.empty())
+    {
+        Aws::DynamoDB::DynamoDBClientConfiguration config;
+        config.region = region;
+        std::shared_ptr<Aws::DynamoDB::DynamoDBEndpointProviderBase> endpointProvider =
+            Aws::MakeShared<Aws::DynamoDB::DynamoDBEndpointProvider>("ddbsh");
+        endpointProvider->InitBuiltInParameters(config);
+        endpointProvider->OverrideEndpoint(endpoint);
+        Aws::Endpoint::ResolveEndpointOutcome resolvedEndpoint = endpointProvider->ResolveEndpoint({});
+        this->endpointOverride = resolvedEndpoint.GetResult().GetURL();
+    }
 }

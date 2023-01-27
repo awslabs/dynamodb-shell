@@ -1,2 +1,10 @@
+#ifndef __DDBSH_VERSION_H_DEFINED__
+#define __DDBSH_VERSION_H_DEFINED__
+
 #define VERSION_MAJOR @ddbsh_VERSION_MAJOR@
 #define VERSION_MINOR @ddbsh_VERSION_MINOR@
+#define VERSION_PATCH @ddbsh_VERSION_PATCH@
+#define VERSION_TWEAK @ddbsh_VERSION_TWEAK@
+
+extern char * ddbsh_version();
+#endif

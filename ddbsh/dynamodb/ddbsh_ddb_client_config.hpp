@@ -16,7 +16,7 @@
 
 namespace ddbsh
 {
-    class CDDBShDDBClientConfig : public Aws::Client::ClientConfiguration
+    class CDDBShDDBClientConfig : public Aws::DynamoDB::DynamoDBClientConfiguration
     {
     public:
         CDDBShDDBClientConfig(std::string region, std::string endpoint);

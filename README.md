@@ -79,7 +79,7 @@ Cloning into 'dynamodb-shell'...
 
 ```
 
-2. Building ddbsh. I have found teh following to work reliably
+2. Building ddbsh. I have found the following to work reliably
 
 ```
 % git clone https://github.com/awslabs/dynamodb-shell.git
@@ -131,6 +131,37 @@ For more information visit [AWS configuration and credentials files](https://doc
 ## Environment Variables
 
 ddbsh respects the default AWS environment variables, see [How to set environment variables](https://docs.aws.amazon.com/sdkref/latest/guide/environment-variables.html).
+
+### DDBSH\_ENDPOINT\_OVERRIDE
+
+Used to specify an alternate endpoint, such as when using DynamoDB Local.
+
+# Using DynamoDB Local
+
+WARNING: To connect with DynamoDB Local you must be running ddbsh version 0.2 or higher and using the AWS C++ SDK version 1.11 or higher.
+
+If you want to use ddbsh with DynamoDB Local, follow these steps.
+
+First, install DynamoDB Local as described [here](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html).
+
+Set the environment variables as shown below.
+
+```
+export AWS_ACCESS_KEY_ID="fakeMyKeyId"
+export AWS_SECRET_ACCESS_KEY="fakeSecretAccessKey"
+export AWS_DEFAULT_REGION="dynamodb-local"
+export DDBSH_ENDPOINT_OVERRIDE="http://localhost:8000"
+```
+
+You will then be able to connect to DynamoDB Local.
+
+```
+ddbsh
+ddbsh - version 0.2
+dynamodb-local (*)> 
+```
+
+The (*) at the end of the prompt indicates a non-standard endpoint is in use.
 
 # Interface
 
@@ -1243,6 +1274,149 @@ UpdateItem({
 })
 UPDATE
 ```
+
+### WHERE Clause
+
+You can use a WHERE clause with SELECT, UPDATE, DELETE and UPSERT.  In the WHERE clause, you can include multiple logical expressions which can be joined with the logical AND and logical OR. In addition, you can negate a logical expression with the NOT operator.
+
+The following logical expressions are supported.
+
+* Logical comparison of the form attribute op value where attribute is a table attribute, op is one of <, >, <=, >=, = or !=
+* attribute_exists(attr) which evaluates to true if attr exists in an item
+* begins_with(attr, prefix) which evaluates to true if the attr begins with prefix
+* attr between value and value which evaluates to true if attr is between the two values provided
+* attribute_type (attr, type) which evaluates to true if attr is of the specified type.
+
+Examples: First some sample data
+
+```
+dynamodb-local (*)> select * from exprtest;
+{a: 2, b: 2}
+{a: 1, b: 2}
+{a: 3, b: cooperate}
+{a: 5, c: coffee}
+{a: 4, b: coffee}
+dynamodb-local (*)>
+```
+
+Inequality comparison with AND
+
+```
+dynamodb-local (*)> select * from exprtest where a > 3 and a < 5;
+{a: 4, b: coffee}
+```
+
+The BETWEEN operator
+
+```
+dynamodb-local (*)> select * from exprtest where a between 2 and 5;
+{a: 2, b: 2}
+{a: 3, b: cooperate}
+{a: 5, c: coffee}
+{a: 4, b: coffee}
+```
+
+The BEGINS_WITH operator
+
+```
+dynamodb-local (*)> select * from exprtest where begins_with(b, "co");
+{a: 3, b: cooperate}
+{a: 4, b: coffee}
+```
+
+The ATTRIBUTE_EXISTS operator
+
+```
+dynamodb-local (*)> select * from exprtest where attribute_exists(c);
+{a: 5, c: coffee}
+
+dynamodb-local (*)> select * from exprtest where attribute_exists(c) and a != 3;
+{a: 5, c: coffee}
+
+dynamodb-local (*)> select * from exprtest where attribute_exists(c) or a = 3;
+{a: 3, b: cooperate}
+{a: 5, c: coffee}
+```
+
+The ATTRIBUTE_TYPE operator
+
+```
+dynamodb-local (*)> select * from exprtest where attribute_type(b, string);
+{a: 3, b: cooperate}
+{a: 4, b: coffee}
+dynamodb-local (*)> 
+```
+
+Using parenthesis to group items in a WHERE clause
+
+```
+
+dynamodb-local (*)> select * from exprtest where attribute_type(b, string) or ( a = 5 and c = "coffee");
+{a: 3, b: cooperate}
+{a: 5, c: coffee}
+{a: 4, b: coffee}
+```
+
+You can always see how ddbsh executes any command with the EXPLAIN command.
+
+
+```
+dynamodb-local (*)> explain select * from exprtest where attribute_type(b, string) or ( a = 5 and c = "coffee");
+Scan({
+   "TableName":   "exprtest",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "attribute_type(#apaa1, :vpaa1) OR (#apaa2 = :vpaa2 AND #apaa3 = :vpaa3)",
+   "ExpressionAttributeNames":   {
+      "#apaa1":   "b",
+      "#apaa2":   "a",
+      "#apaa3":   "c"
+   },
+   "ExpressionAttributeValues":   {
+      ":vpaa1":   {
+         "S":   "S"
+      },
+      ":vpaa2":   {
+         "N":   "5"
+      },
+      ":vpaa3":   {
+         "S":   "coffee"
+      }
+   },
+   "ConsistentRead":   false
+})
+dynamodb-local (*)> 
+```
+
+You can use a WHERE clause in an UPDATE as well.
+
+```
+dynamodb-local (*)> help update;
+UPDATE - Update items in a table
+
+   UPDATE <name> SET <update_set> [where clause]
+
+   UPDATE <name> REMOVE <remove list> [where clause]
+
+dynamodb-local (*)>
+
+dynamodb-local (*)> update exprtest set b = 15 where a = 5;
+UPDATE (0 read, 1 modified, 0 ccf)
+dynamodb-local (*)> select * from exprtest where a = 5;
+{a: 5, b: 15, c: coffee}
+dynamodb-local (*)>
+
+```
+
+Now delete the attribute ‘c’
+
+```
+dynamodb-local (*)> update exprtest remove c where a = 5; 
+UPDATE (0 read, 1 modified, 0 ccf)
+dynamodb-local (*)> select * from exprtest where a = 5;
+{a: 5, b: 15}
+dynamodb-local (*)>
+```
+
 
 # Contributing
 

@@ -315,7 +315,7 @@ int main(int ac, char ** av)
 #endif
 
     if (!cmdline.quiet)
-        printf("ddbsh - version %d.%d\n", VERSION_MAJOR, VERSION_MINOR);
+        printf("ddbsh - version %s\n", ddbsh_version());
 
     ddbsh->abort_on_error(cmdline.abort_on_error);
 
