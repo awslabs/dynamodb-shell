@@ -4,6 +4,18 @@ ddbsh is a simple CLI for DynamoDB modeled on isql, and the MySQL CLIs. ddbsh is
 
 ddbsh presents the user with a simple command line interface. Here the user can enter SQL-like commands to DynamoDB. The output is presented in the same window. ddbsh supports many Data Definition Language ([DDL](#ddl)) and Data Manipulation Language ([DML](#dml)) commands.
 
+---
+**WARNING**
+ddbsh is provided for your use on an AS-IS basis, is not supported for production use cases, and should only be used for non-production and experimental use cases. Please refer to [section 7 of the License](LICENSE) for more details.
+
+ddbsh can operate directly against your dynamodb tables and thus delete/drop will impact your tables and the operations are irreversible. ddbsh can perform scans and queries against your data and the operations you perform count against your tables capacity, and could incur significant costs.
+
+For details on how to restrict access to specific APIs, refer to the documentation on [Fine Grained Access Control in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/authentication-and-access-control.html).
+
+It is strongly advised that you understand what ddbsh is doing, and experiment with DynamoDB Local first.
+
+---
+
 # Installation
 
 ## Download the software
