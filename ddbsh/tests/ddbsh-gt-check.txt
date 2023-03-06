@@ -1,0 +1,4 @@
+add_test(NAME ddbsh-gt-check-1 COMMAND ddbshtest -q -c "connect us-west-1; select * from gttest" -T ${RD}/ddbsh-gt-check-1.exp)
+
+add_test(NAME ddbsh-gt-drop-replica COMMAND ddbshtest -c "connect us-east-2; alter table gttest drop replica us-west-1;")
+

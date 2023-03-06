@@ -85,4 +85,13 @@
 #include <aws/dynamodb/model/Update.h>
 #include <aws/dynamodb/model/TransactWriteItemsRequest.h>
 
+#include <aws/dynamodb/model/ReplicationGroupUpdate.h>
+#include <aws/dynamodb/model/CreateReplicationGroupMemberAction.h>
+#include <aws/dynamodb/model/UpdateReplicationGroupMemberAction.h>
+#include <aws/dynamodb/model/DeleteReplicationGroupMemberAction.h>
+
+#include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
+#include <aws/dynamodb/model/DescribeTableReplicaAutoScalingResult.h>
+#include <aws/dynamodb/model/TableAutoScalingDescription.h>
+
 #endif

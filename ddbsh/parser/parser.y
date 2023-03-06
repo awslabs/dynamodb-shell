@@ -31,6 +31,7 @@
 #include "pitr.hpp"
 #include "transact-read.hpp"
 #include "transact-write.hpp"
+#include "update_table_replica.hpp"
 #include "allocation.hpp"
 
 using namespace ddbsh;
@@ -53,6 +54,8 @@ int yydebug = 1;
     Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate * global_secondary_index_update_element;
     Aws::DynamoDB::Model::LocalSecondaryIndex * lsi;
     Aws::DynamoDB::Model::Projection * index_projection;
+    Aws::DynamoDB::Model::ProvisionedThroughputOverride * provisioned_throughput_override;
+    Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex * replica_gsi_specification_list_entry;
     Aws::DynamoDB::Model::ReturnConsumedCapacity returns;
     Aws::DynamoDB::Model::SSESpecification * sse_specification;
     Aws::DynamoDB::Model::ScalarAttributeType attribute_type;
@@ -72,6 +75,7 @@ int yydebug = 1;
     Aws::Vector<Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate> * global_secondary_index_update;
     Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement> * key_schema;
     Aws::Vector<Aws::DynamoDB::Model::LocalSecondaryIndex> * lsi_list;
+    Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex> * replica_gsi_specification;
     Aws::Vector<Aws::DynamoDB::Model::Tag> * tags;
     Aws::Vector<Aws::String> * index_projection_list;
     Aws::Vector<Aws::String> * insert_column_list;
@@ -80,13 +84,13 @@ int yydebug = 1;
     Aws::Vector<Aws::String> * update_remove_list;
     Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * value_list;
     Aws::Vector<CUpdateSetElement> * update_set;
-    ddbsh::CCommand * command;
     CLogicalExpression * logical_expression;
     CUpdateSetElement * update_set_element;
     CWhere * where;
     billing_mode_and_throughput_t * billing_mode_and_throughput;
     bool boolval;
     char * strval;
+    ddbsh::CCommand * command;
 };
 
 %parse-param {CCommand ** pCommand}
@@ -174,6 +178,7 @@ int yydebug = 1;
 %token <strval> K_RCU
 %token <strval> K_REMOVE
 %token <strval> K_REPLACE
+%token <strval> K_REPLICA
 %token <strval> K_RESTORE
 %token <strval> K_RETURN
 %token <strval> K_ROLLBACK
@@ -277,6 +282,11 @@ int yydebug = 1;
 %type <lsi_list> lsi_list
 %type <lsi_list> lsi_specification
 %type <map_element_list> map_element_list
+%type <provisioned_throughput_override> optional_provisioned_throughput_override
+%type <provisioned_throughput_override> provisioned_throughput_override
+%type <replica_gsi_specification> optional_replica_gsi_specification
+%type <replica_gsi_specification> replica_gsi_specification_list
+%type <replica_gsi_specification_list_entry> replica_gsi_specification_list_entry
 %type <returns> optional_return_clause
 %type <select_attribute> select_attribute
 %type <select_projection> select_attribute_list
@@ -1419,23 +1429,26 @@ help_command: K_HELP K_ALTER K_TABLE ';'
 {
     printf("ALTER TABLE - make changes to an existing table.\n\n"
            "   ALTER TABLE <name> SET billing_mode_and_throughput\n"
-           "   billing_mode_and_throughput := (BILLING MODE ON DEMAND)|BILLING MODE provisioned)\n"
-           "   provisioned := ( RR RCU, WW WCU )\n\n"
+           "      billing_mode_and_throughput := (BILLING MODE ON DEMAND)|BILLING MODE provisioned)\n"
+           "      provisioned := ( RR RCU, WW WCU )\n\n"
            "   ALTER TABLE <name> SET table_class\n"
-           "   table_class := TABLE CLASS STANDARD | TABLE CLASS INFREQUENT ACCESS\n\n"
+           "      table_class := TABLE CLASS STANDARD | TABLE CLASS INFREQUENT ACCESS\n\n"
            "   ALTER TABLE <name> SET streams\n"
-           "   streams := STREAM ( stream_type ) | STREAM DISABLED\n"
-           "   stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n\n"
+           "      streams := STREAM ( stream_type ) | STREAM DISABLED\n"
+           "      stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n\n"
            "   ALTER TABLE <name> ( attribute_name attribute_type [, ...] ) CREATE GSI create_gsi_spec\n"
-           "   create_gsi_spec := <name> ON key_schema index_projection [billing_mode_and_throughput]\n"
+           "      create_gsi_spec := <name> ON key_schema index_projection [billing_mode_and_throughput]\n"
            "   ALTER TABLE <name> DROP GSI <gsiname>\n\n"
            "   ALTER TABLE <name> SET billing_mode_and_throughput UPDATE GSI ( gsi_update [, ...] )\n"
-           "   gsi_update := <gsiname> SET billing_mode_and_throughput\n\n"
+           "      gsi_update := <gsiname> SET billing_mode_and_throughput\n\n"
            "   ALTER TABLE <name> UPDATE GSI ( gsi_update [, ...] )\n\n"
-           "   ALTER TABLE SET TTL DISABLED\n\n"
-           "   ALTER TABLE SET TTL ( attribute_name )\n\n"
-           "   ALTER TABLE SET PITR ENABLED\n\n"
-           "   ALTER TABLE SET PITR DISABLED\n\n");
+           "   ALTER TABLE <name> SET TTL DISABLED\n\n"
+           "   ALTER TABLE <name> SET TTL ( attribute_name )\n\n"
+           "   ALTER TABLE <name> SET PITR ENABLED\n\n"
+           "   ALTER TABLE <name> SET PITR DISABLED\n\n"
+           "   ALTER TABLE <name> ADD REPLICA <region> [replica_definition]\n"
+           "   ALTER TABLE <name> UPDATE REPLICA <region> replica_definition\n"
+           "   ALTER TABLE <name> DROP REPLICA <region>\n");
 
     $$ = NULL;
 };
@@ -1452,7 +1465,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
     $$ = utc;
 } | K_ALTER K_TABLE string K_SET sse_specification ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_SET sse_specification ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET sse_specification ';'\n", __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5);
 
@@ -1460,7 +1473,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
     $$ = utc;
 } | K_ALTER K_TABLE string K_SET table_class ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_SET table_class ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET table_class ';'\n", __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5);
 
@@ -1468,7 +1481,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
     $$ = utc;
 } | K_ALTER K_TABLE string K_SET stream_specification ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_SET stream_specification ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET stream_specification ';'\n", __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5);
 
@@ -1477,7 +1490,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
 } | K_ALTER K_TABLE string '(' attribute_name_type_list ')' K_CREATE K_GSI alter_table_gsi_create  ';'
 {
     logdebug(
-        "[%s, %d] K_ALTER K_TABLE string '(' attribute_name_type_list ')' K_CREATE K_GSI '(' alter_table_gsi_create ')' ';'\n",
+        "[%s, %d] alter_table_command: K_ALTER K_TABLE string '(' attribute_name_type_list ')' K_CREATE K_GSI '(' alter_table_gsi_create ')' ';'\n",
         __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5, $9);
@@ -1485,7 +1498,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
     $$ = utc;
 } | K_ALTER K_TABLE string K_DROP K_GSI alter_table_gsi_drop ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_DROP K_GSI '(' alter_table_gsi_drop ')' ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_DROP K_GSI '(' alter_table_gsi_drop ')' ';'\n", __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $6);
 
@@ -1494,7 +1507,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
 } | K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'
 {
     logdebug(
-        "[%s, %d] K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'\n",
+        "[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'\n",
         __FILENAME__, __LINE__);
 
     // if this command seeks to set the table to billing mode on demand, then one should not specify
@@ -1515,7 +1528,7 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
 } | K_ALTER K_TABLE string K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'
 {
     logdebug(
-        "[%s, %d] K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'\n",
+        "[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'\n",
         __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $7);
@@ -1523,29 +1536,136 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
     $$ = utc;
 } | K_ALTER K_TABLE string K_SET K_TTL K_DISABLED ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_SET K_TTL K_DISABLED ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET K_TTL K_DISABLED ';'\n", __FILENAME__, __LINE__);
     CUpdateTableTTLCommand * ttl = NEW CUpdateTableTTLCommand($3, false);
     FREE($3);
     $$ = ttl;
 } | K_ALTER K_TABLE string K_SET K_TTL '(' string ')' ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_SET K_TTL '(' string ')'  ';'\n", __FILENAME__, __LINE__ );
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET K_TTL '(' string ')'  ';'\n", __FILENAME__, __LINE__ );
     CUpdateTableTTLCommand * ttl = NEW CUpdateTableTTLCommand($3, true, $7);
     FREE($3);
     FREE($7);
     $$ = ttl;
 } | K_ALTER K_TABLE string K_SET K_PITR K_ENABLED ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_PITR K_ENABLED ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_PITR K_ENABLED ';'\n", __FILENAME__, __LINE__);
     CUpdatePITRCommand * p = NEW CUpdatePITRCommand($3, true);
     FREE($3);
     $$ = p;
 } | K_ALTER K_TABLE string K_SET K_PITR K_DISABLED ';'
 {
-    logdebug("[%s, %d] K_ALTER K_TABLE string K_PITR K_DISABLED ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_PITR K_DISABLED ';'\n", __FILENAME__, __LINE__);
     CUpdatePITRCommand * p = NEW CUpdatePITRCommand($3, false);
     FREE($3);
     $$ = p;
+} | K_ALTER K_TABLE string K_DROP K_REPLICA string ';'
+{
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_DROP K_REPLICA string ';'\n", __FILENAME__, __LINE__);
+
+    CUpdateTableReplica * p = NEW CUpdateTableReplica($3);
+
+    p->deleteRegion($6);
+
+    FREE($3);
+    FREE($6);
+
+    $$ = p;
+} | K_ALTER K_TABLE string K_ADD K_REPLICA string optional_table_class optional_provisioned_throughput_override optional_replica_gsi_specification ';'
+{
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_ADD K_REPLICA string optional_table_class optional_provisioned_throughput_override optional_replica_gsi_specification ';'\n",
+             __FILENAME__, __LINE__);
+
+    CUpdateTableReplica * p = NEW CUpdateTableReplica($3);
+    p->addRegion($6, $7, $8, $9);
+
+    FREE($3);
+    FREE($6);
+
+    // table class is a scalar
+    delete $8;
+    delete $9;
+
+    $$ = p;
+} | K_ALTER K_TABLE string K_UPDATE K_REPLICA string optional_table_class optional_provisioned_throughput_override optional_replica_gsi_specification';'
+{
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_UPDATE K_REPLICA string optional_table_class optional_provisioned_throughput_override optional_replica_gsi_specification';'\n",
+             __FILENAME__, __LINE__);
+
+    CUpdateTableReplica * p = NEW CUpdateTableReplica($3);
+    p->updateRegion($6, $7, $8, $9);
+
+    FREE($3);
+    FREE($6);
+
+    // table class is a scalar
+    delete $8;
+    delete $9;
+
+    $$ = p;
+};
+
+optional_replica_gsi_specification: K_GSI '(' replica_gsi_specification_list ')'
+{
+    logdebug("[%s, %d]: optional_replica_gsi_specification: K_GSI '(' replica_gsi_specification_list ')' \n",
+             __FILENAME__, __LINE__);
+    $$ = $3;
+} |
+{
+    logdebug("[%s, %d]: optional_replica_gsi_specification: \n", __FILENAME__, __LINE__);
+    $$ = NULL;
+};
+
+replica_gsi_specification_list: replica_gsi_specification_list ',' replica_gsi_specification_list_entry
+{
+    logdebug("[%s, %d] replica_gsi_specification_list: replica_gsi_specification_list ',' replica_gsi_specification_list_entry\n",
+             __FILENAME__, __LINE__);
+    $1->push_back(*$3);
+    delete $3;
+
+    $$ = $1;
+} | replica_gsi_specification_list_entry
+{
+    logdebug("[%s, %d] replica_gsi_specification_list: replica_gsi_specification_list_entry\n", __FILENAME__, __LINE__);
+    Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex> * rgsilist = NEW Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex>;
+
+    rgsilist->push_back(*$1);
+
+    delete $1;
+    $$ = rgsilist;
+};
+
+replica_gsi_specification_list_entry: string provisioned_throughput_override
+{
+    logdebug("[%s, %d] replica_gsi_specification_list_entry: string provisioned_throughput_override\n",
+             __FILENAME__, __LINE__);
+
+    Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex * rgsi = NEW Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex;
+    rgsi->SetIndexName($1);
+    rgsi->SetProvisionedThroughputOverride(*$2);
+
+    delete $2;
+
+    $$ = rgsi;
+};
+
+provisioned_throughput_override: '(' T_WHOLE_NUMBER K_RCU ')'
+{
+    logdebug("[%s, %d] provisioned_throughput_and_override: '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'\n",
+             __FILENAME__, __LINE__);
+    Aws::DynamoDB::Model::ProvisionedThroughputOverride * pto = NEW Aws::DynamoDB::Model::ProvisionedThroughputOverride;
+    pto->SetReadCapacityUnits(atoll($2));
+    FREE($2);
+
+    $$ = pto;
+};
+
+optional_provisioned_throughput_override: provisioned_throughput_override
+{
+    $$ = $1;
+} |
+{
+    $$ = NULL;
 };
 
 help_command: K_HELP K_SHOW K_LIMITS ';'

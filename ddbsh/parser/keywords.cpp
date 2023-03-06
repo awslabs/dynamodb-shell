@@ -105,6 +105,7 @@ static keywords_t keywords_table[] = {
     { "rcu", K_RCU, "K_RCU" },
     { "remove", K_REMOVE, "K_REMOVE"},
     { "replace", K_REPLACE, "K_REPLACE" },
+    { "replica", K_REPLICA, "K_REPLICA" },
     { "restore", K_RESTORE, "K_RESTORE" },
     { "return", K_RETURN, "K_RETURN" },
     { "rollback", K_ROLLBACK, "K_ROLLBACK" },
