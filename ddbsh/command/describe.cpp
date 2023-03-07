@@ -260,6 +260,17 @@ static void __show_table_sse(
     }
 }
 
+static void __show_autoscaling(Aws::DynamoDB::Model::TableAutoScalingDescription asd)
+{
+    Aws::Vector<Aws::DynamoDB::Model::ReplicaAutoScalingDescription> replicas = asd.GetReplicas();
+
+    for (const auto &repl : replicas)
+    {
+        printf("Replica Region: %s (Status: %s)\n", repl.GetRegionName().c_str(),
+               Aws::DynamoDB::Model::ReplicaStatusMapper::GetNameForReplicaStatus(repl.GetReplicaStatus()).c_str());
+    }
+}
+
 int CDescribeCommand::run()
 {
     logdebug("[%s, %d] entering run()\n", __FILENAME__, __LINE__);
@@ -320,6 +331,27 @@ int CDescribeCommand::run()
             __show_table_class(td);
 
             __show_table_sse(td);
+        }
+
+        Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingRequest asr;
+        asr.SetTableName(td.GetTableName());
+
+        if (explaining())
+        {
+            printf("DescribeTableReplicaAutoScaling(%s)\n", explain_string(asr.SerializePayload()).c_str());
+        }
+        else
+        {
+            Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingOutcome asro =
+                p_dynamoDBClient->DescribeTableReplicaAutoScaling(asr);
+
+            if (asro.IsSuccess())
+            {
+                Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingResult asrs = asro.GetResult();
+                Aws::DynamoDB::Model::TableAutoScalingDescription asd = asrs.GetTableAutoScalingDescription();
+
+                __show_autoscaling(asd);
+            }
         }
     }
     else

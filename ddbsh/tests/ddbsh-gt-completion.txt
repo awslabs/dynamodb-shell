@@ -1,0 +1,1 @@
+add_test(NAME ddbsh-gt-completion-cleanup COMMAND ddbshtest -c "connect us-east-2; drop table gttest;")

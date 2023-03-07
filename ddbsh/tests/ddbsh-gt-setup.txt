@@ -1,0 +1,11 @@
+add_test(NAME ddbsh-gt-setup-check COMMAND ddbshtest -c "connect us-east-2; describe gttest;")
+set_property(TEST ddbsh-gt-setup-check PROPERTY WILL_FAIL TRUE)
+
+add_test(NAME ddbsh-gt-setup-mktable COMMAND ddbshtest -c "connect us-east-2; create table gttest ( a number, b number ) primary key (a hash) gsi ( gsi1 on ( b hash ) projecting all );")
+
+add_test(NAME ddbsh-gt-setup-mkreplica1 COMMAND ddbshtest -c "connect us-east-2; alter table gttest add replica us-west-1;")
+
+add_test(NAME ddbsh-gt-setup-insert1 COMMAND ddbshtest -c "connect us-east-2; insert into gttest (a, b) values ( 3, 4 ), (4, 5);")
+
+
+
