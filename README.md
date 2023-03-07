@@ -469,7 +469,109 @@ PITR is Disabled.
 us-east-1> 
 ```
 
+### ADD REPLICA, UPDATE REPLICA, and DROP REPLICA
 
+Enables creation, update and drop of a Global Table replica. ddbsh implements Global Tables (2019).
+
+Make a table and add a replica.
+
+``` SQL
+
+us-east-2> create table global_customers ( custid number ) primary key (custid hash);
+us-east-2> alter table global_customers add replica us-west-1;
+ALTER
+us-east-2>
+
+```
+
+Describe the table.
+
+
+``` SQL
+
+us-east-2> describe global_customers;
+[...]
+Replica Region: us-east-2 (Status: ACTIVE)
+Replica Region: us-west-1 (Status: ACTIVE)
+
+```
+
+Now add some data to the table.
+
+``` SQL
+
+us-east-2> insert into global_customers (custid, name) values ( 101, "Alice" ), (102, "Bob");
+INSERT
+INSERT
+us-east-2> select * from global_customers;
+{custid: 102, name: Bob}
+{custid: 101, name: Alice}
+us-east-2> 
+
+us-east-2> connect us-west-1;
+CONNECT
+us-west-1> select * from global_customers;
+{custid: 102, name: Bob}
+{custid: 101, name: Alice}
+us-west-1> 
+
+
+```
+
+The data is propagated from us-east-2 to us-west-1 by Global
+Tables. Similar updates and another replica with Standard Infrequent
+Access table class below.
+
+
+``` SQL
+
+us-west-1> update global_customers set active = True where custid = 101;
+UPDATE (0 read, 1 modified, 0 ccf)
+us-west-1> select * from global_customers;
+{custid: 102, name: Bob}
+{active: TRUE, custid: 101, name: Alice}
+us-west-1> connect us-east-2;
+CONNECT
+us-east-2> select * from global_customers;
+{custid: 102, name: Bob}
+{active: TRUE, custid: 101, name: Alice}
+us-east-2> 
+
+us-east-2> alter table global_customers add replica us-west-2 table class standard infrequent access;
+ALTER
+us-east-2> connect us-west-2;
+CONNECT
+us-west-2> 
+
+...
+
+us-west-2> describe global_customers;
+Name: global_customers (CREATING)
+Key: HASH custid
+[...]
+Table Class: STANDARD_INFREQUENT_ACCESS
+[...]
+Replica Region: us-east-2 (Status: ACTIVE)
+Replica Region: us-west-1 (Status: ACTIVE)
+Replica Region: us-west-2 (Status: ACTIVE)
+us-west-2> 
+
+us-west-2> select * from global_customers;
+{custid: 102, name: Bob}
+{active: TRUE, custid: 101, name: Alice}
+us-west-2> 
+
+us-west-2> insert into global_customers (custid, name) values ( 103, "Charlie");
+INSERT
+us-west-2> connect us-east-2;
+CONNECT
+us-east-2> select * from global_customers;
+{custid: 102, name: Bob}
+{custid: 103, name: Charlie}
+{active: TRUE, custid: 101, name: Alice}
+us-east-2> 
+
+```
 
 ## BACKUP TABLE
 
@@ -1442,15 +1544,13 @@ Here are some things that need to be done:
 
 2. Update online help and README.
 
-3. Add support for Global Tables. It is fairly clear what "wait" means on CREATE TABLE (with non Global Tables). There is (currently) no "wait" in ALTER TABLE which I see as problematic. I would like to implement both extensions for Global Tables in both CREATE and ALTER (also DROP) keeping "wait" semantics in mind.
+3. Add support for additional language constructs. This is a delicate balancing act between attempting to build all of SQL against DynamoDB (which we don't want to do) and providing some more SQL constructs which will help users. For example, we do intend to add support for client side implementations of COUNT and COUNT DISTINCT. Once COUNT DISTINCT is implemented, it is a small matter of providing language support for GROUP BY which is something that I do want to do. However, I explicitly do not want to add support for client-side joins - they are not a construct that is natively supported by DynamoDB. This is, however, a matter of some heated discussions among the development team.
 
-4. Add support for additional language constructs. This is a delicate balancing act between attempting to build all of SQL against DynamoDB (which we don't want to do) and providing some more SQL constructs which will help users. For example, we do intend to add support for client side implementations of COUNT and COUNT DISTINCT. Once COUNT DISTINCT is implemented, it is a small matter of providing language support for GROUP BY which is something that I do want to do. However, I explicitly do not want to add support for client-side joins - they are not a construct that is natively supported by DynamoDB. This is, however, a matter of some heated discussions among the development team.
+4. Add support for DynamoDB DAX.
 
-5. Add support for DynamoDB DAX.
+5. Add more tests.
 
-6. Add more tests.
-
-7. Distribute signed binaries.
+6. Distribute signed binaries.
 
 # Licensing
 
