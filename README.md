@@ -91,6 +91,30 @@ Cloning into 'dynamodb-shell'...
 
 ```
 
+1a. Rebuilding the SDK.
+
+```
+% cd <aws-sdk-dir>
+
+% git pull --recurse-submodules=yes
+
+% cd ../aws-sdk-build
+
+% cmake ../aws-sdk-cpp -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH=/usr/local/ \
+        -DCMAKE_INSTALL_PREFIX=/usr/local/ \
+        -DBUILD_ONLY="dynamodb" \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DENABLE_TESTING=OFF \
+        -DFORCE_SHARED_CRT=OFF
+
+% make
+
+% sudo make install
+
+```
+
+
 2. Building ddbsh. I have found the following to work reliably
 
 ```
@@ -573,6 +597,38 @@ us-east-2>
 
 ```
 
+### SET DELETION PROTECTION [ENABLED|DISABLED]
+
+Enables the setting and disabling of deletion protection on tables.
+
+``` SQL
+us-east-1> create table dpe ( pk number ) primary key ( pk hash ) deletion protection enabled;
+CREATE
+us-east-1> describe dpe;
+Name: dpe (ACTIVE)
+[...]
+Deletion Protection: Enabled
+[...]
+
+us-east-1> alter table dpe set deletion protection disabled;
+ALTER
+us-east-1> describe dpe;
+[...]
+Deletion Protection: Disabled
+[...]
+us-east-1> 
+
+us-east-1> alter table dpe set deletion protection enabled;
+ALTER
+us-east-1> describe dpe;
+Name: dpe (ACTIVE)
+[...]
+Deletion Protection: Enabled
+[...]
+us-east-1> 
+
+```
+
 ## BACKUP TABLE
 
 **Purpose:** Take a backup of a table.
@@ -626,6 +682,7 @@ CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
     streams := STREAM ( stream_type ) | STREAM DISABLED
     stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n
     table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS\n
+    deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]
     tags := TAGS ( tag [, tag ...] )
     tag := name : value
 ```
