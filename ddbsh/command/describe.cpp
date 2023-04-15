@@ -63,6 +63,7 @@ static void __show_table_basic_info(
     printf("Table ID: %s\n", td.GetTableId().c_str());
     printf("Table size (bytes): %lld\n", td.GetTableSizeBytes());
     printf("Item Count: %lld\n", td.GetItemCount());
+    printf("Deletion Protection: %s\n", td.GetDeletionProtectionEnabled() ? "Enabled" : "Disabled");
 }
 
 static bool __show_billing_mode(const Aws::DynamoDB::Model::TableDescription& td)

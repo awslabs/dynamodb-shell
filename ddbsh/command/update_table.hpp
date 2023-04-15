@@ -89,6 +89,11 @@ namespace ddbsh
             delete gsiu;
         };
 
+        CUpdateTableCommand(std::string table_name, bool deletion_protection):
+            CUpdateTableCommand(table_name) {
+            m_update_table_request->SetDeletionProtectionEnabled(deletion_protection);
+        };
+
         int run();
         virtual ~CUpdateTableCommand();
 

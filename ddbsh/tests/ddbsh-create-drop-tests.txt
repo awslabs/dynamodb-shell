@@ -29,3 +29,22 @@ add_test( NAME icd-create-table-4
                              billing mode on demand, \
                              gsi2 on (k3 hash) projecting keys only \
                              billing mode on demand)")
+
+add_test( NAME icd-create-table-5
+          COMMAND ddbshtest -c "create table icddpe ( pk number ) \
+                             primary key (pk hash ) \
+                             billing mode on demand deletion protection enabled")
+
+add_test( NAME icd-create-table-6
+          COMMAND ddbshtest -c "alter table icddpe set deletion protection disabled")
+
+add_test( NAME icd-create-table-7
+          COMMAND ddbshtest -c "drop table icddpe")
+
+add_test( NAME icd-create-table-8
+          COMMAND ddbshtest -c "create table icddpd ( pk number ) \
+                             primary key (pk hash ) \
+                             billing mode on demand deletion protection disabled")
+
+add_test( NAME icd-create-table-9
+          COMMAND ddbshtest -c "drop table icddpd")
