@@ -72,6 +72,8 @@ int CCreateTableCommand::run()
 
         request.SetTableClass(m_table_class);
 
+        request.SetDeletionProtectionEnabled(m_deletion_protection);
+
         if (m_tags)
             request.SetTags(*m_tags);
 

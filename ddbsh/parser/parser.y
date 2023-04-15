@@ -125,6 +125,7 @@ int yydebug = 1;
 %token <strval> K_CONTAINS
 %token <strval> K_CREATE
 %token <strval> K_DELETE
+%token <strval> K_DELETION
 %token <strval> K_DEMAND
 %token <strval> K_DESCRIBE
 %token <strval> K_DISABLED
@@ -172,6 +173,7 @@ int yydebug = 1;
 %token <strval> K_PITR
 %token <strval> K_PRIMARY
 %token <strval> K_PROJECTING
+%token <strval> K_PROTECTION
 %token <strval> K_PROVISIONED
 %token <strval> K_QUIT
 %token <strval> K_RANGE
@@ -261,6 +263,8 @@ int yydebug = 1;
 %type <boolval> if_not_exists_clause
 %type <boolval> nowait_clause
 %type <boolval> optional_consistent
+%type <boolval> optional_deletion_protection
+%type <boolval> deletion_protection
 %type <global_secondary_index_update> alter_table_gsi_update
 %type <global_secondary_index_update_element> alter_table_gsi_create
 %type <global_secondary_index_update_element> alter_table_gsi_drop
@@ -771,7 +775,8 @@ help_command: K_HELP K_CREATE ';'
            "   lsi := lsi_name ON key_schema index_projection\n\n"
            "   streams := STREAM ( stream_type ) | STREAM DISABLED\n"
            "   stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n\n"
-           "   table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS\n\n"
+           "   table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS\n"
+           "   deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]\n"
            "   tags := TAGS ( tag [, tag ...] )\n"
            "   tag := name : value\n\n");
 
@@ -781,11 +786,11 @@ help_command: K_HELP K_CREATE ';'
 create_table_command: K_CREATE K_TABLE if_not_exists_clause nowait_clause string '(' attribute_name_type_list ')'
                       primary_key optional_billing_mode_and_throughput gsi_list lsi_list
                       optional_stream_specification
-                      optional_sse_specification optional_table_class optional_table_tags ';'
+                      optional_sse_specification optional_table_class optional_deletion_protection optional_table_tags ';'
 {
     logdebug("[%s, %d] create_table_command\n", __FILENAME__, __LINE__);
     CCreateTableCommand * create = NEW CCreateTableCommand(
-        $5, $3, $4, $7, $9, $10, $11, $12, $13, $14, $15, $16);
+        $5, $3, $4, $7, $9, $10, $11, $12, $13, $14, $15, $16, $17);
     FREE($5);
     $$ = create;
 };
@@ -1382,6 +1387,26 @@ table_tags: K_TAGS '(' table_tags_list ')'
     $$ = $3;
 };
 
+deletion_protection: K_DELETION K_PROTECTION K_ENABLED
+{
+    logdebug("[%s, %d] deletion_protection: K_DELETION K_PROTECTION K_ENABLED\n", __FILENAME__, __LINE__);
+    $$ = true;
+} | K_DELETION K_PROTECTION K_DISABLED
+{
+    logdebug("[%s, %d] deletion_protection: K_DELETION K_PROTECTION K_DISABLED\n", __FILENAME__, __LINE__);
+    $$ = false;
+};
+
+optional_deletion_protection: deletion_protection
+{
+    logdebug("[%s, %d] optional_deletion_protection: deletion_protection\n", __FILENAME__, __LINE__);
+    $$ = $1;
+} |
+{
+    logdebug("[%s, %d] optional_deletion_protection: null\n", __FILENAME__, __LINE__);
+    $$ = false;
+};
+
 optional_table_tags: table_tags
 {
     logdebug("[%s, %d] optional_table_tags: table_tags\n", __FILENAME__, __LINE__);
@@ -1448,7 +1473,8 @@ help_command: K_HELP K_ALTER K_TABLE ';'
            "   ALTER TABLE <name> SET PITR DISABLED\n\n"
            "   ALTER TABLE <name> ADD REPLICA <region> [replica_definition]\n"
            "   ALTER TABLE <name> UPDATE REPLICA <region> replica_definition\n"
-           "   ALTER TABLE <name> DROP REPLICA <region>\n");
+           "   ALTER TABLE <name> DROP REPLICA <region>\n"
+           "   ALTER TABLE <name> SET TABLE PROTECTION [ENABLED|DISABLED]\n" );
 
     $$ = NULL;
 };
@@ -1603,6 +1629,14 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
     delete $9;
 
     $$ = p;
+} | K_ALTER K_TABLE string K_SET deletion_protection ';'
+{
+    logdebug("[%s, %d]: alter_table_command: K_ALTER K_TABLE string K_SET deletion_protection\n", __FILENAME__, __LINE__);
+    CUpdateTableCommand * atsdp = NEW CUpdateTableCommand($3, $5);
+
+    FREE($3);
+
+    $$ = atsdp;
 };
 
 optional_replica_gsi_specification: K_GSI '(' replica_gsi_specification_list ')'

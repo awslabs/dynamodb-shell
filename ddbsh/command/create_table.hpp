@@ -34,6 +34,7 @@ namespace ddbsh
             Aws::DynamoDB::Model::StreamSpecification * stream_specification,
             Aws::DynamoDB::Model::SSESpecification * sse_specification,
             Aws::DynamoDB::Model::TableClass table_class,
+            bool deletion_protection,
             Aws::Vector<Aws::DynamoDB::Model::Tag> * tags)
         : m_table_name { table_name },
           m_if_not_exists { if_not_exists },
@@ -46,6 +47,7 @@ namespace ddbsh
           m_stream_specification { stream_specification },
           m_sse_specification { sse_specification },
           m_table_class { table_class },
+          m_deletion_protection { deletion_protection },
           m_tags { tags } {};
 
         ~CCreateTableCommand();
@@ -63,6 +65,7 @@ namespace ddbsh
         Aws::Vector<Aws::DynamoDB::Model::Tag> * m_tags;
         bool m_if_not_exists;
         bool m_nowait;
+        bool m_deletion_protection;
     };
 }
 #endif
