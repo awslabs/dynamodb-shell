@@ -17,7 +17,7 @@ using namespace ddbsh;
 CDDBShDDBClientConfig::CDDBShDDBClientConfig(std::string region, std::string endpoint)
 {
     char userAgent[128];
-    strcat(userAgent, ddbsh_version());
+    sprintf(userAgent, "ddbsh - version %s", ddbsh_version());
     this->userAgent = userAgent;
     this->region = region;
     if (!endpoint.empty())
