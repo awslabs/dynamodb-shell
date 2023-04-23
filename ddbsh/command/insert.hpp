@@ -17,6 +17,7 @@
 #include "logging.hpp"
 #include "command.hpp"
 #include "symbol_table.hpp"
+#include "ratelimit.hpp"
 
 namespace ddbsh
 {
@@ -26,16 +27,19 @@ namespace ddbsh
         CInsertCommand(std::string table_name,
                        Aws::Vector<Aws::String> * column_list,
                        Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * values,
-                       bool insert) {
+                       bool insert,
+                       CRateLimit * ratelimit) {
             m_table_name = table_name;
             m_column_list = column_list;
             m_values = values;
             m_insert = insert;
+            m_ratelimit = ratelimit;
         };
 
         ~CInsertCommand() {
             delete m_column_list;
             delete m_values;
+            delete m_ratelimit;
         };
 
         virtual int run();
@@ -48,7 +52,7 @@ namespace ddbsh
         Aws::Vector<Aws::String> * m_column_list;
         Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * m_values;
         bool m_insert;
-
+        CRateLimit * m_ratelimit;
         bool valid();
     };
 };

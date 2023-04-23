@@ -1015,13 +1015,15 @@ Some sample data is loaded into this table.
 
 **Purpose:** Delete data from a table.
 
-**Syntax:** DELETE FROM *table* \[WHERE *condition*\]
+**Syntax:** DELETE FROM *table* \[WHERE *condition*\] [ratelimit]
 
 Deletes data from a table. When a WHERE clause is provided, items matching the condition are identified and deleted. If no WHERE clause is provided, all items are deleted.
 
 DynamoDB only supports item at a time deletes (or batches which delete batches of items). Every item to be deleted must be identified by its primary key. Therefore, if the DELETE includes a where clause that completely specifies the primary key elements (hash key, and a range key if the table has one) then the item identified is deleted. If the WHERE clause does not completely specify the primary key, an appropriate SELECT is first executed to identify all items that match the WHERE clause, and then those items are deleted one at a time.
 
 In standard SQL, a DELETE statement is an implicit transaction. In ddbsh, DELETE is NOT an implicit transaction. Each item is deleted individually. It is possible that an item is updated in the time between the SELECT and the subsequent DELETE. The item is only deleted if it matches the delete condition at the time when the DeleteItem() API is executed.
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 **Example: 1**
 
@@ -1160,9 +1162,11 @@ The PK is specified, so we are able to perform a Query() which returns two rows 
 
 **Purpose:** Inserts an item into a table.
 
-**Syntax:** INSERT INTO *table* ( <columns> ) VALUES <value>
+**Syntax:** INSERT INTO *table* ( <columns> ) VALUES <value> [ratelimit]
 
 Inserts an item into a table with the specified attribute values. All primary key attributes must be specified. If an item with the same primary key already exists, an error is generated.
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 **Example: 1**
 
@@ -1187,9 +1191,11 @@ us-east-1>
 
 **Purpose:** Replaces an item in a table, if one exists. Creates a new one if one does not exist.
 
-**Syntax:** REPLACE INTO *table* ( <columns> ) VALUES <value>
+**Syntax:** REPLACE INTO *table* ( <columns> ) VALUES <value> [ratelimit]
 
 Inserts or replaces an item with the specified primary key. All primary key attributes must be specified. If an item already exists with that primary key, it is replaced.
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 **Example:**
 
@@ -1213,13 +1219,15 @@ us-east-1>
 
 **Purpose:** Selects items from a table or index.
 
-**Syntax:** SELECT \[CONSISTENT\] *|<columns> FROM *table*\[.*index*\] \[WHERE *condition*\]
+**Syntax:** SELECT \[CONSISTENT\] *|<columns> FROM *table*\[.*index*\] \[WHERE *condition*\] [ratelimit]
 
 Selects data from a table or index. If the optional *CONSISTENT* flag is specified, a consistent read is executed.
 
 You can reference all scalar types (number, string and binary) as well as boolean, null, list and map in the projection list (columns) and in the where condition.
 
 List elements are indexed with a 0 base. Map elements use '.' as the separator.
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 **Example: 1**
 
@@ -1251,9 +1259,11 @@ SELECT will execute either a GetItem(), Query() or Scan() depending on whether t
 
 **Purpose:** Update items in a table.
 
-**Syntax:** UPDATE *table* SET *assignments* \[WHERE *condition*\]
+**Syntax:** UPDATE *table* SET *assignments* \[WHERE *condition*\] [ratelimit]
 
 Updates items in the table with assignments as specified. The assignments can be of the form:
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 ```
 <column> = <value>
@@ -1303,9 +1313,11 @@ us-east-1>
 
 **Purpose:** Performs an UPDATE or INSERT
 
-**Syntax:** UPSERT *table* SET *assignments* \[WHERE *condition*\]
+**Syntax:** UPSERT *table* SET *assignments* \[WHERE *condition*\] [ratelimit]
 
 If an item is matched by the WHERE clause, it is updated. If one does not match the where clause then the *assignments* are converted are used to construct a new item.
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 **Example: 1**
 
@@ -1588,6 +1600,55 @@ dynamodb-local (*)> select * from exprtest where a = 5;
 dynamodb-local (*)>
 ```
 
+### Rate Limiting
+
+DML operations like SELECT, INSERT, UPDATE, DELETE, UPSERT, and REPLACE can operate on a single item, or many items. When a SELECT has a where clause that targets many items, it is translated into a Query() or Scan() operation. An INSERT may be used to insert a single item, or many items. Each of these activities consumes a certain number of RCUs and WCUs. An operation that operates on many items is called a bulk operation.
+
+Bulk operations can interfere with foreground applications and it is therefore useful to be able to rate limit these operations. This can be accomplished by providing a rate limiting clause.
+
+The rate limiting clause takes the form.
+
+``` SQL
+ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |
+             WITH RATELIMIT ( RR RCU ) |
+             WITH RATELIMIT ( WW WCU )
+```
+
+Consider this example.
+
+``` SQL
+us-east-1> create table rate_limit_test ( a number, b number ) primary key ( a hash ) gsi ( gsione on (b hash) projecting all);
+CREATE
+us-east-1> insert into rate_limit_test (a, b) values ( 1, 2 ), (2, 3), (3, 4) with ratelimit ( 1 wcu );
+INSERT
+INSERT
+INSERT
+us-east-1> 
+```
+
+When this insert is performed, each write to the table consumes 2 WCUs (one for the base table and one for the index). Since the operation is issued with a ratelimit of 1 WCU, a delay is added automatically after each INSERT.
+
+Rate limiting is implemented with token buckets. An operation can specify a read and a write limit, each gets its own token bucket. All RCUs consumed by operations count against the read limit (read token bucket) and all writes to base tables and indices count against the write limit (write token bucket).
+
+Consider this example.
+
+``` SQL
+us-east-1> update rate_limit_test set updated = true with ratelimit ( 1 rcu, 1 wcu );
+UPDATE (3 read, 3 modified, 0 ccf)
+us-east-1> 
+```
+
+Each of these updates will consume 2 WCU and therefore a similar delay will be inserted after each to bring the write limit down to 1 WCU. As this is a bulk opeartion, it is performed as a read (in this case, a Scan) followed by writes. The Scan() will be rate limited to the read limit.
+
+Rate limiting works by performing read and write operations, and looking at the consumed capacity of these. If a read rate is specified, a token bucket is created for that. If a write rate is specified, a token bucket is created for that. Each token bucket accumulates tokens at the specified rate. When there are read tokens available, the operation can be performed.
+
+So, assume that this query is issued:
+
+``` SQL
+us-east-1> update customers set state = "CA" where state = "90210" with ratelimit ( 100 rcu, 500 wcu );
+```
+
+Reads against the customers table are issued at a read limit of up to 100 RCU/s and updates are done at a limit of up to 500 WCU/s. Assume that the Scan() on the customers table is attempted when there are 2 tokens in the read bucket, and the Scan() consumes 60 RCU. The read token bucket now goes to -58 and it will take about 0.6s before it has a positive number of tokens. Within 0.6s, any attempt to read will block. This same mechanism is also applied to writes. For long running operations, we ensure that neither token bucket accumulates more than one second's credit of tokens.
 
 # Contributing
 

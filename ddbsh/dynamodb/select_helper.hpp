@@ -44,7 +44,7 @@ namespace ddbsh
 
         // full blown request as needed by select
         int setup(bool consistent, Aws::Vector<Aws::String> * projection, Aws::Vector<Aws::String> * table, CWhere * where,
-                  Aws::DynamoDB::Model::ReturnConsumedCapacity returns);
+                  Aws::DynamoDB::Model::ReturnConsumedCapacity returns, bool ratelimit);
 
         Aws::DynamoDB::Model::GetItemRequest * getitem_request();
         Aws::DynamoDB::Model::QueryRequest * query_request();
@@ -54,7 +54,7 @@ namespace ddbsh
 
         // the quick and dirty, needed by update and delete
 
-        int setup(std::string table, CWhere * where);
+        int setup(std::string table, CWhere * where, bool ratelimit);
 
         static Aws::Vector<std::string> show_items(const Aws::Vector<Aws::Map<Aws::String,
                                                    Aws::DynamoDB::Model::AttributeValue>>& items);
@@ -66,6 +66,7 @@ namespace ddbsh
         std::string m_pk;
         std::string m_rk;
         bool delete_where;
+        bool m_rate_limited;
         CWhere * m_where;
         bool m_consistent;
         Aws::Vector<Aws::String> * m_projection;

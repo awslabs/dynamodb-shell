@@ -46,6 +46,11 @@ void CSelectCommand::display_consumed_capacity (const Aws::DynamoDB::Model::Cons
     if (explaining())
         return;
 
+    // consumed capacity could be set for ratelimiting, don't show it
+    // if user didn't request it.
+    if (m_returns == Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE)
+        return;
+
     if (cc.TableNameHasBeenSet())
         logdebug("[%s, %d] table name %s\n", __FILENAME__, __LINE__, cc.GetTableName().c_str());
 
@@ -168,9 +173,16 @@ int CSelectCommand::do_query()
             break;
 
         request->SetExclusiveStartKey(result.GetResult().GetLastEvaluatedKey());
+
+        if (m_ratelimit)
+        {
+            m_ratelimit->consume_reads(result.GetResult().GetConsumedCapacity());
+            m_ratelimit->readlimit();
+        }
     } while(1);
 
-    display_consumed_capacity(cc.get());
+    if (m_returns != Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE)
+        display_consumed_capacity(cc.get());
 
     delete request;
     return retval;
@@ -229,9 +241,16 @@ int CSelectCommand::do_scan()
             break;
 
         request->SetExclusiveStartKey(result.GetResult().GetLastEvaluatedKey());
+
+        if (m_ratelimit)
+        {
+            m_ratelimit->consume_reads(result.GetResult().GetConsumedCapacity());
+            m_ratelimit->readlimit();
+        }
     } while(1);
 
-    display_consumed_capacity(cc.get());
+    if (m_returns != Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE)
+        display_consumed_capacity(cc.get());
 
     delete request;
     return retval;

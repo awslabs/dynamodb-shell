@@ -104,6 +104,7 @@ static keywords_t keywords_table[] = {
     { "provisioned", K_PROVISIONED, "K_PROVISIONED" },
     { "quit", K_QUIT, "K_QUIT" },
     { "range", K_RANGE, "K_RANGE" },
+    { "ratelimit", K_RATELIMIT, "K_RATELIMIT" },
     { "rcu", K_RCU, "K_RCU" },
     { "remove", K_REMOVE, "K_REMOVE"},
     { "replace", K_REPLACE, "K_REPLACE" },

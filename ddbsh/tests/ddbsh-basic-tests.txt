@@ -34,7 +34,36 @@ add_test(NAME ddbsh-basic-test-7 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-basic-te
 
 add_test(NAME ddbsh-basic-test-8 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-8.exp -c "explain select * from ddbsh_test_table_1 where a = 3 and b = 4")
 
+add_test(NAME ddbsh-basic-test-9 COMMAND ddbshtest -c "select * from ddbsh_test_table_1 return total with ratelimit ( 1 rcu, 1 wcu )")
+set_property(TEST ddbsh-basic-test-9 PROPERTY WILL_FAIL PROPARTY PASS_REGULAR_EXPRESSION "You cannot specify both a ratelimit and a return_clause")
 
+add_test(NAME ddbsh-basic-test-10 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-10.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (6, 7, 8), (7, 8, 9), (8, 9, 10), (9, 10, 11), (10, 11, 12), (11, 12, 13), (12, 13, 14) with ratelimit ( 1 wcu )")
+
+add_test(NAME ddbsh-basic-test-11 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-11.exp -c "select * from ddbsh_test_table_1")
+
+add_test(NAME ddbsh-basic-test-12 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-12.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (13, 14, 15) with ratelimit ( 1 rcu )")
+
+add_test(NAME ddbsh-basic-test-13 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-13.exp -c "select * from ddbsh_test_table_1")
+
+add_test(NAME ddbsh-basic-test-14 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-14.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (14, 15, 16) with ratelimit ( 1 rcu, 1 wcu )")
+
+add_test(NAME ddbsh-basic-test-15 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-15.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 rcu)")
+
+add_test(NAME ddbsh-basic-test-16 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-16.exp -c "update ddbsh_test_table_1 set delete_me = true where a > 10 with ratelimit ( 1 rcu, 1 wcu )")
+
+add_test(NAME ddbsh-basic-test-17 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-17.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu)")
+
+add_test(NAME ddbsh-basic-test-18 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-18.exp -c "update ddbsh_test_table_1 remove c where a > 10 with ratelimit ( 1 rcu, 1 wcu )")
+
+add_test(NAME ddbsh-basic-test-19 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-19.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu)")
+
+add_test(NAME ddbsh-basic-test-20 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-20.exp -c "replace into ddbsh_test_table_1 (a, b, c) values ( 13, 14, 15 ) with ratelimit ( 1 wcu )")
+
+add_test(NAME ddbsh-basic-test-21 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-21.exp -c "select * from ddbsh_test_table_1 where a = 13 with ratelimit(1 wcu)")
+
+add_test(NAME ddbsh-basic-test-22 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-22.exp -c "upsert ddbsh_test_table_1 set upserted = true where a > 10 with ratelimit ( 1 wcu )")
+
+add_test(NAME ddbsh-basic-test-23 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-23.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu, 1 rcu)")
 
 
 

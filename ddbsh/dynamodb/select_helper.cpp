@@ -39,12 +39,13 @@ bool CSelectHelper::can_query()
 }
 
 int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection, Aws::Vector<Aws::String> * table, CWhere * where,
-          Aws::DynamoDB::Model::ReturnConsumedCapacity returns)
+                         Aws::DynamoDB::Model::ReturnConsumedCapacity returns, bool ratelimit)
 {
     logdebug("[%s, %d] In %s.\n", __FILENAME__, __LINE__, __FUNCTION__);
 
     m_consistent = consistent;
     m_projection = projection;
+    m_rate_limited = ratelimit;
     assert(table->size() >= 1);
 
     m_table_name = (*table)[0];
@@ -76,7 +77,7 @@ int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection,
     return 0;
 }
 
-int CSelectHelper::setup(std::string table, CWhere * where)
+int CSelectHelper::setup(std::string table, CWhere * where, bool ratelimit)
 {
     logdebug("[%s, %d] In %s.\n", __FILENAME__, __LINE__, __FUNCTION__);
 
@@ -84,6 +85,7 @@ int CSelectHelper::setup(std::string table, CWhere * where)
     m_table_name = table;
     m_where = where;
     m_consumed_capacity = Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE;
+    m_rate_limited = ratelimit;
 
     if (get_key_schema(m_table_name, &m_pk, &m_rk) != 0)
         return -1;
@@ -130,6 +132,7 @@ Aws::DynamoDB::Model::GetItemRequest * CSelectHelper::getitem_request()
     if (st.has_names())
         request->SetExpressionAttributeNames(st.get_names());
 
+    // on a GetItem() request there is no point in looking for rate limits.
     request->SetReturnConsumedCapacity(m_consumed_capacity);
 
     request->SetKey(m_where->get_gud_key(m_pk, m_rk));
@@ -161,7 +164,10 @@ Aws::DynamoDB::Model::QueryRequest * CSelectHelper::query_request()
     if(!m_projection->empty())
         request->SetProjectionExpression(serialize_projection(&st));
 
-    request->SetReturnConsumedCapacity(m_consumed_capacity);
+    if (m_rate_limited)
+        request->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+    else
+        request->SetReturnConsumedCapacity(m_consumed_capacity);
 
     std::string key_condition = m_where->query_key_condition_expression(m_pk, m_rk, &st);
     logdebug("[%s, %d] setting key condition = %s\n", __FILENAME__, __LINE__, key_condition.c_str());
@@ -181,6 +187,9 @@ Aws::DynamoDB::Model::QueryRequest * CSelectHelper::query_request()
     // at least a PK check must exist, so there have to be values.
     assert(st.has_values());
     request->SetExpressionAttributeValues(st.get_values());
+
+    // for debugging, set the limit to 1
+    // request->SetLimit(1);
 
     std::string requeststr =  strip_newlines(request->SerializePayload());
     logdebug("[%s, %d] request = %s\n", __FILENAME__, __LINE__, requeststr.c_str());
@@ -207,7 +216,10 @@ Aws::DynamoDB::Model::ScanRequest * CSelectHelper::scan_request()
     if(!m_projection->empty())
         request->SetProjectionExpression(serialize_projection(&st));
 
-    request->SetReturnConsumedCapacity(m_consumed_capacity);
+    if (m_rate_limited)
+        request->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+    else
+        request->SetReturnConsumedCapacity(m_consumed_capacity);
 
     if (m_where)
     {
@@ -224,6 +236,9 @@ Aws::DynamoDB::Model::ScanRequest * CSelectHelper::scan_request()
 
     if(st.has_values())
         request->SetExpressionAttributeValues(st.get_values());
+
+    // for debugging, set the limit to 1
+    // request->SetLimit(1);
 
     std::string requeststr =  strip_newlines(request->SerializePayload());
     logdebug("[%s, %d] request = %s\n", __FILENAME__, __LINE__, requeststr.c_str());

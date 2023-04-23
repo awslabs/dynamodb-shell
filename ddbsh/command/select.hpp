@@ -18,6 +18,7 @@
 #include "command.hpp"
 #include "symbol_table.hpp"
 #include "select_helper.hpp"
+#include "ratelimit.hpp"
 
 namespace ddbsh
 {
@@ -25,13 +26,16 @@ namespace ddbsh
     class CSelectCommand : public CCommand
     {
     public:
-        CSelectCommand(bool consistent, Aws::Vector<Aws::String> * projection, Aws::Vector<Aws::String> * table,
-                       CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns) {
+        CSelectCommand(CRateLimit * ratelimit, bool consistent, Aws::Vector<Aws::String> * projection,
+                       Aws::Vector<Aws::String> * table, CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns) {
             m_exists = false;
-            m_helper.setup(consistent, projection, table, where, returns);
+            m_helper.setup(consistent, projection, table, where, returns, ratelimit ? true : false);
+            m_ratelimit = ratelimit;
+            m_returns = returns;
         };
 
         ~CSelectCommand() {
+            delete m_ratelimit;
         };
 
         virtual int run();
@@ -45,6 +49,8 @@ namespace ddbsh
 
     private:
         CSelectHelper m_helper;
+        CRateLimit * m_ratelimit;
+        Aws::DynamoDB::Model::ReturnConsumedCapacity m_returns;
         bool m_exists;
 
         int do_scan();

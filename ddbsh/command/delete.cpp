@@ -50,6 +50,7 @@ CDeleteCommand::~CDeleteCommand()
 {
     logdebug("[%s, %d] In destructor.\n", __FILENAME__, __LINE__);
     delete m_where;
+    delete m_rate_limit;
 }
 
 int CDeleteCommand::do_scan(std::string pk, std::string rk)
@@ -65,7 +66,7 @@ int CDeleteCommand::do_scan(std::string pk, std::string rk)
 
     // make and execute a scan against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_where);
+    helper.setup(m_table_name, m_where, m_rate_limit ? true : false);
     Aws::DynamoDB::Model::ScanRequest * request = helper.scan_request();
 
     if (explaining())
@@ -81,6 +82,9 @@ int CDeleteCommand::do_scan(std::string pk, std::string rk)
         if (sresult.IsSuccess())
         {
             const Aws::Vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> &items = sresult.GetResult().GetItems();
+
+            if (m_rate_limit)
+                m_rate_limit->consume_reads(sresult.GetResult().GetConsumedCapacity());
 
             for (const auto &item : items)
             {
@@ -113,6 +117,8 @@ int CDeleteCommand::do_scan(std::string pk, std::string rk)
             break;
 
         request->SetExclusiveStartKey(sresult.GetResult().GetLastEvaluatedKey());
+        if (m_rate_limit)
+            m_rate_limit->readlimit();
     } while(1);
 
     if (!retval && !explaining())
@@ -136,7 +142,7 @@ int CDeleteCommand::do_query(std::string pk, std::string rk)
 
     // make and execute a query against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_where);
+    helper.setup(m_table_name, m_where, m_rate_limit ? true : false);
     Aws::DynamoDB::Model::QueryRequest * request = helper.query_request();
 
     int retval = 0;
@@ -154,6 +160,9 @@ int CDeleteCommand::do_query(std::string pk, std::string rk)
             {
                 const Aws::Vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> &items =
                     qresult.GetResult().GetItems();
+
+                if (m_rate_limit)
+                    m_rate_limit->consume_reads(qresult.GetResult().GetConsumedCapacity());
 
                 for (const auto &item : items)
                 {
@@ -185,6 +194,9 @@ int CDeleteCommand::do_query(std::string pk, std::string rk)
                 break;
 
             request->SetExclusiveStartKey(qresult.GetResult().GetLastEvaluatedKey());
+
+            if (m_rate_limit)
+                m_rate_limit->readlimit();
         } while(1);
 
         if (!retval && !explaining())
@@ -245,6 +257,9 @@ Aws::DynamoDB::Model::DeleteItemRequest * CDeleteCommand::make_delete_request(st
     if (st->has_values())
         dir->SetExpressionAttributeValues(st->get_values());
 
+    if (m_rate_limit)
+        dir->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+
     logdebug("[%s, %d] complete request is %s\n", __FILENAME__, __LINE__, explain_string(dir->SerializePayload()).c_str());
     return dir;
 }
@@ -264,6 +279,9 @@ int CDeleteCommand::do_delete(Aws::DynamoDB::Model::DeleteItemRequest * dir,
     }
     else
     {
+        if (m_rate_limit)
+            m_rate_limit->writelimit();
+
         const Aws::DynamoDB::Model::DeleteItemOutcome& result = p_dynamoDBClient->DeleteItem(*dir);
 
         if(!result.IsSuccess())
@@ -284,6 +302,9 @@ int CDeleteCommand::do_delete(Aws::DynamoDB::Model::DeleteItemRequest * dir,
         else
         {
             this->modified();
+
+            if(m_rate_limit)
+                m_rate_limit->consume_writes(result.GetResult().GetConsumedCapacity());
         }
     }
 

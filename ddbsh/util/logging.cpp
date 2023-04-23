@@ -20,6 +20,8 @@
 static FILE * __logging_fp = NULL;
 static int __debug_level = DDBSH_LOGLEVEL_DEFAULT;
 
+#define LOGGING_TIMESTRING_BUFFER_SIZE (64)
+
 static int isenabled (int level)
 {
     if (__debug_level >= level)
@@ -34,14 +36,14 @@ static char * timestring (char * string)
     time_t tt;
 
     if (string == NULL)
-	string = (char *) malloc (32);
+	string = (char *) malloc (LOGGING_TIMESTRING_BUFFER_SIZE+1);
 
     time(&tt);
     localtime_r (&tt, &tm);
 
-    snprintf ( string, 24, "%4d-%02d-%02d %02d:%02d:%02d",
-	tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-	tm.tm_hour, tm.tm_min, tm.tm_sec );
+    snprintf ( string, LOGGING_TIMESTRING_BUFFER_SIZE, "%4d-%02d-%02d %02d:%02d:%02d (%lu)",
+               tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+               tm.tm_hour, tm.tm_min, tm.tm_sec, (unsigned long) getpid());
 
     return (string);
 }
@@ -49,7 +51,7 @@ static char * timestring (char * string)
 static int __logdebug (const char * prefix,
                        const char * string, va_list ap)
 {
-    char buffer[32];
+    char buffer[LOGGING_TIMESTRING_BUFFER_SIZE+1];
     int rv;
 
     if (__logging_fp == NULL)
@@ -168,8 +170,7 @@ void cleardebug ()
 
 int logtofile (char * fname)
 {
-    char buffer[32];
-    char __lfname[64];
+    char __lfname[128+1];
     if (__logging_fp && (__logging_fp != stderr))
     {
 	fclose(__logging_fp);
@@ -177,8 +178,7 @@ int logtofile (char * fname)
 
     if (fname == NULL)
     {
-        strcpy(__lfname, "ddbsh-debug-log.txt");
-
+        strcpy(__lfname, "/tmp/ddbsh-debug-log.txt");
         fname = __lfname;
     }
 

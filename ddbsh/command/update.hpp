@@ -16,6 +16,7 @@
 #include "update_delete.hpp"
 #include "update_set_element.hpp"
 #include "where.hpp"
+#include "ratelimit.hpp"
 
 namespace ddbsh
 {
@@ -33,16 +34,18 @@ namespace ddbsh
         int run();
         ~CUpdateCommand();
 
-        void set(std::string table, Aws::Vector<CUpdateSetElement> * s, CWhere * where) {
+        void set(std::string table, Aws::Vector<CUpdateSetElement> * s, CWhere * where, CRateLimit * ratelimit) {
             m_table_name = table;
             m_set = s;
             m_where = where;
+            m_rate_limit = ratelimit;
         };
 
-        void remove(std::string table, Aws::Vector<Aws::String> * r, CWhere * where) {
+        void remove(std::string table, Aws::Vector<Aws::String> * r, CWhere * where, CRateLimit * ratelimit) {
             m_table_name = table;
             m_remove = r;
             m_where = where;
+            m_rate_limit = ratelimit;
         };
 
         void set_upsert() {
@@ -58,6 +61,7 @@ namespace ddbsh
         Aws::Vector<CUpdateSetElement> * m_set;
         Aws::Vector<Aws::String> * m_remove;
         bool m_update;
+        CRateLimit * m_rate_limit;
 
         int do_scan(std::string pk, std::string rk);
         int do_query(std::string pk, std::string rk);

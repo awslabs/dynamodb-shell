@@ -15,16 +15,18 @@
 #include "command.hpp"
 #include "where.hpp"
 #include "update_delete.hpp"
+#include "ratelimit.hpp"
 
 namespace ddbsh
 {
     class CDeleteCommand: public CUpdateDeleteCommand
     {
     public:
-        CDeleteCommand(std::string table, CWhere * where){
+        CDeleteCommand(std::string table, CWhere * where, CRateLimit * ratelimit){
             logdebug("[%s, %d] In %s. setting m_delete to true.\n", __FILENAME__, __LINE__, __FUNCTION__);
             m_where = where;
             m_table_name = table;
+            m_rate_limit = ratelimit;
         };
 
         int run();
@@ -35,6 +37,7 @@ namespace ddbsh
     private:
         std::string m_table_name;
         CWhere * m_where;
+        CRateLimit * m_rate_limit;
 
         int do_scan(std::string pk, std::string rk);
         int do_query(std::string pk, std::string rk);
