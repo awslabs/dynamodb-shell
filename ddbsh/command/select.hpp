@@ -33,6 +33,7 @@ namespace ddbsh
             if (m_helper.setup(consistent, projection, table, where, returns, ratelimit ? true : false))
                 return false;
 
+            m_where = where;
             return true;
         };
 
@@ -42,7 +43,9 @@ namespace ddbsh
         };
 
         ~CSelectCommand() {
+            logdebug("[%s, %d] In destructor.\n", __FILENAME__, __LINE__);
             delete m_ratelimit;
+            delete m_where;
         };
 
         virtual int run();
@@ -60,6 +63,8 @@ namespace ddbsh
         Aws::DynamoDB::Model::ReturnConsumedCapacity m_returns;
         bool m_exists;
 
+        CWhere * m_where; // this is the holder for m_where which came
+                          // from parser, solely for the destructor.
         int do_scan();
         int do_query();
         int do_getitem();
