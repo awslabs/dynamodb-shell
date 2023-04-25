@@ -87,12 +87,20 @@ add_test(NAME iut-load-4 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-up
 add_test(NAME iut-load-3-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-3-check.exp -c "select * from iut1")
 add_test(NAME iut-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-4-check.exp -c "select * from iut2")
 
-# add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c "explain 
-# add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c
-# add_test(NAME iut-39 COMMAND ddbshtest -q -T ${RD}/iut-39.exp -c
-# add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c
-# add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c
-# add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c
+# update tables based on GSIs
+
+add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c "explain update iut1.iut1gsi set updated = true where gsipk = 0")
+
+add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c "update iut1.iut1gsi set updated = true where gsipk = 0")
+
+add_test(NAME iut-39 COMMAND ddbshtest -q -T ${RD}/iut-39.exp -c "select * from iut1")
+
+add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c "explain update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+
+add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c "update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+
+add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c "select * from iut1.iut1gsi where gsipk > 0 and gsipk < 2")
+
 # add_test(NAME iut-43 COMMAND ddbshtest -q -T ${RD}/iut-43.exp -c
 # add_test(NAME iut-44 COMMAND ddbshtest -q -T ${RD}/iut-44.exp -c
 # add_test(NAME iut-45 COMMAND ddbshtest -q -T ${RD}/iut-45.exp -c

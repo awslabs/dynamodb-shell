@@ -1,0 +1,40 @@
+Query({
+   "TableName":   "iut1",
+   "IndexName":   "iut1gsi",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "KeyConditionExpression":   "#abaa2 = :vbaa1",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "gsipk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "0"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "iut1",
+   "Key":   {
+      "pk":   {
+         "N":   "109"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 = :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "updated",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "gsipk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "BOOL":   true
+      },
+      ":vaaa2":   {
+         "N":   "0"
+      }
+   }
+})

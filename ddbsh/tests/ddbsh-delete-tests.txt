@@ -2,9 +2,9 @@ add_test(NAME ddbsh-delete-drop-1 COMMAND ddbshtest -c "drop table if exists idt
 add_test(NAME ddbsh-delete-drop-2 COMMAND ddbshtest -c "drop table if exists idt2")
 
 add_test(NAME ddbsh-delete-create-1
-         COMMAND ddbshtest -c "create table idt1 (pk number) primary key (pk hash) billing mode on demand")
+         COMMAND ddbshtest -c "create table idt1 (pk number, gsipk number) primary key (pk hash) billing mode on demand gsi ( iut1gsi on (gsipk hash) projecting all)")
 add_test(NAME ddbsh-delete-create-2
-         COMMAND ddbshtest -c "create table idt2 (pk number, rk number) primary key (pk hash, rk range) billing mode on demand")
+         COMMAND ddbshtest -c "create table idt2 (pk number, rk number, gsipk number, gsirk number) primary key (pk hash, rk range) billing mode on demand gsi ( iut2gsi on (gsipk hash, gsirk range) projecting all)")
 
 add_test(NAME ddbsh-delete-load-1 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-1.sql)
 add_test(NAME ddbsh-delete-load-2 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-2.sql)
@@ -65,15 +65,26 @@ add_test(NAME ddbsh-delete-32 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-32.exp 
 
 add_test(NAME ddbsh-delete-33 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-33.exp -c "explain delete from idt1 where pk = 6 and z = 12")
 
-
 add_test(NAME ddbsh-delete-34 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-34.exp -c "delete from idt1 where pk = 6 and z = 12")
 
-# add_test(NAME ddbsh-delete-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-35.exp -c
-# add_test(NAME ddbsh-delete-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-36.exp -c
-# add_test(NAME ddbsh-delete-37 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-37.exp -c
-# add_test(NAME ddbsh-delete-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-38.exp -c
-# add_test(NAME ddbsh-delete-39 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-39.exp -c
-# add_test(NAME ddbsh-delete-40 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-40.exp -c
+add_test(NAME ddbsh-delete-load-3 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-3.sql)
+add_test(NAME ddbsh-delete-load-4 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-4.sql)
+
+add_test(NAME ddbsh-delete-load-3-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-3-check.exp -c "select * from idt1")
+add_test(NAME ddbsh-delete-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-4-check.exp -c "select * from idt2")
+
+add_test(NAME ddbsh-delete-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-35.exp -c "explain update iut1.iut1gsi set updated = true where gsipk = 0")
+
+add_test(NAME ddbsh-delete-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-36.exp -c "update iut1.iut1gsi set updated = true where gsipk = 0")
+
+add_test(NAME ddbsh-delete-37 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-37.exp -c "select * from iut1")
+
+add_test(NAME ddbsh-delete-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-38.exp -c "explain update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+
+add_test(NAME ddbsh-delete-39 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-39.exp -c "update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+
+add_test(NAME ddbsh-delete-40 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-40.exp -c "select * from iut1.iut1gsi where gsipk > 0 and gsipk < 2")
+
 # add_test(NAME ddbsh-delete-41 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-41.exp -c
 # add_test(NAME ddbsh-delete-42 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-42.exp -c
 # add_test(NAME ddbsh-delete-43 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-43.exp -c
