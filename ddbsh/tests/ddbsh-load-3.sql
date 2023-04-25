@@ -1,0 +1,10 @@
+insert into idt1 ( pk, gsipk, b, c ) values ( 100, 1, 2, 3 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 101, 2, 3, 4 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 102, 3, 4, 5 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 103, 4, 5, 6 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 104, 5, 6, 7 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 105, 6, 7, 8 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 106, 7, 8, 9 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 107, 8, 9, 0 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 108, 9, 0, 1 );
+insert into idt1 ( pk, gsipk, b, c ) values ( 109, 0, 1, 2 );

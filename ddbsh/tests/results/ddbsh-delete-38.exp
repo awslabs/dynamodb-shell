@@ -1,0 +1,46 @@
+Scan({
+   "TableName":   "iut1",
+   "IndexName":   "iut1gsi",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "#abaa2 > :vbaa1 AND #abaa2 < :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "gsipk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "0"
+      },
+      ":vbaa2":   {
+         "N":   "2"
+      }
+   },
+   "ConsistentRead":   false
+})
+UpdateItem({
+   "TableName":   "iut1",
+   "Key":   {
+      "pk":   {
+         "N":   "100"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 > :vaaa2 AND #aaaa3 < :vaaa3",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "updated",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "gsipk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "BOOL":   true
+      },
+      ":vaaa2":   {
+         "N":   "0"
+      },
+      ":vaaa3":   {
+         "N":   "2"
+      }
+   }
+})

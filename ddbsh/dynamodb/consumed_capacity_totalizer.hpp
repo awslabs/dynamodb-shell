@@ -13,11 +13,15 @@
 #define __CONSUMED_CAPACITY_TOTALIZER_HPP_DEFINED__
 
 #include "aws-includes.hpp"
+#include "logging.hpp"
 
 class CConsumedCapacityTotalizer
 {
 public:
     void add(Aws::DynamoDB::Model::ConsumedCapacity cc) {
+        logdebug("[%s, %d] cc (%d, %d, %d)\n", __FILENAME__, __LINE__, (int) cc.GetCapacityUnits(),
+                 (int) cc.GetReadCapacityUnits(), (int) cc.GetWriteCapacityUnits());
+
         if (m_capacity.GetTableName().empty()) {
             m_capacity = cc;
         } else {
@@ -26,8 +30,6 @@ public:
             m_capacity.SetCapacityUnits(m_capacity.GetCapacityUnits() + cc.GetCapacityUnits());
             m_capacity.SetReadCapacityUnits(m_capacity.GetReadCapacityUnits() + cc.GetReadCapacityUnits());
             m_capacity.SetWriteCapacityUnits(m_capacity.GetWriteCapacityUnits() + cc.GetWriteCapacityUnits());
-
-            //FIX-ME: handle indexes
         }
     };
 

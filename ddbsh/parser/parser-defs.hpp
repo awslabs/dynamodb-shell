@@ -16,6 +16,7 @@
 #include "logical_comparison.hpp"
 #include "logical_contains.hpp"
 #include "logical_in.hpp"
+#include "ratelimit.hpp"
 #include "where.hpp"
 #include "symbol_table.hpp"
 #include "update_set_element.hpp"

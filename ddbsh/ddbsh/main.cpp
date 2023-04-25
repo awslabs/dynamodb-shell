@@ -64,13 +64,17 @@ static void cmdparse(cmdline_t * cmdline, int ac, char ** av)
 #ifdef TEST_HARNESS
     cmdline->quiet = true;
 
-    while ((ch = getopt(ac, av, "qc:f:eT:R:s")) != -1)
+    while ((ch = getopt(ac, av, "qc:f:eT:R:sd")) != -1)
 #else
-    while ((ch = getopt(ac, av, "qc:f:e")) != -1)
+    while ((ch = getopt(ac, av, "qc:f:ed")) != -1)
 #endif
     {
         switch(ch)
         {
+        case 'd':
+            setdebug(DDBSH_LOGLEVEL_DEBUG);
+            break;
+
         case 'q':
             cmdline->quiet = true;
             break;
@@ -125,7 +129,11 @@ static void cmdparse(cmdline_t * cmdline, int ac, char ** av)
 
 static void init()
 {
-    setdebug(DDBSH_LOGLEVEL_DEBUG);
+    if (getenv("DDBSH_LOGLEVEL_DEBUG"))
+        setdebug(DDBSH_LOGLEVEL_DEBUG);
+    else
+        setdebug(DDBSH_LOGLEVEL_DEFAULT);
+
     logtofile(NULL);
 
     signal(SIGINT, ctrlc);

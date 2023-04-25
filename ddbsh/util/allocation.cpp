@@ -212,13 +212,13 @@ void show_allocations (void)
     allocation_t * h;
     __allocation_init();
 
-    logdebug ( "------------------------------------------------------------\n");
-    logdebug ( "Allocations = %d, Frees = %d\n", ai.allocations, ai.frees);
+    logerror ( "------------------------------------------------------------\n");
+    logerror ( "Allocations = %d, Frees = %d\n", ai.allocations, ai.frees);
 
     for (h = (allocation_t *) ai.allocation_chain.next; h; h = (allocation_t *) h->list.next)
-	logdebug ( "Allocation hdr @%p, block @%p: %s(%d) sz = %d\n", h, h->block, h->src, h->line, h->sz );
+	logerror ( "Allocation hdr @%p, block @%p: %s(%d) sz = %d\n", h, h->block, h->src, h->line, h->sz );
 
-    logdebug ( "------------------------------------------------------------\n");
+    logerror ( "------------------------------------------------------------\n");
 }
 
 void * operator new(size_t size, const char * file, int line) throw(std::bad_alloc)

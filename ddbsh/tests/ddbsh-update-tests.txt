@@ -2,15 +2,15 @@ add_test(NAME iut-drop-1 COMMAND ddbshtest -c "drop table if exists iut1")
 add_test(NAME iut-drop-2 COMMAND ddbshtest -c "drop table if exists iut2")
 
 add_test(NAME iut-create-1
-         COMMAND ddbshtest -c "create table iut1 (pk number) primary key (pk hash) billing mode on demand")
+         COMMAND ddbshtest -c "create table iut1 (pk number, gsipk number) primary key (pk hash) billing mode on demand gsi ( iut1gsi on (gsipk hash) projecting all)")
 add_test(NAME iut-create-2
-         COMMAND ddbshtest -c "create table iut2 (pk number, rk number) primary key (pk hash, rk range) billing mode on demand")
+         COMMAND ddbshtest -c "create table iut2 (pk number, rk number, gsipk number, gsirk number) primary key (pk hash, rk range) billing mode on demand gsi (iut2gsi on (gsipk hash, gsirk range) projecting all)")
 
-add_test(NAME ddbsh-load-1 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-1.sql)
-add_test(NAME ddbsh-load-2 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-2.sql)
+add_test(NAME iut-load-1 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-1.sql)
+add_test(NAME iut-load-2 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-2.sql)
 
-add_test(NAME ddbsh-load-1-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-1-check.exp -c "select * from iut1")
-add_test(NAME ddbsh-load-2-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-2-check.exp -c "select * from iut2")
+add_test(NAME iut-load-1-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-1-check.exp -c "select * from iut1")
+add_test(NAME iut-load-2-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-2-check.exp -c "select * from iut2")
 
 add_test(NAME iut-0 COMMAND ddbshtest -s -q -T ${RD}/iut-0.exp -c "select * from iut1; select * from iut2;")
 
@@ -38,7 +38,6 @@ add_test(NAME iut-14 COMMAND ddbshtest -q -T ${RD}/iut-14.exp -c "update iut1 se
 
 add_test(NAME iut-15 COMMAND ddbshtest -q -T ${RD}/iut-15.exp -c "explain upsert iut1 set y = 14 where pk = 1")
 add_test(NAME iut-16 COMMAND ddbshtest -q -T ${RD}/iut-16.exp -c "upsert iut1 set y = 14 where pk = 1")
-
 
 add_test(NAME iut-17 COMMAND ddbshtest -q -T ${RD}/iut-17.exp -c "explain upsert iut1 set x = 3 where pk = 3 and y = 14")
 # test 18 should ccf
@@ -80,12 +79,28 @@ add_test(NAME iut-35 COMMAND ddbshtest -q -T ${RD}/iut-35.exp -c "explain update
 
 add_test(NAME iut-36 COMMAND ddbshtest -s -q -T ${RD}/iut-36.exp -c "update iut1 set y = y + 10 where pk = 3")
 
-# add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c
-# add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c
-# add_test(NAME iut-39 COMMAND ddbshtest -q -T ${RD}/iut-39.exp -c
-# add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c
-# add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c
-# add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c
+# tests for update/upsert to index targets
+
+add_test(NAME iut-load-3 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-3.sql)
+add_test(NAME iut-load-4 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-update-load-4.sql)
+
+add_test(NAME iut-load-3-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-3-check.exp -c "select * from iut1")
+add_test(NAME iut-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-4-check.exp -c "select * from iut2")
+
+# update tables based on GSIs
+
+add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c "explain update iut1.iut1gsi set updated = true where gsipk = 0")
+
+add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c "update iut1.iut1gsi set updated = true where gsipk = 0")
+
+add_test(NAME iut-39 COMMAND ddbshtest -q -T ${RD}/iut-39.exp -c "select * from iut1")
+
+add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c "explain update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+
+add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c "update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+
+add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c "select * from iut1.iut1gsi where gsipk > 0 and gsipk < 2")
+
 # add_test(NAME iut-43 COMMAND ddbshtest -q -T ${RD}/iut-43.exp -c
 # add_test(NAME iut-44 COMMAND ddbshtest -q -T ${RD}/iut-44.exp -c
 # add_test(NAME iut-45 COMMAND ddbshtest -q -T ${RD}/iut-45.exp -c

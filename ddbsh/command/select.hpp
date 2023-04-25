@@ -18,6 +18,7 @@
 #include "command.hpp"
 #include "symbol_table.hpp"
 #include "select_helper.hpp"
+#include "ratelimit.hpp"
 
 namespace ddbsh
 {
@@ -25,13 +26,27 @@ namespace ddbsh
     class CSelectCommand : public CCommand
     {
     public:
-        CSelectCommand(bool consistent, Aws::Vector<Aws::String> * projection, Aws::Vector<Aws::String> * table,
-                       CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns) {
+        bool setup (CRateLimit * ratelimit, bool consistent, Aws::Vector<Aws::String> * projection,
+                    Aws::Vector<Aws::String> * table, CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns) {
+            m_ratelimit = ratelimit;
+            m_returns = returns;
+            if (m_helper.setup(consistent, projection, table, where, returns, ratelimit ? true : false))
+                return false;
+
+            m_where = where;
+            return true;
+        };
+
+        CSelectCommand() {
             m_exists = false;
-            m_helper.setup(consistent, projection, table, where, returns);
+            m_ratelimit = NULL;
+            m_where = NULL;
         };
 
         ~CSelectCommand() {
+            logdebug("[%s, %d] In destructor.\n", __FILENAME__, __LINE__);
+            delete m_ratelimit;
+            delete m_where;
         };
 
         virtual int run();
@@ -45,8 +60,12 @@ namespace ddbsh
 
     private:
         CSelectHelper m_helper;
+        CRateLimit * m_ratelimit;
+        Aws::DynamoDB::Model::ReturnConsumedCapacity m_returns;
         bool m_exists;
 
+        CWhere * m_where; // this is the holder for m_where which came
+                          // from parser, solely for the destructor.
         int do_scan();
         int do_query();
         int do_getitem();

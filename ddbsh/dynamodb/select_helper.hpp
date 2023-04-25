@@ -21,14 +21,18 @@ namespace ddbsh
     {
     public:
         CSelectHelper() {
-            delete_where = false;
+            m_where_clone = NULL;
+            m_projection = NULL;
         };
 
         ~CSelectHelper() {
             logdebug("[%s, %d] In %s\n", __FILENAME__, __LINE__, __FUNCTION__);
+
             delete m_projection;
-            if (delete_where)
-                delete m_where;
+            m_projection = NULL;
+
+            // never delete m_where_clone, it is a copy of something in the
+            // caller.
         };
 
         bool can_getitem();
@@ -44,7 +48,7 @@ namespace ddbsh
 
         // full blown request as needed by select
         int setup(bool consistent, Aws::Vector<Aws::String> * projection, Aws::Vector<Aws::String> * table, CWhere * where,
-                  Aws::DynamoDB::Model::ReturnConsumedCapacity returns);
+                  Aws::DynamoDB::Model::ReturnConsumedCapacity returns, bool ratelimit);
 
         Aws::DynamoDB::Model::GetItemRequest * getitem_request();
         Aws::DynamoDB::Model::QueryRequest * query_request();
@@ -54,7 +58,7 @@ namespace ddbsh
 
         // the quick and dirty, needed by update and delete
 
-        int setup(std::string table, CWhere * where);
+        int setup(std::string table, std::string index, CWhere * where, bool ratelimit);
 
         static Aws::Vector<std::string> show_items(const Aws::Vector<Aws::Map<Aws::String,
                                                    Aws::DynamoDB::Model::AttributeValue>>& items);
@@ -65,8 +69,12 @@ namespace ddbsh
         std::string m_index_name;
         std::string m_pk;
         std::string m_rk;
-        bool delete_where;
-        CWhere * m_where;
+        bool m_rate_limited;
+
+        // never delete m_where_clone, it is a copy of something in the
+        // caller.
+        CWhere * m_where_clone;
+
         bool m_consistent;
         Aws::Vector<Aws::String> * m_projection;
         Aws::DynamoDB::Model::ReturnConsumedCapacity m_consumed_capacity;
@@ -75,6 +83,9 @@ namespace ddbsh
         std::string serialize_projection();
         static std::string quote_if_required(std::string input);
         static Aws::String serialize_value(Aws::DynamoDB::Model::AttributeValue v);
+        int setup(bool consistent, Aws::Vector<Aws::String> * projection, std::string table, std::string index,
+                  CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns, bool ratelimit);
+
     };
 };
 #endif

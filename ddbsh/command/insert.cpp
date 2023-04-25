@@ -29,6 +29,9 @@ int CInsertCommand::make_put_request(Aws::DynamoDB::Model::PutItemRequest * preq
     prequest->SetTableName(m_table_name);
     prequest->SetItem(nvmap);
 
+    if (m_ratelimit)
+        prequest->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+
     if (m_insert)
     {
         CSymbolTable st;
@@ -115,6 +118,12 @@ int CInsertCommand::run()
             }
 
             printf("%s\n", op);
+
+            if (m_ratelimit)
+            {
+                m_ratelimit->consume_writes(result.GetResult().GetConsumedCapacity());
+                m_ratelimit->writelimit();
+            }
         }
     }
 

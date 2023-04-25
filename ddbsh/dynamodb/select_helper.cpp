@@ -27,37 +27,46 @@ using namespace ddbsh;
 // performed? that requires fully specified primary key.
 bool CSelectHelper::can_getitem()
 {
-    return (m_index_name.empty() && m_where && m_where->can_getitem(m_pk, m_rk));
+    return (m_index_name.empty() && m_where_clone && m_where_clone->can_getitem(m_pk, m_rk));
 }
 
 // select helper is used for both table and index queries. So handle
 // indexes specifically.
 bool CSelectHelper::can_query()
 {
-    return (m_where && ((m_index_name.empty() && m_where->can_query_table(m_pk, m_rk)) ||
-                        (!m_index_name.empty() && m_where->can_query_index(m_pk, m_rk))));
+    return (m_where_clone && ((m_index_name.empty() && m_where_clone->can_query_table(m_pk, m_rk)) ||
+                              (!m_index_name.empty() && m_where_clone->can_query_index(m_pk, m_rk))));
 }
 
 int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection, Aws::Vector<Aws::String> * table, CWhere * where,
-          Aws::DynamoDB::Model::ReturnConsumedCapacity returns)
+                         Aws::DynamoDB::Model::ReturnConsumedCapacity returns, bool ratelimit)
+{
+    std::string ltable, lindex;
+
+    assert(table->size() >= 1);
+
+    ltable = (*table)[0];
+    if (table->size() > 1)
+        lindex = (*table)[1];
+
+    delete table;
+
+    return setup(consistent, projection, ltable, lindex, where, returns, ratelimit);
+}
+
+int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection, std::string table, std::string index,
+                         CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns, bool ratelimit)
 {
     logdebug("[%s, %d] In %s.\n", __FILENAME__, __LINE__, __FUNCTION__);
 
     m_consistent = consistent;
     m_projection = projection;
-    assert(table->size() >= 1);
+    m_rate_limited = ratelimit;
 
-    m_table_name = (*table)[0];
-    if (table->size() > 1)
-        m_index_name = (*table)[1];
+    m_table_name = table;
+    m_index_name = index;
 
-    delete table;
-
-    // this invocation of select() comes from select where this is the
-    // only copy of the where clause.
-    delete_where = true;
-
-    m_where = where;
+    m_where_clone = where;
     m_consumed_capacity = returns;
 
     if (get_key_schema(m_table_name, m_index_name, &m_pk, &m_rk) != 0)
@@ -67,45 +76,34 @@ int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection,
 
     logdebug("[%s, %d] consistent = %s\n", __FILENAME__, __LINE__,  m_consistent ? "True" : "False");
     logdebug("[%s, %d] projection = %s\n", __FILENAME__, __LINE__, p.empty() ? "*" : p.c_str());
+    logdebug("[%s, %d] m_pk = %s\n", __FILENAME__, __LINE__, m_pk.c_str());
+    logdebug("[%s, %d] m_pk = %s\n", __FILENAME__, __LINE__, m_rk.empty() ? "" : m_rk.c_str());
     logdebug("[%s, %d] table = %s, index = %s\n", __FILENAME__, __LINE__, m_table_name.c_str(),
              m_index_name.empty() ? "NONE" : m_index_name.c_str());
-    logdebug("[%s, %d] where = %s\n", __FILENAME__, __LINE__, m_where ? m_where->serialize(NULL).c_str() : "");
+    logdebug("[%s, %d] where = %s\n", __FILENAME__, __LINE__, m_where_clone ? m_where_clone->serialize(NULL).c_str() : "");
     logdebug("[%s, %d] consumed capacity = %s\n", __FILENAME__, __LINE__,
              Aws::DynamoDB::Model::ReturnConsumedCapacityMapper::GetNameForReturnConsumedCapacity(m_consumed_capacity).c_str());
 
     return 0;
 }
 
-int CSelectHelper::setup(std::string table, CWhere * where)
+int CSelectHelper::setup(std::string table, std::string index, CWhere * where, bool ratelimit)
 {
     logdebug("[%s, %d] In %s.\n", __FILENAME__, __LINE__, __FUNCTION__);
 
-    m_consistent = false;
-    m_table_name = table;
-    m_where = where;
-    m_consumed_capacity = Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE;
-
-    if (get_key_schema(m_table_name, &m_pk, &m_rk) != 0)
+    std::string pk, rk;
+    if (get_key_schema(table, &pk, &rk) != 0)
         return -1;
 
-    m_projection = NEW Aws::Vector<Aws::String>;
+    Aws::Vector<Aws::String> * projection = NEW Aws::Vector<Aws::String>;
 
-    assert(!m_pk.empty());
-    m_projection->push_back(m_pk);
+    assert(!pk.empty());
+    projection->push_back(pk);
 
-    if (!m_rk.empty())
-        m_projection->push_back(m_rk);
+    if (!rk.empty())
+        projection->push_back(rk);
 
-    std::string p = serialize_projection();
-
-    logdebug("[%s, %d] consistent = %s\n", __FILENAME__, __LINE__,  m_consistent ? "True" : "False");
-    logdebug("[%s, %d] projection = %s\n", __FILENAME__, __LINE__, p.empty() ? "*" : p.c_str());
-    logdebug("[%s, %d] table = %s\n", __FILENAME__, __LINE__, m_table_name.c_str());
-    logdebug("[%s, %d] where = %s\n", __FILENAME__, __LINE__, m_where ? m_where->serialize(NULL).c_str() : "");
-    logdebug("[%s, %d] consumed capacity = %s\n", __FILENAME__, __LINE__,
-             Aws::DynamoDB::Model::ReturnConsumedCapacityMapper::GetNameForReturnConsumedCapacity(m_consumed_capacity).c_str());
-
-    return 0;
+    return setup(false, projection, table, index, where, Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE, ratelimit);
 }
 
 Aws::DynamoDB::Model::GetItemRequest * CSelectHelper::getitem_request()
@@ -130,9 +128,10 @@ Aws::DynamoDB::Model::GetItemRequest * CSelectHelper::getitem_request()
     if (st.has_names())
         request->SetExpressionAttributeNames(st.get_names());
 
+    // on a GetItem() request there is no point in looking for rate limits.
     request->SetReturnConsumedCapacity(m_consumed_capacity);
 
-    request->SetKey(m_where->get_gud_key(m_pk, m_rk));
+    request->SetKey(m_where_clone->get_gud_key(m_pk, m_rk));
 
     std::string requeststr =  strip_newlines(request->SerializePayload());
     logdebug("[%s, %d] request = %s\n", __FILENAME__, __LINE__, requeststr.c_str());
@@ -161,13 +160,16 @@ Aws::DynamoDB::Model::QueryRequest * CSelectHelper::query_request()
     if(!m_projection->empty())
         request->SetProjectionExpression(serialize_projection(&st));
 
-    request->SetReturnConsumedCapacity(m_consumed_capacity);
+    if (m_rate_limited)
+        request->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+    else
+        request->SetReturnConsumedCapacity(m_consumed_capacity);
 
-    std::string key_condition = m_where->query_key_condition_expression(m_pk, m_rk, &st);
+    std::string key_condition = m_where_clone->query_key_condition_expression(m_pk, m_rk, &st);
     logdebug("[%s, %d] setting key condition = %s\n", __FILENAME__, __LINE__, key_condition.c_str());
     request->SetKeyConditionExpression(key_condition);
 
-    std::string filter_expression = m_where->query_filter_expression(m_pk, m_rk, &st);
+    std::string filter_expression = m_where_clone->query_filter_expression(m_pk, m_rk, &st);
     if (!filter_expression.empty())
     {
         logdebug("[%s, %d] setting filter expression = %s\n", __FILENAME__, __LINE__, filter_expression.c_str());
@@ -181,6 +183,9 @@ Aws::DynamoDB::Model::QueryRequest * CSelectHelper::query_request()
     // at least a PK check must exist, so there have to be values.
     assert(st.has_values());
     request->SetExpressionAttributeValues(st.get_values());
+
+    // for debugging, set the limit to 1
+    // request->SetLimit(1);
 
     std::string requeststr =  strip_newlines(request->SerializePayload());
     logdebug("[%s, %d] request = %s\n", __FILENAME__, __LINE__, requeststr.c_str());
@@ -207,11 +212,14 @@ Aws::DynamoDB::Model::ScanRequest * CSelectHelper::scan_request()
     if(!m_projection->empty())
         request->SetProjectionExpression(serialize_projection(&st));
 
-    request->SetReturnConsumedCapacity(m_consumed_capacity);
+    if (m_rate_limited)
+        request->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+    else
+        request->SetReturnConsumedCapacity(m_consumed_capacity);
 
-    if (m_where)
+    if (m_where_clone)
     {
-        std::string filter_expression = m_where->scan_filter_expression(&st);
+        std::string filter_expression = m_where_clone->scan_filter_expression(&st);
         if (!filter_expression.empty())
         {
             logdebug("[%s, %d] setting filter expression = %s\n", __FILENAME__, __LINE__, filter_expression.c_str());
@@ -224,6 +232,9 @@ Aws::DynamoDB::Model::ScanRequest * CSelectHelper::scan_request()
 
     if(st.has_values())
         request->SetExpressionAttributeValues(st.get_values());
+
+    // for debugging, set the limit to 1
+    // request->SetLimit(1);
 
     std::string requeststr =  strip_newlines(request->SerializePayload());
     logdebug("[%s, %d] request = %s\n", __FILENAME__, __LINE__, requeststr.c_str());
@@ -279,7 +290,7 @@ Aws::DynamoDB::Model::TransactGetItem * CSelectHelper::txget()
     if (st.has_names())
         get.SetExpressionAttributeNames(st.get_names());
 
-    get.SetKey(m_where->get_gud_key(m_pk, m_rk));
+    get.SetKey(m_where_clone->get_gud_key(m_pk, m_rk));
     rv->SetGet(get);
     return rv;
 }
@@ -294,10 +305,10 @@ Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * CSelectHelper::txwrite()
     CSymbolTable st;
 
     // in order to be tx able, this select should able to uniquely identify an item (full primary key)
-    cc.SetKey(m_where->get_gud_key(m_pk, m_rk));
+    cc.SetKey(m_where_clone->get_gud_key(m_pk, m_rk));
     cc.SetTableName(m_table_name);
 
-    filter = m_where->query_filter_expression(m_pk, m_rk, &st);
+    filter = m_where_clone->query_filter_expression(m_pk, m_rk, &st);
 
     if (filter.size() > 0)
         cc.SetConditionExpression(filter);
@@ -318,7 +329,11 @@ Aws::Vector<Aws::String> CSelectHelper::show_items(const Aws::Vector<Aws::Map<Aw
 {
     Aws::Vector<Aws::String> rv;
     for (const auto &item : items)
-        rv.push_back(show_item(item));
+    {
+        Aws::String i = show_item(item);
+        if (i != "")
+            rv.push_back(i);
+    }
 
     return rv;
 };

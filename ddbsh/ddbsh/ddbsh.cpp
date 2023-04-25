@@ -127,7 +127,7 @@ int CDDBSh::run()
         get_allocations(&allocs, &frees);
         if (allocs != frees)
         {
-            logdebug("[%s, %d] memory leak - allocations = %d, frees = %d\n",
+            logerror("[%s, %d] memory leak - allocations = %d, frees = %d\n",
                      __FILENAME__, __LINE__, allocs, frees);
             show_allocations();
             exit(1);

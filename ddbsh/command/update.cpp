@@ -26,34 +26,69 @@ int CUpdateCommand::run()
     logdebug("[%s, %d] In %s. table = %s, operation = %s\n",
              __FILENAME__, __LINE__, __FUNCTION__, m_table_name.c_str(), op.c_str());
 
-    std::string pk, rk;
-    if (get_key_schema(m_table_name, &pk, &rk) != 0)
+    std::string table_pk, table_rk;
+
+    if (get_key_schema(m_table_name, &table_pk, &table_rk) != 0)
         return -1;
 
     // can_update_item() checks to see whether a unique item is
     // identified in the where clause. This would be that a full
     // primary key is available. If yes, directly update the item.
-    if (m_where && m_where->can_update_item(pk, rk))
+    // Since it is acceptable to provide a table or index name, the
+    // check for direct update goes only against the table. Therefore
+    // we use the table pk and rk here.
+    if (m_where && m_where->can_update_item(table_pk, table_rk))
     {
         logdebug("[%s, %d] will attempt do_updateitem()\n", __FILENAME__, __LINE__);
-        return do_updateitem(pk, rk);
+        return do_updateitem(table_pk, table_rk);
     }
-    else if (m_where && m_where->can_query_table(pk, rk))
+    else if (m_index_name.length() == 0)
     {
-        // if a primary key is not identified in the where clause it
-        // means that either (a) the partition key is not available,
-        // or (b) the table has a range key which isn't listed. In
-        // either event, we first check to see whether or not we can
-        // query the table. for that, we need a primary key, and some
-        logdebug("[%s, %d] will attempt do_query()\n", __FILENAME__, __LINE__);
-        return do_query(pk, rk);
+        // the user did not provide an index. Therefore the query or
+        // scan go against the base table.
+        if (m_where && m_where->can_query_table(table_pk, table_rk))
+        {
+            // if a primary key is not identified in the where clause it
+            // means that either (a) the partition key is not available,
+            // or (b) the table has a range key which isn't listed. In
+            // either event, we first check to see whether or not we can
+            // query the table. for that, we need a primary key, and some
+            logdebug("[%s, %d] will attempt do_query()\n", __FILENAME__, __LINE__);
+            return do_query(table_pk, table_rk);
+        }
+        else
+        {
+            // if you can't even do a query, then there's no partition key
+            // and we're relegated to a scan.
+            logdebug("[%s, %d] will attempt do_scan()\n", __FILENAME__, __LINE__);
+            return do_scan(table_pk, table_rk);
+        }
     }
     else
     {
-        // if you can't even do a query, then there's no partition key
-        // and we're relegated to a scan.
-        logdebug("[%s, %d] will attempt do_scan()\n", __FILENAME__, __LINE__);
-        return do_scan(pk, rk);
+        // the user is attempting an update/upsert targeting the
+        // index. Let's see whether we can do a query against that.
+        std::string index_pk, index_rk;
+        if (get_key_schema(m_table_name, m_index_name, &index_pk, &index_rk) != 0)
+            return -1;
+
+        if (m_where && m_where->can_query_index(index_pk, index_rk))
+        {
+            // pass do_query the table pk and rk because it uses those
+            // to make the update request. Internally it invokes
+            // select helper's setup() method with table and index
+            // name so the query will be using the index if one is
+            // provided. Same for scan below.
+            logdebug("[%s, %d] will attempt do_query() against index\n", __FILENAME__, __LINE__);
+            return do_query(table_pk, table_rk);
+        }
+        else
+        {
+            // no option but scan the index. See comment above with
+            // query for why this is table_pk and rk.
+            logdebug("[%s, %d] will attempt do_scan() against index\n", __FILENAME__, __LINE__);
+            return do_scan(table_pk, table_rk);
+        }
     }
 }
 
@@ -63,6 +98,7 @@ CUpdateCommand::~CUpdateCommand()
     delete m_set;
     delete m_remove;
     delete m_where;
+    delete m_rate_limit;
 }
 
 int CUpdateCommand::do_scan(std::string pk, std::string rk)
@@ -78,7 +114,10 @@ int CUpdateCommand::do_scan(std::string pk, std::string rk)
 
     // make and execute a scan against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_where);
+
+    if (helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false))
+        return -1;
+
     Aws::DynamoDB::Model::ScanRequest * request = helper.scan_request() ;
 
     int retval = 0;
@@ -94,6 +133,9 @@ int CUpdateCommand::do_scan(std::string pk, std::string rk)
         if (sresult.IsSuccess())
         {
             const Aws::Vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> &items = sresult.GetResult().GetItems();
+
+            if (m_rate_limit)
+                m_rate_limit->consume_reads(sresult.GetResult().GetConsumedCapacity());
 
             for (const auto &item : items)
             {
@@ -123,6 +165,8 @@ int CUpdateCommand::do_scan(std::string pk, std::string rk)
             break;
 
         request->SetExclusiveStartKey(sresult.GetResult().GetLastEvaluatedKey());
+        if (m_rate_limit)
+            m_rate_limit->readlimit();
     } while(1);
 
     if (!retval && !explaining())
@@ -146,7 +190,9 @@ int CUpdateCommand::do_query(std::string pk, std::string rk)
 
     // make and execute a query against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_where);
+    if (helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false))
+        return -1;
+
     Aws::DynamoDB::Model::QueryRequest * request = helper.query_request();
 
     int retval = 0;
@@ -163,6 +209,9 @@ int CUpdateCommand::do_query(std::string pk, std::string rk)
         {
             const Aws::Vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> &items =
                 qresult.GetResult().GetItems();
+
+            if (m_rate_limit)
+                m_rate_limit->consume_reads(qresult.GetResult().GetConsumedCapacity());
 
             for (const auto &item : items)
             {
@@ -192,6 +241,9 @@ int CUpdateCommand::do_query(std::string pk, std::string rk)
             break;
 
         request->SetExclusiveStartKey(qresult.GetResult().GetLastEvaluatedKey());
+
+        if (m_rate_limit)
+            m_rate_limit->readlimit();
     } while(1);
 
     if (!retval && !explaining())
@@ -301,6 +353,9 @@ Aws::DynamoDB::Model::UpdateItemRequest * CUpdateCommand::make_update_request(st
     if (st->has_values())
         uir->SetExpressionAttributeValues(st->get_values());
 
+    if (m_rate_limit)
+        uir->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
+
     logdebug("[%s, %d] complete request is %s\n", __FILENAME__, __LINE__, strip_newlines(uir->SerializePayload()).c_str());
     return uir;
 }
@@ -320,6 +375,9 @@ int CUpdateCommand::do_update(Aws::DynamoDB::Model::UpdateItemRequest * uir,
     }
     else
     {
+        if (m_rate_limit)
+            m_rate_limit->writelimit();
+
         const Aws::DynamoDB::Model::UpdateItemOutcome& result = p_dynamoDBClient->UpdateItem(*uir);
 
         if(!result.IsSuccess())
@@ -340,6 +398,9 @@ int CUpdateCommand::do_update(Aws::DynamoDB::Model::UpdateItemRequest * uir,
         else
         {
             this->modified();
+
+            if(m_rate_limit)
+                m_rate_limit->consume_writes(result.GetResult().GetConsumedCapacity());
         }
     }
 

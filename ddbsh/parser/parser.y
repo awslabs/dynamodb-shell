@@ -85,6 +85,7 @@ int yydebug = 1;
     Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * value_list;
     Aws::Vector<CUpdateSetElement> * update_set;
     CLogicalExpression * logical_expression;
+    CRateLimit * ratelimit;
     CUpdateSetElement * update_set_element;
     CWhere * where;
     billing_mode_and_throughput_t * billing_mode_and_throughput;
@@ -177,6 +178,7 @@ int yydebug = 1;
 %token <strval> K_PROVISIONED
 %token <strval> K_QUIT
 %token <strval> K_RANGE
+%token <strval> K_RATELIMIT
 %token <strval> K_RCU
 %token <strval> K_REMOVE
 %token <strval> K_REPLACE
@@ -288,6 +290,8 @@ int yydebug = 1;
 %type <map_element_list> map_element_list
 %type <provisioned_throughput_override> optional_provisioned_throughput_override
 %type <provisioned_throughput_override> provisioned_throughput_override
+%type <ratelimit> optional_ratelimit
+%type <ratelimit> ratelimit
 %type <replica_gsi_specification> optional_replica_gsi_specification
 %type <replica_gsi_specification> replica_gsi_specification_list
 %type <replica_gsi_specification_list_entry> replica_gsi_specification_list_entry
@@ -1839,8 +1843,11 @@ exists_command: K_EXISTS select_command
 help_command: K_HELP K_SELECT ';'
 {
     printf("SELECT - Select item(s) from a table.\n\n"
-           "SELECT [CONSISTENT] attribute_list | * FROM <table>[.<index>] [WHERE where_clause] [return_clause]\n\n"
+           "SELECT [CONSISTENT] attribute_list | * FROM <table>[.<index>] [WHERE where_clause] [return_clause|ratelimit]]\n\n"
            "   return_clause := RETURN INDEXES | RETURN TOTAL\n\n"
+           "   ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |\n"
+           "                WITH RATELIMIT ( RR RCU ) |\n"
+           "                WITH RATELIMIT ( WW WCU )\n\n"
            "   where_clause := logical_element [AND|OR logical_element]\n"
            "   logical_element := [NOT] logical_expression\n"
            "   logical_element := ( logical_element )\n"
@@ -1852,23 +1859,45 @@ help_command: K_HELP K_SELECT ';'
            "   logical_element := BEGINS WITH (attribute, prefix)\n"
            "   logical_element := CONTAINS (attribute, substring)\n"
            "   logical_element := SIZE (attribute) <comparison op> NUMBER\n\n"
-           "   attribute_list - any attribute in the table, be it a scalar, boolean, null, list or map\n"
+           "   attribute_list - any attribute in the table, be it a scalar, boolean, null, list or map\n\n"
            "       NOTES: 1. The WHERE clause for a NULL field uses the SQL syntax of <field> IS [NOT] NULL\n"
            "                 The equality operator cannot be used with NULL.\n"
            "              2. To reference list elements in projection or where clause uses 0 based indexing.\n"
-           "              3. You can reference maps (dictionaries) in projection and where clause.\n");
+           "              3. You can reference maps (dictionaries) in projection and where clause.\n"
+           "              4. You can rate limit a select by specifying the optional ratelimit parameter.\n"
+           "              5. You cannot specify both a rate limit and a return clause.\n\n");
     $$ = NULL;
 };
 
-select_command: K_SELECT optional_consistent select_projection K_FROM table_optional_index_name optional_where_clause
-                optional_return_clause ';'
+select_command: K_SELECT optional_consistent select_projection K_FROM table_optional_index_name
+                optional_where_clause optional_return_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] select_command: K_SELECT optional_consistent attribute_list_or_wildcard K_FROM table_optional_index_name "
-             "optional_where_clause optional_return_clause ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] select_command: K_SELECT optional_consistent attribute_list_or_wildcard "
+             "K_FROM table_optional_index_name optional_where_clause optional_return_clause "
+             "optional_ratelimit ';'\n", __FILENAME__, __LINE__);
 
-    CSelectCommand * ns = NEW CSelectCommand($2, $3, $5, $6, $7);
-
-    $$ = ns;
+    if ($8 != NULL && $7 != Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE)
+    {
+        logerror("You cannot specify both a ratelimit and a return_clause.\n");
+        delete $3;
+        delete $5;
+        delete $6;
+        delete $8;
+        $$ = NULL;
+    }
+    else
+    {
+        CSelectCommand * ns = NEW CSelectCommand();
+        if (!ns->setup($8, $2, $3, $5, $6, $7))
+        {
+            delete ns;
+            $$ = NULL;
+        }
+        else
+        {
+            $$ = ns;
+        }
+    }
 };
 
 optional_consistent: K_CONSISTENT
@@ -2265,15 +2294,19 @@ optional_return_clause: K_RETURN K_INDEXES
 
 help_command: K_HELP K_INSERT ';'
 {
-    printf("INSERT INTO <table> ( column_list ) VALUES (values) [, ...]\n");
+    printf("INSERT INTO <table> ( column_list ) VALUES (values) [, ...] [ratelimit]\n"
+           "ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |\n"
+           "             WITH RATELIMIT ( RR RCU ) |\n"
+           "             WITH RATELIMIT ( WW WCU )\n\n");
     $$ = NULL;
 };
 
-insert_command: K_INSERT K_INTO table_name '(' insert_column_list ')' K_VALUES value_list ';'
+insert_command: K_INSERT K_INTO table_name '(' insert_column_list ')' K_VALUES value_list optional_ratelimit ';'
 {
-    logdebug("[%s, %d] insert_command: K_INSERT K_INTO table_name '(' insert_column_list ')' K_VALUES value_list ';'\n",
+    logdebug("[%s, %d] insert_command: K_INSERT K_INTO table_name '(' insert_column_list ')' \n"
+             "K_VALUES value_list optional_ratelimit';'\n",
              __FILENAME__, __LINE__);
-    CInsertCommand * ic = NEW CInsertCommand($3, $5, $8, true);
+    CInsertCommand * ic = NEW CInsertCommand($3, $5, $8, true, $9);
 
     FREE($3);
 
@@ -2282,7 +2315,8 @@ insert_command: K_INSERT K_INTO table_name '(' insert_column_list ')' K_VALUES v
 
 value_list: '(' insert_values ')'
 {
-    Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * rv = NEW Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>>;
+    Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * rv =
+        NEW Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>>;
     rv->push_back(*$2);
     delete $2;
     $$ = rv;
@@ -2296,15 +2330,19 @@ value_list: '(' insert_values ')'
 help_command: K_HELP K_REPLACE ';'
 {
     printf("REPLACE - Replace items in a table\n\n"
-           "   REPLACE INTO <table> ( column [, column ...] ) VALUES ( values )\n\n");
+           "REPLACE INTO <table> ( column [, column ...] ) VALUES ( values ) [ratelimit]\n"
+           "ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |\n"
+           "             WITH RATELIMIT ( RR RCU ) |\n"
+           "             WITH RATELIMIT ( WW WCU )\n\n");
+
     $$ = NULL;
 };
 
-replace_command: K_REPLACE K_INTO table_name '(' insert_column_list ')' K_VALUES value_list ';'
+replace_command: K_REPLACE K_INTO table_name '(' insert_column_list ')' K_VALUES value_list optional_ratelimit ';'
 {
     logdebug("[%s, %d] replace_command: K_REPLACE K_INTO table_name '(' insert_column_list ')' K_VALUES value_list ';'\n",
              __FILENAME__, __LINE__);
-    CInsertCommand * ic = NEW CInsertCommand($3, $5, $8, false);
+    CInsertCommand * ic = NEW CInsertCommand($3, $5, $8, false, $9);
 
     FREE($3);
 
@@ -2435,48 +2473,59 @@ insert_value: T_WHOLE_NUMBER
 help_command: K_HELP K_UPDATE ';'
 {
     printf("UPDATE - Update items in a table\n\n"
-           "   UPDATE <name> SET <update_set> [where clause]\n\n"
-           "   UPDATE <name> REMOVE <remove list> [where clause]\n\n");
+           "   UPDATE <name> SET <update_set> [where clause] [ratelimit] \n\n"
+           "   UPDATE <name> REMOVE <remove list> [where clause] [ratelimit] \n\n"
+           "ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |\n"
+           "             WITH RATELIMIT ( RR RCU ) |\n"
+           "             WITH RATELIMIT ( WW WCU )\n\n");
     $$ = NULL;
 };
 
-update_command: K_UPDATE table_name K_SET update_set optional_where_clause ';'
+update_command: K_UPDATE table_optional_index_name K_SET update_set optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_UPDATE table_name K_SET update_set_list optional_where_clause ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] K_UPDATE table_optional_index_name K_SET update_set_list optional_where_clause optional_ratelimit ';'\n",
+             __FILENAME__, __LINE__);
     CUpdateCommand * uc = NEW CUpdateCommand;
 
-    uc->set($2, $4, $5);
+    uc->set($2, $4, $5, $6);
+    delete $2;
 
-    FREE($2);
     $$ = uc;
-} | K_UPDATE table_name K_REMOVE update_remove_list optional_where_clause ';'
+} | K_UPDATE table_optional_index_name K_REMOVE update_remove_list optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_UPDATE table_name K_REMOVE update_remove_list optional_where_clause ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] K_UPDATE table_optional_index_name K_REMOVE update_remove_list "
+             "optional_where_clause optional_ratelimit';'\n", __FILENAME__, __LINE__);
     CUpdateCommand * uc = NEW CUpdateCommand;
 
-    uc->remove($2, $4, $5);
+    uc->remove($2, $4, $5, $6);
+    delete $2;
 
-    FREE($2);
     $$ = uc;
 };
 
 help_command: K_HELP K_UPSERT ';'
 {
     printf("UPSERT - Upsert items in a table\n\n"
-           "   UPSERT <name> SET <upsert_set> [where clause]\n\n");
+           "   UPSERT <name> SET <upsert_set> [where clause] [ratelimit]\n\n"
+           "ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |\n"
+           "             WITH RATELIMIT ( RR RCU ) |\n"
+           "             WITH RATELIMIT ( WW WCU )\n\n");
+
     $$ = NULL;
 };
 
-upsert_command: K_UPSERT table_name K_SET update_set optional_where_clause ';'
+upsert_command: K_UPSERT table_optional_index_name K_SET update_set optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_UPDATE table_name K_SET update_set_list optional_where_clause ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] K_UPDATE table_optional_index_name K_SET update_set_list optional_where_clause optional_ratelimit ';'\n",
+             __FILENAME__, __LINE__);
 
     CUpdateCommand * uc = NEW CUpdateCommand;
 
-    uc->set($2, $4, $5);
+    uc->set($2, $4, $5, $6);
     uc->set_upsert();
 
-    FREE($2);
+    delete $2;
+
     $$ = uc;
 };
 
@@ -2592,18 +2641,65 @@ use_lhs: T_UNQUOTED_STRING
 help_command: K_HELP K_DELETE ';'
 {
     printf("DELETE - Delete items from a table\n\n"
-           "   DELETE FROM <table> [where clause]\n\n");
+           "   DELETE [ratelimit] FROM <table> [where clause]\n\n"
+           "ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |\n"
+           "             WITH RATELIMIT ( RR RCU ) |\n"
+           "             WITH RATELIMIT ( WW WCU )\n\n");
+
     $$ = NULL;
 };
 
-delete_command: K_DELETE K_FROM table_name optional_where_clause ';'
+delete_command: K_DELETE K_FROM table_optional_index_name optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_DELETE K_FROM table_name optional_where_clause ';'\n", __FILENAME__, __LINE__);
-    CDeleteCommand * dc = NEW CDeleteCommand($3, $4);
+    logdebug("[%s, %d] K_DELETE K_FROM table_optional_index_name optional_where_clause optional_ratelimit ';'\n",
+             __FILENAME__, __LINE__);
+    CDeleteCommand * dc = NEW CDeleteCommand($3, $4, $5);
 
-    FREE($3);
+    delete $3;
     $$ = dc;
 }
+
+ratelimit: K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+{
+    logdebug("[%s, %d] ratelimit: K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'\n",
+             __FILENAME__, __LINE__);
+    CRateLimit * rl = NEW CRateLimit(atof($4), atof($7));
+    FREE($4);
+    FREE($7);
+    $$ = rl;
+} | K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+{
+    logdebug("[%s, %d] ratelimit: K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'\n",
+             __FILENAME__, __LINE__);
+    CRateLimit * rl = NEW CRateLimit(atof($7), atof($4));
+    FREE($4);
+    FREE($7);
+    $$ = rl;
+} | K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_RCU ')'
+{
+    logdebug("[%s, %d] ratelimit: K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_RCU ')'\n",
+             __FILENAME__, __LINE__);
+    CRateLimit * rl = NEW CRateLimit(atof($5), 0);
+    FREE($5);
+    $$ = rl;
+} | K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_WCU ')'
+{
+    logdebug("[%s, %d] ratelimit: K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_WCU ')'\n",
+             __FILENAME__, __LINE__);
+    CRateLimit * rl = NEW CRateLimit(0, atof($5));
+    FREE($5);
+    $$ = rl;
+};
+
+optional_ratelimit: ratelimit
+{
+    logdebug("[%s, %d] optional_ratelimit: ratelimit\n", __FILENAME__, __LINE__);
+    $$ = $1;
+} |
+{
+    logdebug("[%s, %d] optional_ratelimit: <nothing>\n", __FILENAME__, __LINE__);
+    $$ = NULL;
+};
 
 %%
 
