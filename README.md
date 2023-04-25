@@ -1646,10 +1646,28 @@ Rate limiting works by performing read and write operations, and looking at the 
 So, assume that this query is issued:
 
 ``` SQL
-us-east-1> update customers set state = "CA" where state = "90210" with ratelimit ( 100 rcu, 500 wcu );
+us-east-1> update customers set state = "CA" where zip = "90210" with ratelimit ( 100 rcu, 500 wcu );
 ```
 
 Reads against the customers table are issued at a read limit of up to 100 RCU/s and updates are done at a limit of up to 500 WCU/s. Assume that the Scan() on the customers table is attempted when there are 2 tokens in the read bucket, and the Scan() consumes 60 RCU. The read token bucket now goes to -58 and it will take about 0.6s before it has a positive number of tokens. Within 0.6s, any attempt to read will block. This same mechanism is also applied to writes. For long running operations, we ensure that neither token bucket accumulates more than one second's credit of tokens.
+
+Finally, if a table (customers) has a GSI on the column `zip` called `zipgsi`.
+
+The query
+
+``` SQL
+update customers set state = "CA" where zip = "90210"
+```
+
+would result in a table scan on the table customers.
+
+However, the query
+
+``` SQL
+update customers.zipgsi set state = "CA" where zip = "90210"
+```
+
+would be processed as a query on the GSI and an update to the table. Performing an update/delete/upsert in this way reduces the cost by leveraging an index where available.
 
 # Contributing
 
