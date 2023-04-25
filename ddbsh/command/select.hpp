@@ -26,12 +26,19 @@ namespace ddbsh
     class CSelectCommand : public CCommand
     {
     public:
-        CSelectCommand(CRateLimit * ratelimit, bool consistent, Aws::Vector<Aws::String> * projection,
-                       Aws::Vector<Aws::String> * table, CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns) {
-            m_exists = false;
-            m_helper.setup(consistent, projection, table, where, returns, ratelimit ? true : false);
+        bool setup (CRateLimit * ratelimit, bool consistent, Aws::Vector<Aws::String> * projection,
+                    Aws::Vector<Aws::String> * table, CWhere * where, Aws::DynamoDB::Model::ReturnConsumedCapacity returns) {
             m_ratelimit = ratelimit;
             m_returns = returns;
+            if (m_helper.setup(consistent, projection, table, where, returns, ratelimit ? true : false))
+                return false;
+
+            return true;
+        };
+
+        CSelectCommand() {
+            m_exists = false;
+            m_ratelimit = NULL;
         };
 
         ~CSelectCommand() {

@@ -84,7 +84,8 @@ int get_key_schema(std::string table,
 
             for (int ix = 0; ix < gsis.size(); ix ++)
             {
-                logdebug("[%s, %d] looking at GSI %s.%s\n", __FILENAME__, __LINE__, table.c_str(), gsis[ix].GetIndexName().c_str());
+                logdebug("[%s, %d] looking at GSI %s.%s\n",
+                         __FILENAME__, __LINE__, table.c_str(), gsis[ix].GetIndexName().c_str());
                 if (gsis[ix].GetIndexName() == index)
                 {
                     logdebug("[%s, %d] Found index %s.%s\n", __FILENAME__, __LINE__, table.c_str(), index.c_str());
@@ -92,6 +93,12 @@ int get_key_schema(std::string table,
                     if (load_key_schema(ks, pk, rk))
                         return -1;
                 }
+            }
+
+            if (pk->empty())
+            {
+                logerror("Unable to find primary key for %s.%s\n", table.c_str(), index.c_str());
+                return -1;
             }
         }
     }

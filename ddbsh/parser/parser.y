@@ -1887,8 +1887,16 @@ select_command: K_SELECT optional_consistent select_projection K_FROM table_opti
     }
     else
     {
-        CSelectCommand * ns = NEW CSelectCommand($8, $2, $3, $5, $6, $7);
-        $$ = ns;
+        CSelectCommand * ns = NEW CSelectCommand();
+        if (!ns->setup($8, $2, $3, $5, $6, $7))
+        {
+            delete ns;
+            $$ = NULL;
+        }
+        else
+        {
+            $$ = ns;
+        }
     }
 };
 
