@@ -90,7 +90,9 @@ int CDeleteCommand::do_scan(std::string pk, std::string rk)
 
     // make and execute a scan against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false);
+    if (helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false))
+        return -1;
+
     Aws::DynamoDB::Model::ScanRequest * request = helper.scan_request();
 
     if (explaining())
@@ -166,7 +168,9 @@ int CDeleteCommand::do_query(std::string pk, std::string rk)
 
     // make and execute a query against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false);
+    if (helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false))
+        return -1;
+
     Aws::DynamoDB::Model::QueryRequest * request = helper.query_request();
 
     int retval = 0;
