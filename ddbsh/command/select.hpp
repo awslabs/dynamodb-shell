@@ -40,6 +40,7 @@ namespace ddbsh
         CSelectCommand() {
             m_exists = false;
             m_ratelimit = NULL;
+            m_where = NULL;
         };
 
         ~CSelectCommand() {
