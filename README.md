@@ -1656,7 +1656,24 @@ Finally, if a table (customers) has a GSI on the column `zip` called `zipgsi`.
 The query
 
 ``` SQL
-update customers set state = "CA" where zip = "90210"
+us-east-1> explain update customers set state = "CA" where zip = "90210" with ratelimit (10 rcu, 20 wcu);
+Scan({
+   "TableName":   "customers",
+   "ReturnConsumedCapacity":   "TOTAL",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "#abaa2 = :vbaa1",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "custid",
+      "#abaa2":   "zip"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "S":   "90210"
+      }
+   },
+   "ConsistentRead":   false
+})
+[...]
 ```
 
 would result in a table scan on the table customers.
@@ -1664,7 +1681,25 @@ would result in a table scan on the table customers.
 However, the query
 
 ``` SQL
-update customers.zipgsi set state = "CA" where zip = "90210"
+us-east-1> explain update customers.zipgsi set state = "CA" where zip = "90210" with ratelimit (10 rcu, 20 wcu);
+Query({
+   "TableName":   "customers",
+   "IndexName":   "zipgsi",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "TOTAL",
+   "ProjectionExpression":   "#adaa1",
+   "KeyConditionExpression":   "#adaa2 = :vdaa1",
+   "ExpressionAttributeNames":   {
+      "#adaa1":   "custid",
+      "#adaa2":   "zip"
+   },
+   "ExpressionAttributeValues":   {
+      ":vdaa1":   {
+         "S":   "90210"
+      }
+   }
+})
+[...]
 ```
 
 would be processed as a query on the GSI and an update to the table. Performing an update/delete/upsert in this way reduces the cost by leveraging an index where available.
