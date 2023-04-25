@@ -2473,23 +2473,25 @@ help_command: K_HELP K_UPDATE ';'
     $$ = NULL;
 };
 
-update_command: K_UPDATE table_name K_SET update_set optional_where_clause optional_ratelimit ';'
+update_command: K_UPDATE table_optional_index_name K_SET update_set optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_UPDATE table_name K_SET update_set_list optional_where_clause ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] K_UPDATE table_optional_index_name K_SET update_set_list optional_where_clause optional_ratelimit ';'\n",
+             __FILENAME__, __LINE__);
     CUpdateCommand * uc = NEW CUpdateCommand;
 
     uc->set($2, $4, $5, $6);
+    delete $2;
 
-    FREE($2);
     $$ = uc;
-} | K_UPDATE table_name K_REMOVE update_remove_list optional_where_clause optional_ratelimit ';'
+} | K_UPDATE table_optional_index_name K_REMOVE update_remove_list optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_UPDATE table_name K_REMOVE update_remove_list optional_where_clause ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] K_UPDATE table_optional_index_name K_REMOVE update_remove_list "
+             "optional_where_clause optional_ratelimit';'\n", __FILENAME__, __LINE__);
     CUpdateCommand * uc = NEW CUpdateCommand;
 
     uc->remove($2, $4, $5, $6);
+    delete $2;
 
-    FREE($2);
     $$ = uc;
 };
 
@@ -2504,9 +2506,9 @@ help_command: K_HELP K_UPSERT ';'
     $$ = NULL;
 };
 
-upsert_command: K_UPSERT table_name K_SET update_set optional_where_clause optional_ratelimit ';'
+upsert_command: K_UPSERT table_optional_index_name K_SET update_set optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_UPDATE table_name K_SET update_set_list optional_where_clause optional_ratelimit ';'\n",
+    logdebug("[%s, %d] K_UPDATE table_optional_index_name K_SET update_set_list optional_where_clause optional_ratelimit ';'\n",
              __FILENAME__, __LINE__);
 
     CUpdateCommand * uc = NEW CUpdateCommand;
@@ -2514,7 +2516,8 @@ upsert_command: K_UPSERT table_name K_SET update_set optional_where_clause optio
     uc->set($2, $4, $5, $6);
     uc->set_upsert();
 
-    FREE($2);
+    delete $2;
+
     $$ = uc;
 };
 
@@ -2638,12 +2641,13 @@ help_command: K_HELP K_DELETE ';'
     $$ = NULL;
 };
 
-delete_command: K_DELETE K_FROM table_name optional_where_clause optional_ratelimit ';'
+delete_command: K_DELETE K_FROM table_optional_index_name optional_where_clause optional_ratelimit ';'
 {
-    logdebug("[%s, %d] K_DELETE K_FROM table_name optional_where_clause optional_ratelimit ';'\n", __FILENAME__, __LINE__);
+    logdebug("[%s, %d] K_DELETE K_FROM table_optional_index_name optional_where_clause optional_ratelimit ';'\n",
+             __FILENAME__, __LINE__);
     CDeleteCommand * dc = NEW CDeleteCommand($3, $4, $5);
 
-    FREE($3);
+    delete $3;
     $$ = dc;
 }
 

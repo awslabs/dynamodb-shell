@@ -1015,7 +1015,7 @@ Some sample data is loaded into this table.
 
 **Purpose:** Delete data from a table.
 
-**Syntax:** DELETE FROM *table* \[WHERE *condition*\] [ratelimit]
+**Syntax:** DELETE FROM *table_or_index* \[WHERE *condition*\] [ratelimit]
 
 Deletes data from a table. When a WHERE clause is provided, items matching the condition are identified and deleted. If no WHERE clause is provided, all items are deleted.
 
@@ -1023,7 +1023,7 @@ DynamoDB only supports item at a time deletes (or batches which delete batches o
 
 In standard SQL, a DELETE statement is an implicit transaction. In ddbsh, DELETE is NOT an implicit transaction. Each item is deleted individually. It is possible that an item is updated in the time between the SELECT and the subsequent DELETE. The item is only deleted if it matches the delete condition at the time when the DeleteItem() API is executed.
 
-For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting). You can specify either a table or an index name in the UPDATE. If this is the update of a single item based on the PK and FK of the table, specifying an index name is immaterial. If a direct update of an item in the table based on a PK/FK is not possible, an index name will cause the query or scan to be performed on the index.
 
 **Example: 1**
 
@@ -1259,11 +1259,12 @@ SELECT will execute either a GetItem(), Query() or Scan() depending on whether t
 
 **Purpose:** Update items in a table.
 
-**Syntax:** UPDATE *table* SET *assignments* \[WHERE *condition*\] [ratelimit]
+**Syntax:** UPDATE *table_or_index* SET *assignments* \[WHERE *condition*\] [ratelimit]
+
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting). You can specify either a table or an index name in the UPDATE. If this is the update of a single item based on the PK and FK of the table, specifying an index name is immaterial. If a direct update of an item in the table based on a PK/FK is not possible, an index name will cause the query or scan to be performed on the index.
 
 Updates items in the table with assignments as specified. The assignments can be of the form:
 
-For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
 ```
 <column> = <value>
@@ -1313,11 +1314,11 @@ us-east-1>
 
 **Purpose:** Performs an UPDATE or INSERT
 
-**Syntax:** UPSERT *table* SET *assignments* \[WHERE *condition*\] [ratelimit]
+**Syntax:** UPSERT *table_or_index* SET *assignments* \[WHERE *condition*\] [ratelimit]
 
 If an item is matched by the WHERE clause, it is updated. If one does not match the where clause then the *assignments* are converted are used to construct a new item.
 
-For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
+For information about rate limiting see the section on [rate limiting](#Rate-Limiting). You can specify either a table or an index name in the UPSERT. If this is the update of a single item based on the PK and FK of the table, specifying an index name is immaterial. If a direct update of an item in the table based on a PK/FK is not possible, an index name will cause the query or scan to be performed on the index.
 
 **Example: 1**
 

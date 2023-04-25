@@ -68,6 +68,8 @@ int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection,
 
     logdebug("[%s, %d] consistent = %s\n", __FILENAME__, __LINE__,  m_consistent ? "True" : "False");
     logdebug("[%s, %d] projection = %s\n", __FILENAME__, __LINE__, p.empty() ? "*" : p.c_str());
+    logdebug("[%s, %d] m_pk = %s\n", __FILENAME__, __LINE__, m_pk.c_str());
+    logdebug("[%s, %d] m_pk = %s\n", __FILENAME__, __LINE__, m_rk.empty() ? "" : m_rk.c_str());
     logdebug("[%s, %d] table = %s, index = %s\n", __FILENAME__, __LINE__, m_table_name.c_str(),
              m_index_name.empty() ? "NONE" : m_index_name.c_str());
     logdebug("[%s, %d] where = %s\n", __FILENAME__, __LINE__, m_where ? m_where->serialize(NULL).c_str() : "");
@@ -77,16 +79,19 @@ int CSelectHelper::setup(bool consistent, Aws::Vector<Aws::String> * projection,
     return 0;
 }
 
-int CSelectHelper::setup(std::string table, CWhere * where, bool ratelimit)
+int CSelectHelper::setup(std::string table, std::string index, CWhere * where, bool ratelimit)
 {
     logdebug("[%s, %d] In %s.\n", __FILENAME__, __LINE__, __FUNCTION__);
 
     m_consistent = false;
     m_table_name = table;
+    m_index_name = index;
     m_where = where;
     m_consumed_capacity = Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE;
     m_rate_limited = ratelimit;
 
+    // get the key schema of the table because these are the
+    // attributes you will project.
     if (get_key_schema(m_table_name, &m_pk, &m_rk) != 0)
         return -1;
 
@@ -100,9 +105,13 @@ int CSelectHelper::setup(std::string table, CWhere * where, bool ratelimit)
 
     std::string p = serialize_projection();
 
+    if (get_key_schema(m_table_name, m_index_name, &m_pk, &m_rk) != 0)
+        return -1;
+
     logdebug("[%s, %d] consistent = %s\n", __FILENAME__, __LINE__,  m_consistent ? "True" : "False");
     logdebug("[%s, %d] projection = %s\n", __FILENAME__, __LINE__, p.empty() ? "*" : p.c_str());
     logdebug("[%s, %d] table = %s\n", __FILENAME__, __LINE__, m_table_name.c_str());
+    logdebug("[%s, %d] index = %s\n", __FILENAME__, __LINE__, m_index_name.c_str());
     logdebug("[%s, %d] where = %s\n", __FILENAME__, __LINE__, m_where ? m_where->serialize(NULL).c_str() : "");
     logdebug("[%s, %d] consumed capacity = %s\n", __FILENAME__, __LINE__,
              Aws::DynamoDB::Model::ReturnConsumedCapacityMapper::GetNameForReturnConsumedCapacity(m_consumed_capacity).c_str());

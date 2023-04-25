@@ -24,25 +24,49 @@ int CDeleteCommand::run()
 {
     logdebug("[%s, %d] In %s. table = %s.\n", __FILENAME__, __LINE__, __FUNCTION__, m_table_name.c_str());
 
-    std::string pk, rk;
-    if (get_key_schema(m_table_name, &pk, &rk) != 0)
+    std::string table_pk, table_rk;
+    if (get_key_schema(m_table_name, &table_pk, &table_rk) != 0)
         return -1;
 
     // for a description of the code here, refer to the parallel code
     // in update.cpp
-    if (m_where && m_where->can_delete_item(pk, rk))
+    if (m_where && m_where->can_delete_item(table_pk, table_rk))
     {
         logdebug("[%s, %d] will attempt do_getitem()\n", __FILENAME__, __LINE__);
-        return do_deleteitem(pk, rk);
+        return do_deleteitem(table_pk, table_rk);
     }
-    else if (m_where && m_where->can_query_table(pk, rk))
+    else if (m_index_name.length() == 0)
     {
-        logdebug("[%s, %d] will attempt do_query()\n", __FILENAME__, __LINE__);
-        return do_query(pk, rk);
+        if (m_where && m_where->can_query_table(table_pk, table_rk))
+        {
+            logdebug("[%s, %d] will attempt do_query()\n", __FILENAME__, __LINE__);
+            return do_query(table_pk, table_rk);
+        }
+        else
+        {
+            return do_scan(table_pk, table_rk);
+        }
     }
     else
     {
-        return do_scan(pk, rk);
+        // the user is attempting an update/upsert targeting the
+        // index. Let's see whether we can do a query against that.
+        std::string index_pk, index_rk;
+
+        if (get_key_schema(m_table_name, m_index_name, &index_pk, &index_rk) != 0)
+            return -1;
+
+        if (m_where && m_where->can_query_index(index_pk, index_rk))
+        {
+            logdebug("[%s, %d] will attempt do_query() against index\n", __FILENAME__, __LINE__);
+            return do_query(table_pk, table_rk);
+        }
+        else
+        {
+            logdebug("[%s, %d] will attempt do_scan() against index\n", __FILENAME__, __LINE__);
+            return do_scan(table_pk, table_rk);
+        }
+
     }
 }
 
@@ -66,7 +90,7 @@ int CDeleteCommand::do_scan(std::string pk, std::string rk)
 
     // make and execute a scan against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_where, m_rate_limit ? true : false);
+    helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false);
     Aws::DynamoDB::Model::ScanRequest * request = helper.scan_request();
 
     if (explaining())
@@ -142,7 +166,7 @@ int CDeleteCommand::do_query(std::string pk, std::string rk)
 
     // make and execute a query against the table.
     CSelectHelper helper;
-    helper.setup(m_table_name, m_where, m_rate_limit ? true : false);
+    helper.setup(m_table_name, m_index_name, m_where, m_rate_limit ? true : false);
     Aws::DynamoDB::Model::QueryRequest * request = helper.query_request();
 
     int retval = 0;

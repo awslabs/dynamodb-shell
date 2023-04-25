@@ -54,7 +54,7 @@ namespace ddbsh
 
         // the quick and dirty, needed by update and delete
 
-        int setup(std::string table, CWhere * where, bool ratelimit);
+        int setup(std::string table, std::string index, CWhere * where, bool ratelimit);
 
         static Aws::Vector<std::string> show_items(const Aws::Vector<Aws::Map<Aws::String,
                                                    Aws::DynamoDB::Model::AttributeValue>>& items);

@@ -34,15 +34,21 @@ namespace ddbsh
         int run();
         ~CUpdateCommand();
 
-        void set(std::string table, Aws::Vector<CUpdateSetElement> * s, CWhere * where, CRateLimit * ratelimit) {
-            m_table_name = table;
+        void set(Aws::Vector<Aws::String> * table, Aws::Vector<CUpdateSetElement> * s, CWhere * where, CRateLimit * ratelimit) {
+            m_table_name = (*table)[0];
+            if (table->size() > 1)
+                m_index_name = (*table)[1];
+
             m_set = s;
             m_where = where;
             m_rate_limit = ratelimit;
         };
 
-        void remove(std::string table, Aws::Vector<Aws::String> * r, CWhere * where, CRateLimit * ratelimit) {
-            m_table_name = table;
+        void remove(Aws::Vector<Aws::String> * table, Aws::Vector<Aws::String> * r, CWhere * where, CRateLimit * ratelimit) {
+            m_table_name = (*table)[0];
+            if (table->size() > 1)
+                m_index_name = (*table)[1];
+
             m_remove = r;
             m_where = where;
             m_rate_limit = ratelimit;
@@ -57,6 +63,7 @@ namespace ddbsh
 
     private:
         std::string m_table_name;
+        std::string m_index_name;
         CWhere * m_where;
         Aws::Vector<CUpdateSetElement> * m_set;
         Aws::Vector<Aws::String> * m_remove;
@@ -70,8 +77,6 @@ namespace ddbsh
 
         int do_update(Aws::DynamoDB::Model::UpdateItemRequest * uir,
                       Aws::Map< Aws::String, Aws::DynamoDB::Model::AttributeValue> key);
-
-
     };
 }
 #endif

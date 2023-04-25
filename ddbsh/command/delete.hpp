@@ -22,10 +22,13 @@ namespace ddbsh
     class CDeleteCommand: public CUpdateDeleteCommand
     {
     public:
-        CDeleteCommand(std::string table, CWhere * where, CRateLimit * ratelimit){
+        CDeleteCommand(Aws::Vector<Aws::String> * table, CWhere * where, CRateLimit * ratelimit){
             logdebug("[%s, %d] In %s. setting m_delete to true.\n", __FILENAME__, __LINE__, __FUNCTION__);
+            m_table_name = (*table)[0];
+            if (table->size() > 1)
+                m_index_name = (*table)[1];
+
             m_where = where;
-            m_table_name = table;
             m_rate_limit = ratelimit;
         };
 
@@ -36,6 +39,7 @@ namespace ddbsh
 
     private:
         std::string m_table_name;
+        std::string m_index_name;
         CWhere * m_where;
         CRateLimit * m_rate_limit;
 
