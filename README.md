@@ -18,6 +18,15 @@ It is strongly advised that you understand what ddbsh is doing, and experiment w
 
 # Installation
 
+## Installing on Mac via Homebrew
+
+On a macintosh, you can install DynamoDB shell from homebrew with the following two commands.
+
+``` bash
+brew tap aws/tap
+brew install aws-ddbsh
+```
+
 ## Download the software
 
 Clone the source code repository from github.
