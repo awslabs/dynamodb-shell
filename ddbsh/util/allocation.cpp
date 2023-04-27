@@ -221,22 +221,22 @@ void show_allocations (void)
     logerror ( "------------------------------------------------------------\n");
 }
 
-void * operator new(size_t size, const char * file, int line) throw(std::bad_alloc)
+void * operator new(size_t size, const char * file, int line) noexcept(false)
 {
     return intercept_malloc(file, line, size);
 }
 
-void * operator new[](size_t size, const char * file, int line) throw(std::bad_alloc)
+void * operator new[](size_t size, const char * file, int line) noexcept(false)
 {
     return intercept_malloc(file, line, size);
 }
 
-void operator delete(void * ptr) throw()
+void operator delete(void * ptr) noexcept
 {
     intercept_free(NULL, 0, ptr);
 }
 
-void operator delete[](void * ptr) throw()
+void operator delete[](void * ptr) noexcept
 {
     intercept_free(NULL, 0, ptr);
 }

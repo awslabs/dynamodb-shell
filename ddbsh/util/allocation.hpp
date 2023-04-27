@@ -32,10 +32,10 @@ void   intercept_free(const char *, int, void *);
 void show_allocations (void);
 void get_allocations(int * a, int * b);
 
-void * operator new(size_t size, const char *, int) throw (std::bad_alloc);
-void * operator new[](size_t size, const char *, int) throw (std::bad_alloc);
-void   operator delete(void *) throw ();
-void   operator delete[](void *) throw();
+void * operator new(size_t size, const char *, int) noexcept(false);
+void * operator new[](size_t size, const char *, int) noexcept(false);
+void   operator delete(void *) noexcept;
+void   operator delete[](void *) noexcept;
 
 #define NEW     new(__FILE__, __LINE__)
 

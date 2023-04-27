@@ -9,6 +9,7 @@
  * Amrith - 2022-08-12
  */
 
+#include <unistd.h>
 #include "table_exists.hpp"
 #include "logging.hpp"
 
@@ -82,24 +83,29 @@ bool table_active(std::string name, Aws::DynamoDB::DynamoDBClient * pClient)
 
 }
 
-void wait_for_table_active(std::string name, Aws::DynamoDB::DynamoDBClient * pClient)
+static void wait_for_table(std::string name, Aws::DynamoDB::DynamoDBClient * pClient,
+                    bool (*func) (std::string name, Aws::DynamoDB::DynamoDBClient * pClient))
+
 {
-    int ms = 100;
+    int us = 100000;
     do
     {
-        std::this_thread::sleep_for( std::chrono::milliseconds(ms));
-        if (ms < 2000)
-            ms *= 2;
-    } while (!table_active(name, pClient));
+        usleep(us);
+        if (us < 2000000)
+            us *= 2;
+
+        logdebug("[%s, %d] wait_for_table ...\n", __FILENAME__, __LINE__);
+    } while (!(*func)(name, pClient));
+
+    logdebug("[%s, %d] done wait_for_table ...\n", __FILENAME__, __LINE__);
+}
+
+void wait_for_table_active(std::string name, Aws::DynamoDB::DynamoDBClient * pClient)
+{
+    wait_for_table(name, pClient, table_active);
 }
 
 void wait_for_table_gone(std::string name, Aws::DynamoDB::DynamoDBClient * pClient)
 {
-    int ms = 100;
-    do
-    {
-        std::this_thread::sleep_for( std::chrono::milliseconds(ms));
-        if (ms < 2000)
-            ms *= 2;
-    } while (table_exists(name, pClient));
+    wait_for_table(name, pClient, table_exists);
 }
