@@ -1,0 +1,43 @@
+name: Build DynamoDB Shell
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake
+
+      - name: Install AWS SDK for C++
+        run: |
+          git clone --recurse-submodules https://github.com/aws/aws-sdk-cpp.git
+          cd aws-sdk-cpp
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF
+          make && sudo make install
+
+      - name: Build binaries
+        run: |
+          mkdir build
+          cd build
+          cmake ../ddbsh/
+          make
+
+      - name: Upload binaries as artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: binaries-linux
+          path: |
+                build/ddbsh
+                build/ddbshtest
+
