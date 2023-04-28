@@ -18,7 +18,9 @@ It is strongly advised that you understand what ddbsh is doing, and experiment w
 
 # Installation
 
-## Installing on Mac via Homebrew
+## Using pre-built binaries
+
+### Installing on Mac via Homebrew
 
 On a macintosh, you can install DynamoDB shell from homebrew with the following two commands.
 
@@ -27,15 +29,33 @@ brew tap aws/tap
 brew install aws-ddbsh
 ```
 
-## Download the software
+You need to create the AWS credentials and configuration files. For instructions [read this](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html).
+
+### Installing on ubuntu
+
+Binaries for ubuntu-latest are built by github. To find the latest binaries navigate to [Actions](https://github.com/awslabs/dynamodb-shell/actions) and find the latest run of the "Build DynamoDB Shell" action. When you click on that link, you fill find (at the very bottom) a section of Artifacts. There you will find a file with binaries that you can run on an ubuntu machine.
+
+``` bash
+$ unzip binaries-linux.zip
+Archive:  binaries-linux.zip
+  inflating: ddbsh
+  inflating: ddbshtest
+$
+```
+
+You need to create the AWS credentials and configuration files. For instructions [read this](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html).
+
+## Building the software
+
+### Download the software
 
 Clone the source code repository from github.
 
 $ git clone https://github.com/awslabs/dynamodb-shell.git
 
-## Build the software
+### Build the software
 
-### Pre-requisites
+#### Pre-requisites
 
 1. You need to get cmake version >= 3.21
 
@@ -43,17 +63,17 @@ $ git clone https://github.com/awslabs/dynamodb-shell.git
 
 3. You need the AWS SDK installed
 
-### Building on Ubuntu
+#### Building on Ubuntu
 
 To get the latest version of cmake, follow instructions on kitware's website, or in [this](https://askubuntu.com/questions/355565/how-do-i-install-the-latest-version-of-cmake-from-the-command-line} answer.
 
 To get the AWS SDK installed follow instructions [here](https://docs.aws.amazon.com/rekognition/latest/dg/setup-awscli-sdk.html). Detailed setup information can be found [here](https://docs.aws.amazon.com/sdk-for-cpp/v1/developer-guide/setup-linux.html).
 
-### Building on Mac
+#### Building on Mac
 
 To get the latest version of cmake, follow instructions [here](https://cmake.org/install/).
 
-### Common build steps
+#### Common build steps
 
 Once all pre-requisites are installed and available, the build is performed with cmake.
 
@@ -71,7 +91,7 @@ Cloning into 'dynamodb-shell'...
 % make
 ```
 
-### More build steps
+#### More build steps
 
 1. Building the SDK. I have found the following to work reliably.
 
@@ -140,7 +160,7 @@ Cloning into 'dynamodb-shell'...
 % sudo make install
 ```
 
-### Running tests
+#### Running tests
 
 Once you complete a build you can run the unit tests as shown below.
 
