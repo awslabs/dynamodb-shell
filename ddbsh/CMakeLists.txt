@@ -10,7 +10,7 @@ set(CMAKE_CXX_COMPILER "g++")
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 project(ddbsh
-        VERSION 0.5.0.0
+        VERSION 0.5.1.0
         DESCRIPTION "A DynamoDB interactive shell"
         HOMEPAGE_URL "https://www.ddbsh.org/")
 
@@ -68,6 +68,7 @@ add_executable(ddbsh
                command/show_backups.cpp
                command/show_limits.cpp
                command/show_tables.cpp
+               command/show_create_table.cpp
                command/update.cpp
                command/update_table.cpp
                command/update_table_ttl.cpp
@@ -108,6 +109,7 @@ add_executable(ddbshtest
                command/show_backups.cpp
                command/show_limits.cpp
                command/show_tables.cpp
+               command/show_create_table.cpp
                command/update.cpp
                command/update_table.cpp
                command/update_table_ttl.cpp
