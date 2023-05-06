@@ -11,6 +11,7 @@
 #include "input-source.hpp"
 #include "logging.hpp"
 #include "version.h"
+#include "version.hpp"
 
 using namespace ddbsh;
 

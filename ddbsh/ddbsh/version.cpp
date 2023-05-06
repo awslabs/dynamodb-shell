@@ -12,6 +12,7 @@
 
 #include "version.h"
 #include "stdio.h"
+#include "version.hpp"
 
 #define VERSION_STRING_LENGTH (64)
 static char ddbsh_version_string[VERSION_STRING_LENGTH+1];

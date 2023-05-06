@@ -266,5 +266,10 @@ Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * CSelectCommand::txwrite()
     if (m_exists)
         return m_helper.txwrite();
     else
+    {
+        // this should never happen as we can only get to a select in transact get items call.
+        // so if we are here, we should log error.
+        logdebug("[%s, %d] Unexpected call to txwrite without m_exists.\n", __FILENAME__, __LINE__);
         return NULL;
+    }
 };

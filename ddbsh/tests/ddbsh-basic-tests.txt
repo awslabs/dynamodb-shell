@@ -66,5 +66,43 @@ add_test(NAME ddbsh-basic-test-22 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test
 add_test(NAME ddbsh-basic-test-23 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-23.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu, 1 rcu)")
 
 
+add_test(NAME ddbsh-basic-test-24 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-24.exp -c "select * from ddbsh_test_table_1 where a = 10")
 
+add_test(NAME ddbsh-basic-test-25 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-25.exp -c "select * from ddbsh_test_table_1 where b > 20")
 
+add_test(NAME ddbsh-basic-test-26 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-26.exp -c "select * from ddbsh_test_table_1 where c < 30")
+
+add_test(NAME ddbsh-basic-test-27 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-27.exp -c "select * from ddbsh_test_table_1 where a >= 15")
+
+add_test(NAME ddbsh-basic-test-28 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-28.exp -c "select * from ddbsh_test_table_1 where b <= 25")
+
+add_test(NAME ddbsh-basic-test-29 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-29.exp -c "select * from ddbsh_test_table_1 where c > 35")
+
+add_test(NAME ddbsh-basic-test-30 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-30.exp -c "select * from ddbsh_test_table_1 where a <= 5")
+
+add_test(NAME ddbsh-basic-test-31 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-31.exp -c "select * from ddbsh_test_table_1 where b >= 30")
+
+add_test(NAME ddbsh-basic-test-32 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-32.exp -c "select * from ddbsh_test_table_1 where c <= 40")
+
+add_test(NAME ddbsh-basic-test-33 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-33.exp -c "select * from ddbsh_test_table_1 where a between 5 and 15")
+
+add_test(NAME ddbsh-basic-test-34 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-34.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (50, 15, 20), (51, 16, 21), (52, 17, 22), (53, 18, 23), (54, 19, 24) with ratelimit (1 wcu)")
+
+add_test(NAME ddbsh-basic-test-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-35.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (55, 20, 25), (56, 21, 26), (57, 22, 27), (58, 23, 28), (59, 24, 29) with ratelimit (1 wcu)")
+
+add_test(NAME ddbsh-basic-test-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-36.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (60, 25, 30), (61, 26, 31), (62, 27, 32), (63, 28, 33), (64, 29, 34) with ratelimit (1 wcu)")
+
+add_test(NAME ddbsh-basic-test-37 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-37.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (65, 30, 35), (66, 31, 36), (67, 32, 37), (68, 33, 38), (69, 34, 39) with ratelimit (1 wcu)")
+
+add_test(NAME ddbsh-basic-test-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-38.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (70, 35, 40), (71, 36, 41), (72, 37, 42), (73, 38, 43), (74, 39, 44) with ratelimit (1 wcu)")
+
+add_test(NAME ddbsh-basic-test-40 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-40.exp -c "select * from ddbsh_test_table_1 where a > 50 and b < 8")
+add_test(NAME ddbsh-basic-test-41 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-41.exp -c "select * from ddbsh_test_table_1 where a = 54 and b > 9")
+add_test(NAME ddbsh-basic-test-42 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-42.exp -c "select * from ddbsh_test_table_1 where a < 57 and c > 10")
+add_test(NAME ddbsh-basic-test-43 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-43.exp -c "select * from ddbsh_test_table_1 where b >= 12")
+add_test(NAME ddbsh-basic-test-44 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-44.exp -c "select * from ddbsh_test_table_1 where c <= 10")
+add_test(NAME ddbsh-basic-test-45 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-45.exp -c "select * from ddbsh_test_table_1 where a > 60 and b < 11")
+add_test(NAME ddbsh-basic-test-46 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-46.exp -c "select * from ddbsh_test_table_1 where a = 58 and b > 12")
+add_test(NAME ddbsh-basic-test-47 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-47.exp -c "select * from ddbsh_test_table_1 where a < 61 and c > 13")
+add_test(NAME ddbsh-basic-test-48 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-48.exp -c "select * from ddbsh_test_table_1 where b >= 15")
+add_test(NAME ddbsh-basic-test-49 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-49.exp -c "select * from ddbsh_test_table_1 where c <= 14")

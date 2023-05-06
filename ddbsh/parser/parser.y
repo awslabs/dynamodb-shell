@@ -33,6 +33,8 @@
 #include "transact-write.hpp"
 #include "update_table_replica.hpp"
 #include "allocation.hpp"
+#include "version.hpp"
+#include "show_create_table.hpp"
 
 using namespace ddbsh;
 
@@ -203,6 +205,7 @@ int yydebug = 1;
 %token <strval> K_UPDATE
 %token <strval> K_UPSERT
 %token <strval> K_VALUES
+%token <strval> K_VERSION
 %token <strval> K_WCU
 %token <strval> K_WHERE
 %token <strval> K_WITH
@@ -242,9 +245,12 @@ int yydebug = 1;
 %type <command> replace_command
 %type <command> restore_backup_command
 %type <command> select_command
+%type <command> show_command
 %type <command> show_backups_command
 %type <command> show_limits_command
 %type <command> show_tables_command
+%type <command> show_version_command
+%type <command> show_create_table_command
 %type <command> simple_command
 %type <command> transact_command
 %type <command> transact_get_command
@@ -396,6 +402,10 @@ simple_command: ddl_command
 {
     logdebug("[%s, %d] simple_command: explain_command\n", __FILENAME__, __LINE__);
     $$ = $1;
+} | show_command
+{
+    logdebug("[%s, %d] simple_command: show_command\n", __FILENAME__, __LINE__);
+    $$ = $1;
 };
 
 help_command: K_HELP ';'
@@ -422,7 +432,9 @@ help_command: K_HELP ';'
            "      HELP ROLLBACK\n"
            "      HELP SELECT\n"
            "      HELP SHOW BACKUPS\n"
+           "      HELP SHOW CREATE TABLE\n"
            "      HELP SHOW LIMITS\n"
+           "      HELP SHOW VERSION\n"
            "      HELP SHOW\n"
            "      HELP UPDATE\n"
            "      HELP UPSERT\n\n");
@@ -440,17 +452,26 @@ help_command: K_HELP K_EXPLAIN ';'
 explain_command: K_EXPLAIN ddl_command
 {
     logdebug("[%s, %d] explain_commnd: K_EXPLAIN ddl_command\n", __FILENAME__, __LINE__);
-    $2->explain();
+
+    if ($2)
+        $2->explain();
+
     $$ = $2;
 } | K_EXPLAIN dml_command
 {
     logdebug("[%s, %d] explain_commnd: K_EXPLAIN ddl_command\n", __FILENAME__, __LINE__);
-    $2->explain();
+
+    if ($2)
+        $2->explain();
+
     $$ = $2;
 } | K_EXPLAIN transact_command
 {
     logdebug("[%s, %d] explain_commnd: K_EXPLAIN transact_command\n", __FILENAME__, __LINE__);
-    $2->explain();
+
+    if ($2)
+        $2->explain();
+
     $$ = $2;
 };
 
@@ -575,13 +596,32 @@ write_command: insert_command
     $$ = $1;
 };
 
+show_command: show_tables_command
+{
+    logdebug("[%s, %d] show_command: show_tables_command\n", __FILENAME__, __LINE__);
+    $$ = $1;
+} | show_limits_command
+{
+    logdebug("[%s, %d] show_command: show_limits_command\n", __FILENAME__, __LINE__);
+    $$ = $1;
+} | show_backups_command
+{
+    logdebug("[%s, %d] show_command: show_backups_command\n", __FILENAME__, __LINE__);
+    $$ = $1;
+} | show_version_command
+{
+    logdebug("[%s, %d] show_command: show_version_command\n", __FILENAME__, __LINE__);
+    printf("ddbsh - version %s\n", ddbsh_version());
+    $$ = NULL;
+} | show_create_table_command
+{
+    logdebug("[%s, %d] show_command: show_version_command\n", __FILENAME__, __LINE__);
+    $$ = $1;
+};
+
 ddl_command: drop_table_command
 {
     logdebug("[%s, %d] ddl_command: drop_table_command\n", __FILENAME__, __LINE__);
-    $$ = $1;
-} | show_tables_command
-{
-    logdebug("[%s, %d] ddl_command: show_tables_command\n", __FILENAME__, __LINE__);
     $$ = $1;
 } | create_table_command
 {
@@ -594,14 +634,6 @@ ddl_command: drop_table_command
 } | alter_table_command
 {
     logdebug("[%s, %d] ddl_command: alter_table_command\n", __FILENAME__, __LINE__);
-    $$ = $1;
-} | show_limits_command
-{
-    logdebug("[%s, %d] ddl_command: show_limits_command\n", __FILENAME__, __LINE__);
-    $$ = $1;
-} | show_backups_command
-{
-    logdebug("[%s, %d] ddl_command: show_backups_command\n", __FILENAME__, __LINE__);
     $$ = $1;
 } | describe_backup_command
 {
@@ -2699,6 +2731,30 @@ optional_ratelimit: ratelimit
 {
     logdebug("[%s, %d] optional_ratelimit: <nothing>\n", __FILENAME__, __LINE__);
     $$ = NULL;
+};
+
+help_command: K_HELP K_SHOW K_VERSION ';'
+{
+    printf("SHOW VERSION\n\n   Show the version of DynamoDB Shell.\n\n");
+    $$ = NULL;
+};
+
+show_version_command: K_SHOW K_VERSION ';'
+{
+    $$ = NULL;
+};
+
+help_command: K_HELP K_SHOW K_CREATE K_TABLE ';'
+{
+    printf("SHOW CREATE TABLE [IF NOT EXISTS][NOWAIT] <table>\n\n   Show the CREATE TABLE command to create the table.\n\n");
+    $$ = NULL;
+};
+
+show_create_table_command: K_SHOW K_CREATE K_TABLE if_not_exists_clause nowait_clause string ';'
+{
+    logdebug("[%s, %d]: show_create_table_command: K_SHOW K_CREATE K_TABLE string ;\n", __FILENAME__, __LINE__);
+    $$ = NEW CShowCreateTableCommand($4, $5, $6);
+    FREE($6);
 };
 
 %%
