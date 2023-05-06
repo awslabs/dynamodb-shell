@@ -2,9 +2,16 @@ add_test(NAME itxt-1 COMMAND ddbshtest -T ${RD}/itxt-1.exp -c "begin; rollback;"
 
 add_test(NAME itxt-drop-1 COMMAND ddbshtest -c "drop table if exists itxt1")
 add_test(NAME itxt-drop-2 COMMAND ddbshtest -c "drop table if exists itxt2")
+add_test(NAME itxt-drop-3 COMMAND ddbshtest -c "drop table if exists balances")
+add_test(NAME itxt-drop-4 COMMAND ddbshtest -c "drop table if exists transactions")
 
 add_test(NAME itxt-create-1 COMMAND ddbshtest -c "create table if not exists itxt1 (a  number) primary key (a hash) billing mode on demand")
 add_test(NAME itxt-create-2 COMMAND ddbshtest -c "create table if not exists itxt2 (a  number, b number) primary key (a hash, b range) billing mode on demand")
+
+add_test(NAME itxt-create-3 COMMAND ddbshtest -c "create table balances ( id string ) \
+                                                   primary key (id hash) billing mode on demand;")
+add_test(NAME itxt-create-4 COMMAND ddbshtest -c "create table transactions ( id number ) \
+                                                   primary key (id hash) billing mode on demand")
 
 add_test(NAME itxt-load-1 COMMAND ddbshtest -c "insert into itxt1 (a, b) values (1, 1), (2, 1); insert into itxt1(a, c) values(3, 2), (4, 3)")
 
@@ -17,14 +24,6 @@ add_test(NAME itxt-4 COMMAND ddbshtest -s -T ${RD}/itxt-4.exp -c "begin; select 
 add_test(NAME itxt-5 COMMAND ddbshtest -s -T ${RD}/itxt-5.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; select * from itxt2 where a = 2 and b = 1; commit")
 
 add_test(NAME itxt-6 COMMAND ddbshtest -s -T ${RD}/itxt-6.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; select * from itxt2 where a = 2 and b = 1; rollback")
-
-add_test(NAME itxt-drop-3 COMMAND ddbshtest -c "drop table if exists balances")
-add_test(NAME itxt-drop-4 COMMAND ddbshtest -c "drop table if exists transactions")
-
-add_test(NAME itxt-create-3 COMMAND ddbshtest -c "create table balances ( id string ) \
-                                                   primary key (id hash) billing mode on demand;")
-add_test(NAME itxt-create-4 COMMAND ddbshtest -c "create table transactions ( id number ) \
-                                                   primary key (id hash) billing mode on demand")
 
 add_test(NAME itxt-load-3 COMMAND ddbshtest -c "begin; \
                                                  insert into balances (id, balance) \
@@ -58,3 +57,10 @@ add_test(NAME itxt-8 COMMAND ddbshtest -s -T ${RD}/itxt-8.exp -c "begin; \
 add_test(NAME itxt-9 COMMAND ddbshtest -s -T ${RD}/itxt-9.exp -c "begin; select * from balances where id = \"bob\"; \
                                                                    select * from balances where id = \"alice\"; commit;")
 add_test(NAME itxt-10 COMMAND ddbshtest -s -T ${RD}/itxt-10.exp -c "begin; select * from transactions where id = 101; commit;")
+
+add_test(NAME itxt-11 COMMAND ddbshtest -c "begin; delete from itxt2 where a = 1 and b = 1; exists select * from itxt1 where a = 5; commit;")
+set_property(TEST itxt-11 PROPERTY WILL_FAIL PROPERTY PASS_REGULAR_EXPRESSION "Transaction failed. TransactionCanceledException. [A-Z0-9]*. Transaction cancelled, please refer cancellation reasons for specific reasons.*None, ConditionalCheckFailed")
+
+add_test(NAME itxt-12 COMMAND ddbshtest -c "begin; delete from itxt2 where a = 1 and b = 1; exists select * from itxt1 where a = 1; commit;")
+
+add_test(NAME itxt-13 COMMAND ddbshtest -s -T ${RD}/itxt-13.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; select * from itxt2 where a = 2 and b = 1; commit")

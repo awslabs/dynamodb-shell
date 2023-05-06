@@ -311,7 +311,11 @@ Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * CSelectHelper::txwrite()
     filter = m_where_clone->query_filter_expression(m_pk, m_rk, &st);
 
     if (filter.size() > 0)
-        cc.SetConditionExpression(filter);
+        filter += " AND ";
+
+    filter = "attribute_exists(" + st.new_attribute(m_pk) + ")";
+
+    cc.SetConditionExpression(filter);
 
     if (st.has_names())
         cc.SetExpressionAttributeNames(st.get_names());
