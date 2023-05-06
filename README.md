@@ -252,6 +252,18 @@ us-west-1>
 
 The prompt shows the region name, and the additional (*) if you are connected to a non-standard endpoint.
 
+## SHOW VERSION
+
+**Purpose:** The SHOW VERSION command displays the version of DynamoDB Shell.
+
+``` SQL
+us-east-1> show version;
+ddbsh - version 0.5.1
+us-east-1> 
+```
+
+*Note:* The SHOW VERSION command was added in DynamoDB Shell version 0.5.1.
+
 ## QUIT
 
 **Purpose:** You have had a good day, and you want to do something else.
@@ -716,6 +728,27 @@ CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
     tag := name : value
 ```
 
+## SHOW CREATE TABLE
+
+**Purpose:** The SHOW CREATE TABLE command will generate the CREATE TABLE command required to generate a table.
+
+**Syntax:**
+
+``` SQL
+SHOW CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
+```
+
+**Note:** The SHOW CREATE TABLE command was added in DynamoDB Shell version 0.5.1.
+
+The "IF NOT EXISTS" and "NOWAIT" options are transferred into the CREATE TABLE command.
+
+**Example**
+
+``` SQL
+us-east-1> show create table icd3;
+CREATE TABLE "icd3" ("k1" number, "k2" number, "pk" number, "rk" number) PRIMARY KEY ("pk" HASH, "rk" RANGE) BILLING MODE ON DEMAND GSI ("gsi1" ON ( "k1" HASH, "k2" RANGE ) PROJECTING INCLUDE (k3) BILLING MODE ON DEMAND ) TABLE CLASS STANDARD DELETION PROTECTION DISABLED
+us-east-1> 
+```
 
 ## DESCRIBE
 
@@ -1631,6 +1664,8 @@ dynamodb-local (*)>
 ```
 
 ### Rate Limiting
+
+*Note: Rate Limiting was added in DynamoDB Shell version 0.5.*
 
 DML operations like SELECT, INSERT, UPDATE, DELETE, UPSERT, and REPLACE can operate on a single item, or many items. When a SELECT has a where clause that targets many items, it is translated into a Query() or Scan() operation. An INSERT may be used to insert a single item, or many items. Each of these activities consumes a certain number of RCUs and WCUs. An operation that operates on many items is called a bulk operation.
 

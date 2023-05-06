@@ -432,7 +432,9 @@ help_command: K_HELP ';'
            "      HELP ROLLBACK\n"
            "      HELP SELECT\n"
            "      HELP SHOW BACKUPS\n"
+           "      HELP SHOW CREATE TABLE\n"
            "      HELP SHOW LIMITS\n"
+           "      HELP SHOW VERSION\n"
            "      HELP SHOW\n"
            "      HELP UPDATE\n"
            "      HELP UPSERT\n\n");
@@ -2731,8 +2733,20 @@ optional_ratelimit: ratelimit
     $$ = NULL;
 };
 
+help_command: K_HELP K_SHOW K_VERSION ';'
+{
+    printf("SHOW VERSION\n\n   Show the version of DynamoDB Shell.\n\n");
+    $$ = NULL;
+};
+
 show_version_command: K_SHOW K_VERSION ';'
 {
+    $$ = NULL;
+};
+
+help_command: K_HELP K_SHOW K_CREATE K_TABLE ';'
+{
+    printf("SHOW CREATE TABLE [IF NOT EXISTS][NOWAIT] <table>\n\n   Show the CREATE TABLE command to create the table.\n\n");
     $$ = NULL;
 };
 
