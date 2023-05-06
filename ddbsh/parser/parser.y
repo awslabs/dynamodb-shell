@@ -450,17 +450,26 @@ help_command: K_HELP K_EXPLAIN ';'
 explain_command: K_EXPLAIN ddl_command
 {
     logdebug("[%s, %d] explain_commnd: K_EXPLAIN ddl_command\n", __FILENAME__, __LINE__);
-    $2->explain();
+
+    if ($2)
+        $2->explain();
+
     $$ = $2;
 } | K_EXPLAIN dml_command
 {
     logdebug("[%s, %d] explain_commnd: K_EXPLAIN ddl_command\n", __FILENAME__, __LINE__);
-    $2->explain();
+
+    if ($2)
+        $2->explain();
+
     $$ = $2;
 } | K_EXPLAIN transact_command
 {
     logdebug("[%s, %d] explain_commnd: K_EXPLAIN transact_command\n", __FILENAME__, __LINE__);
-    $2->explain();
+
+    if ($2)
+        $2->explain();
+
     $$ = $2;
 };
 
