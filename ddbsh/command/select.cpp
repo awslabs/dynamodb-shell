@@ -263,7 +263,7 @@ Aws::DynamoDB::Model::TransactGetItem * CSelectCommand::txget()
 
 Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * CSelectCommand::txwrite()
 {
-    if (m_exists)
+    if (m_exists || m_not_exists)
         return m_helper.txwrite();
     else
     {

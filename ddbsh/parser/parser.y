@@ -507,22 +507,26 @@ help_command: K_HELP K_ROLLBACK ';'
 transact_command: K_BEGIN ';' transact_get_command K_COMMIT ';'
 {
     logdebug("[%s, %d] transact_command: K_BEGIN ';' transact_get_command K_COMMIT ';'\n", __FILENAME__, __LINE__);
-    ((CTransactReadCommand *)$3)->commit();
+    if ($3)
+        ((CTransactReadCommand *)$3)->commit();
     $$ = $3;
 } | K_BEGIN ';' transact_write_command K_COMMIT ';'
 {
     logdebug("[%s, %d] transact_command: K_BEGIN ';' transact_write_command K_COMMIT ';'\n", __FILENAME__, __LINE__);
-    ((CTransactWriteCommand *)$3)->commit();
+    if ($3)
+        ((CTransactWriteCommand *)$3)->commit();
     $$ = $3;
 } | K_BEGIN ';' transact_get_command K_ROLLBACK ';'
 {
     logdebug("[%s, %d] transact_command: K_BEGIN ';' transact_get_command K_ROLLBACK ';'\n", __FILENAME__, __LINE__);
-    ((CTransactReadCommand *)$3)->rollback();
+    if ($3)
+        ((CTransactReadCommand *)$3)->rollback();
     $$ = $3;
 } | K_BEGIN ';' transact_write_command K_ROLLBACK ';'
 {
     logdebug("[%s, %d] transact_command: K_BEGIN ';' transact_write_command K_ROLLBACK ';'\n", __FILENAME__, __LINE__);
-    ((CTransactWriteCommand *)$3)->rollback();
+    if ($3)
+        ((CTransactWriteCommand *)$3)->rollback();
     $$ = $3;
 } | K_BEGIN ';' K_ROLLBACK ';'
 {
@@ -533,24 +537,42 @@ transact_command: K_BEGIN ';' transact_get_command K_COMMIT ';'
 transact_get_command: get_command
 {
     logdebug("[%s, %d] transact_command: transact_get_command: get_command\n", __FILENAME__, __LINE__);
-    CTransactReadCommand * rc = NEW CTransactReadCommand($1);
-    $$ = rc;
+    if ($1)
+    {
+        CTransactReadCommand * rc = NEW CTransactReadCommand($1);
+        $$ = rc;
+    }
+    else
+    {
+        $$ = $1;
+    }
 } | transact_get_command get_command
 {
     logdebug("[%s, %d] transact_command: transact_get_command get_command\n", __FILENAME__, __LINE__);
-    ((CTransactReadCommand *)$1)->append($2);
+    if ($1 && $2)
+        ((CTransactReadCommand *)$1)->append($2);
+
     $$ = $1;
 };
 
 transact_write_command: write_command
 {
     logdebug("[%s, %d] transact_command: transact_write_command: write_command\n", __FILENAME__, __LINE__);
-    CTransactWriteCommand * wc = NEW CTransactWriteCommand($1);
-    $$ = wc;
+    if ($1)
+    {
+        CTransactWriteCommand * wc = NEW CTransactWriteCommand($1);
+        $$ = wc;
+    }
+    else
+    {
+        $$ = $1;
+    }
 } | transact_write_command write_command
 {
     logdebug("[%s, %d] transact_command: transact_write_command write_command\n", __FILENAME__, __LINE__);
-    ((CTransactWriteCommand *)$1)->append($2);
+    if ($1 && $2)
+        ((CTransactWriteCommand *)$1)->append($2);
+
     $$ = $1;
 };
 
@@ -1868,8 +1890,15 @@ restore_backup_command: K_RESTORE K_TABLE string K_FROM K_BACKUP string ';'
 exists_command: K_EXISTS select_command
 {
     logdebug("[%s, %d] exists_command: K_EXISTS select_command\n", __FILENAME__, __LINE__);
-    ((CSelectCommand *)$2)->exists();
+    if ($2)
+        ((CSelectCommand *)$2)->exists();
     $$ = $2;
+} | K_NOT K_EXISTS select_command
+{
+    logdebug("[%s, %d] exists_command: K_NOT K_EXISTS select_command\n", __FILENAME__, __LINE__);
+    if ($3)
+        ((CSelectCommand *)$3)->not_exists();
+    $$ = $3;
 };
 
 help_command: K_HELP K_SELECT ';'

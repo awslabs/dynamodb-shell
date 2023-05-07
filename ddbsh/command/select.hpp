@@ -56,6 +56,12 @@ namespace ddbsh
 
         virtual void exists() final {
             m_exists = true;
+            m_helper.exists();
+        };
+
+        virtual void not_exists() final {
+            m_not_exists = true;
+            m_helper.not_exists();
         };
 
     private:
@@ -63,6 +69,7 @@ namespace ddbsh
         CRateLimit * m_ratelimit;
         Aws::DynamoDB::Model::ReturnConsumedCapacity m_returns;
         bool m_exists;
+        bool m_not_exists;
 
         CWhere * m_where; // this is the holder for m_where which came
                           // from parser, solely for the destructor.
