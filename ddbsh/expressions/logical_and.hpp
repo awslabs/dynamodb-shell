@@ -220,6 +220,17 @@ namespace ddbsh
 
             return rv;
         };
+
+        // run query_safe across all items that are and'ed
+        // together. Fail fast.
+        virtual bool __query_safe(std::string pk, std::string rk) {
+            for (auto p: m_exprlist) {
+                if (!p->query_safe(pk, rk))
+                    return false;
+            }
+
+            return true;
+        };
     };
 };
 #endif

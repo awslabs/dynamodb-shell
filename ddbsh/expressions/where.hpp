@@ -41,13 +41,15 @@ namespace ddbsh
         // example, can_getitem() will return true if the where clause
         // will permit a getitem request.
         bool can_getitem(std::string pk, std::string rk) {
+            // pk must always be specified.
+            assert(!pk.empty());
+
             // getitem requires the complete primary key, and only the
             // primary key in the where clause.
             if (!rk.empty()) {
                 if (m_where->count() == 2 && m_where->count_gud_key(pk) == 1 && m_where->count_gud_key(rk) == 1)
                     return true;
             } else {
-                assert(!pk.empty());
                 if (m_where->count() == 1 && m_where->count_gud_key(pk) == 1)
                     return true;
             }
@@ -56,23 +58,19 @@ namespace ddbsh
         };
 
         bool can_query_table(std::string pk, std::string rk) {
-            // query on a table requires a PK in a fashion identical to
-            // getitem (unique PK) and there has to be an RK. Attempting
-            // query on a table that has no RK is pointless - if you have
-            // the PK, do a getitem instead.
+            // pk must always be specified.
+            assert(!pk.empty());
+
+            // doing a query on a table first requires that you can't
+            // do a getitem().
             assert(!can_getitem(pk, rk));
 
-            // if you have no RK, and you can't getitem, then we can
-            // short-circuit here and say no to query.
-            if (rk.empty())
+            // for a query, you should at least have a pk check that
+            // is an exact match.
+            if (!(m_where->count_gud_key(pk) == 1 && m_where->count(pk) == 1))
                 return false;
 
-            // there must be a single PK check, and the RK - if present should be in a single RK query check
-            if (m_where->count_gud_key(pk) == 1 && m_where->count(pk) == 1 && (
-                    (m_where->count_query_rk(rk) == 1 && m_where->count(rk) == 1) || (m_where->count(rk) == 0)))
-                return true;
-
-            return false;
+            return m_where->query_safe(pk, rk);
         };
 
         bool can_query_index(std::string pk, std::string rk) {

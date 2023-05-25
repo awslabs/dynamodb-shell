@@ -54,15 +54,24 @@ namespace ddbsh
         };
 
         Aws::String __query_key_condition_expression(std::string pk, std::string rk, CSymbolTable * st) {
+            assert(this->__query_safe(pk, rk));
             return "";
         };
 
         Aws::String __query_filter_expression(std::string pk, std::string rk, CSymbolTable * st) {
+            assert(this->__query_safe(pk, rk));
             return this->__serialize(st);
         };
 
         Aws::String __update_delete_condition_check(std::string pk, std::string rk, CSymbolTable * st, bool top) {
             return this->__serialize(st);
+        };
+
+        virtual bool __query_safe(std::string pk, std::string rk) {
+            if (m_lhs != pk && m_lhs != rk)
+                return true;
+
+            return false;
         };
     };
 };
