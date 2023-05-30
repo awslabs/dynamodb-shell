@@ -1,19 +1,18 @@
-Query({
-   "TableName":   "ddbsh_test_table_1",
-   "ConsistentRead":   false,
+Scan({
+   "TableName":   "iselN",
    "ReturnConsumedCapacity":   "NONE",
-   "FilterExpression":   "#aaaa2 = :vaaa2",
-   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "FilterExpression":   "NOT (#aaaa1 = :vaaa1) AND #aaaa2 = :vaaa2",
    "ExpressionAttributeNames":   {
       "#aaaa1":   "a",
       "#aaaa2":   "b"
    },
    "ExpressionAttributeValues":   {
       ":vaaa1":   {
-         "N":   "3"
+         "N":   "2"
       },
       ":vaaa2":   {
-         "N":   "4"
+         "N":   "2"
       }
-   }
+   },
+   "ConsistentRead":   false
 })

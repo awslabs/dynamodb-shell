@@ -1,0 +1,15 @@
+Scan({
+   "TableName":   "iselNN",
+   "IndexName":   "globalsecN",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 > :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "c"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "3"
+      }
+   },
+   "ConsistentRead":   false
+})

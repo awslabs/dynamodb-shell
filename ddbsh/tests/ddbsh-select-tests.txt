@@ -28,6 +28,23 @@ add_test(NAME isel-create-4 COMMAND ddbshtest -c "create table isel4 ( a number,
               insert into isel4 (a, b, c, d) values (3, 5, 10, 4); \
               insert into isel4 (a, b, c, d) values (6, 7, 8, 5);")
 
+add_test(NAME isel-create-5 COMMAND ddbshtest -c "create table iselN(a number) primary key (a hash); \
+                                                  insert into iselN(a, b, c) values (1, 2, 3), \
+                                                  (2, \"three\", 4), (3, \"four\", 5);")
+
+add_test(NAME isel-create-6 COMMAND ddbshtest -c "create table iselNS(a number, b string) primary key (a hash, b range); \
+                                                  insert into iselNS(a, b, c) \
+                                                  values (1, \"two\", 3), (2, \"three\", 4), (3, \"four\", 5);")
+
+add_test(NAME isel-create-7 COMMAND ddbshtest -c "create table iselNN ( a number, b number, c number, d string ) \
+              primary key ( a hash, b range ) billing mode on demand gsi (globalsecN on (c hash) projecting all, \
+              globalsecNS on (c hash, d range) projecting all); \
+              insert into iselNN (a, b, c, d) values (2, 3, 4, \"one\"); \
+              insert into iselNN (a, b, c, d) values (2, 4, 4, \"two\"); \
+              insert into iselNN (a, b, c, d) values (4, 5, 6, \"three\"); \
+              insert into iselNN (a, b, c, d) values (3, 5, 10, \"four\"); \
+              insert into iselNN (a, b, c, d) values (6, 7, 8, \"five\");")
+
 add_test(NAME isel-1 COMMAND ddbshtest -T ${RD}/isel-1.exp -c "explain select * from isel1 where attribute_exists(c)")
 add_test(NAME isel-2 COMMAND ddbshtest -T ${RD}/isel-2.exp -s -c "select * from isel1 where attribute_exists(c)")
 
@@ -316,4 +333,47 @@ add_test(NAME isel-186 COMMAND ddbshtest -T ${RD}/isel-186.exp -c "select * from
 add_test(NAME isel-187 COMMAND ddbshtest -T ${RD}/isel-187.exp -c "explain select * from isel4.globalsec where c = 4 and d = 2")
 add_test(NAME isel-188 COMMAND ddbshtest -T ${RD}/isel-188.exp -c "select * from isel4.globalsec where c = 4 and d = 2")
 
+add_test(NAME isel-189 COMMAND ddbshtest -T ${RD}/isel-189.exp -c "explain select * from iselN where a = 2")
+add_test(NAME isel-190 COMMAND ddbshtest -T ${RD}/isel-190.exp -c "explain select * from iselN where a = 2 and b = 2")
+add_test(NAME isel-191 COMMAND ddbshtest -T ${RD}/isel-191.exp -c "explain select * from iselN where a != 2 and b = 2")
+add_test(NAME isel-192 COMMAND ddbshtest -T ${RD}/isel-192.exp -c "explain select * from iselN where b = 2")
 
+add_test(NAME isel-193 COMMAND ddbshtest -T ${RD}/isel-193.exp -c "select * from iselN where a = 2")
+add_test(NAME isel-194 COMMAND ddbshtest -T ${RD}/isel-194.exp -c "select * from iselN where a = 2 and b = 2")
+add_test(NAME isel-195 COMMAND ddbshtest -T ${RD}/isel-195.exp -c "select * from iselN where a != 2 and b = 2")
+add_test(NAME isel-196 COMMAND ddbshtest -T ${RD}/isel-196.exp -c "select * from iselN where b = 2")
+
+add_test(NAME isel-197 COMMAND ddbshtest -T ${RD}/isel-197.exp -c "explain select * from iselNS where a = 2 and b = \"two\"")
+add_test(NAME isel-198 COMMAND ddbshtest -T ${RD}/isel-198.exp -c "explain select * from iselNS where a = 2 and b = \"two\" and c = 3")
+add_test(NAME isel-199 COMMAND ddbshtest -T ${RD}/isel-199.exp -c "explain select * from iselNS where a = 2 and b > \"two\"")
+add_test(NAME isel-200 COMMAND ddbshtest -T ${RD}/isel-200.exp -c "explain select * from iselNS where a = 2 and begins_with(b, \"t\")")
+add_test(NAME isel-201 COMMAND ddbshtest -T ${RD}/isel-201.exp -c "explain select * from iselNS where begins_with(b, \"t\")")
+
+add_test(NAME isel-202 COMMAND ddbshtest -T ${RD}/isel-202.exp -c "select * from iselNS where a = 2 and b = \"three\"")
+add_test(NAME isel-203 COMMAND ddbshtest -T ${RD}/isel-203.exp -c "select * from iselNS where a = 2 and b = \"three\" and c = 3")
+add_test(NAME isel-204 COMMAND ddbshtest -T ${RD}/isel-204.exp -c "select * from iselNS where a = 2 and b >= \"three\"")
+add_test(NAME isel-205 COMMAND ddbshtest -T ${RD}/isel-205.exp -c "select * from iselNS where a = 2 and begins_with(b, \"t\")")
+add_test(NAME isel-206 COMMAND ddbshtest -T ${RD}/isel-206.exp -c "select * from iselNS where begins_with(b, \"t\")")
+
+add_test(NAME isel-207 COMMAND ddbshtest -T ${RD}/isel-207.exp -c "explain select * from iselNN.globalsecN where c = 4")
+add_test(NAME isel-208 COMMAND ddbshtest -T ${RD}/isel-208.exp -c "explain select * from iselNN.globalsecN where c = 4 and d = \"one\"")
+add_test(NAME isel-209 COMMAND ddbshtest -T ${RD}/isel-209.exp -c "explain select * from iselNN.globalsecN where c > 3")
+add_test(NAME isel-210 COMMAND ddbshtest -T ${RD}/isel-210.exp -c "explain select * from iselNN.globalsecN where c = 4 and begins_with(d, \"t\")")
+
+add_test(NAME isel-211 COMMAND ddbshtest -T ${RD}/isel-211.exp -c "explain select * from iselNN.globalsecNS where c = 4")
+add_test(NAME isel-212 COMMAND ddbshtest -T ${RD}/isel-212.exp -c "explain select * from iselNN.globalsecNS where c = 4 and d = \"one\"")
+
+add_test(NAME isel-213 COMMAND ddbshtest -T ${RD}/isel-213.exp -c "explain select * from iselNN.globalsecNS where c > 3")
+add_test(NAME isel-214 COMMAND ddbshtest -T ${RD}/isel-214.exp -c "explain select * from iselNN.globalsecNS where c = 4 and begins_with(d, \"t\")")
+
+add_test(NAME isel-215 COMMAND ddbshtest -T ${RD}/isel-215.exp -c "explain select * from iselNN.globalsecN where c = 4")
+add_test(NAME isel-216 COMMAND ddbshtest -T ${RD}/isel-216.exp -c "explain select * from iselNN.globalsecN where c = 4 and d = \"one\"")
+
+add_test(NAME isel-217 COMMAND ddbshtest -T ${RD}/isel-217.exp -c "select * from iselNN.globalsecN where c > 3")
+add_test(NAME isel-218 COMMAND ddbshtest -T ${RD}/isel-218.exp -c "select * from iselNN.globalsecN where c = 4 and begins_with(d, \"t\")")
+
+add_test(NAME isel-219 COMMAND ddbshtest -T ${RD}/isel-219.exp -c "select * from iselNN.globalsecNS where c = 4")
+add_test(NAME isel-220 COMMAND ddbshtest -T ${RD}/isel-220.exp -c "select * from iselNN.globalsecNS where c = 4 and d = \"one\"")
+
+add_test(NAME isel-221 COMMAND ddbshtest -T ${RD}/isel-221.exp -c "select * from iselNN.globalsecNS where c > 3")
+add_test(NAME isel-222 COMMAND ddbshtest -T ${RD}/isel-222.exp -c "select * from iselNN.globalsecNS where c = 4 and begins_with(d, \"t\")")

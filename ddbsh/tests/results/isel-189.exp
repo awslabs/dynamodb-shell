@@ -1,0 +1,10 @@
+GetItem({
+   "TableName":   "iselN",
+   "Key":   {
+      "a":   {
+         "N":   "2"
+      }
+   },
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE"
+})

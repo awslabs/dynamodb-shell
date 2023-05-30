@@ -1,5 +1,5 @@
 Query({
-   "TableName":   "ddbsh_test_table_1",
+   "TableName":   "iselN",
    "ConsistentRead":   false,
    "ReturnConsumedCapacity":   "NONE",
    "FilterExpression":   "#aaaa2 = :vaaa2",
@@ -10,10 +10,10 @@ Query({
    },
    "ExpressionAttributeValues":   {
       ":vaaa1":   {
-         "N":   "3"
+         "N":   "2"
       },
       ":vaaa2":   {
-         "N":   "4"
+         "N":   "2"
       }
    }
 })

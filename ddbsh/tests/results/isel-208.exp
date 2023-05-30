@@ -1,19 +1,20 @@
 Query({
-   "TableName":   "ddbsh_test_table_1",
+   "TableName":   "iselNN",
+   "IndexName":   "globalsecN",
    "ConsistentRead":   false,
    "ReturnConsumedCapacity":   "NONE",
    "FilterExpression":   "#aaaa2 = :vaaa2",
    "KeyConditionExpression":   "#aaaa1 = :vaaa1",
    "ExpressionAttributeNames":   {
-      "#aaaa1":   "a",
-      "#aaaa2":   "b"
+      "#aaaa1":   "c",
+      "#aaaa2":   "d"
    },
    "ExpressionAttributeValues":   {
       ":vaaa1":   {
-         "N":   "3"
+         "N":   "4"
       },
       ":vaaa2":   {
-         "N":   "4"
+         "S":   "one"
       }
    }
 })
