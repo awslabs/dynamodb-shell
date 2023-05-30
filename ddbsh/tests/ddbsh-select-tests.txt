@@ -1,4 +1,4 @@
-add_test(NAME isel-drop-1 COMMAND ddbshtest -c "drop table if exists isel1; drop table if exists isel2; drop table if exists isel3; drop table if exists isel4;")
+add_test(NAME isel-drop-1 COMMAND ddbshtest -c "drop table if exists isel1; drop table if exists isel2; drop table if exists isel3; drop table if exists isel4; drop table if exists iselN; drop table if exists iselNN; drop table if exists iselNS;")
 
 add_test(NAME isel-create-1 COMMAND ddbshtest -c "create table isel1 ( a number, b number ) primary key ( a hash, b range ) billing mode on demand; \
                                                insert into isel1 (a, b, c) values (2, 3, 4); \
