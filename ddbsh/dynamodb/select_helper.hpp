@@ -64,12 +64,22 @@ namespace ddbsh
                                                    Aws::DynamoDB::Model::AttributeValue>>& items);
         static Aws::String show_item(const Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue> &item);
 
+        virtual void exists() final {
+            m_exists = true;
+        };
+
+        virtual void not_exists() final {
+            m_not_exists = true;
+        };
+
     private:
         std::string m_table_name;
         std::string m_index_name;
         std::string m_pk;
         std::string m_rk;
         bool m_rate_limited;
+        bool m_exists;
+        bool m_not_exists;
 
         // never delete m_where_clone, it is a copy of something in the
         // caller.

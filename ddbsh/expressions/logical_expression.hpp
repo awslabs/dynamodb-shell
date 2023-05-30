@@ -132,6 +132,30 @@ namespace ddbsh
             return rv;
         };
 
+        // query_safe looks over the entire where clause and
+        // determines whether all clauses that it finds are ok in a
+        // query. This basically amounts to the following.
+        //
+        // 1. Every derived class must implement query_safe, and most
+        // of them will return true if they don't relate to the pk and
+        // rk.
+        //
+        // 2. logical_and and logical_or will descend the tree.
+        //
+        // 3. logical_comparison equality is OK with pk if not
+        // negated.
+        //
+        // 4. logical_comparison with rk is OK if it is not negated.
+        //
+        // 5. logical_between is OK with rk if it is not negated.
+        //
+        // 6. logical_begins_with is OK with RK if it is not negated.
+        //
+        virtual bool query_safe(std::string pk, std::string rk) {
+            // wraps __query_safe();
+            return __query_safe(pk, rk);
+        };
+
     protected:
         bool m_negate;
         bool m_parens;
@@ -148,6 +172,7 @@ namespace ddbsh
         virtual Aws::String __query_key_condition_expression(std::string pk, std::string rk, CSymbolTable * st) = 0;
         virtual Aws::String __query_filter_expression(std::string pk, std::string rk, CSymbolTable * st) = 0;
         virtual Aws::String __update_delete_condition_check(std::string pk, std::string rk, CSymbolTable * st, bool top) = 0;
+        virtual bool __query_safe(std::string pk, std::string rk) = 0;
     };
 };
 #endif

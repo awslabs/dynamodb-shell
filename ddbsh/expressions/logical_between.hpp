@@ -53,17 +53,24 @@ namespace ddbsh
         };
 
         Aws::String __query_key_condition_expression(std::string pk, std::string rk, CSymbolTable * st) {
-            if ((m_lhs == pk || m_lhs == rk) && !is_negated())
+            assert(this->__query_safe(pk, rk));
+            // only PK and RK can be in the key condition, and only RK
+            // can be in a between for a query. Therefore, if this
+            // is rk and not negated, we're good.
+            if (m_lhs == rk && !is_negated())
                 return this->__serialize(st);
             else
                 return "";
         };
 
         Aws::String __query_filter_expression(std::string pk, std::string rk, CSymbolTable * st) {
-            if (rk != m_lhs)
+            assert(this->__query_safe(pk, rk));
+            // either m_lhs != pk and m_lhs != rk, or m_lhs = rk and is !is_negated().
+            // this is the filter expression so rk can't be here.
+            if (m_lhs != rk)
                 return this->__serialize(st);
-            else
-                return "";
+
+            return "";
         };
 
         Aws::String __update_delete_condition_check(std::string pk, std::string rk, CSymbolTable * st, bool top) {
@@ -77,6 +84,16 @@ namespace ddbsh
                 else
                     return this->__serialize(st);
             }
+        };
+
+        virtual bool __query_safe(std::string pk, std::string rk) {
+            if (m_lhs != pk && m_lhs != rk)
+                return true;
+
+            if (m_lhs == rk  && !is_negated())
+                return true;
+
+            return false;
         };
     };
 };

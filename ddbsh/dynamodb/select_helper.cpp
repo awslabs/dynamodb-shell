@@ -297,6 +297,17 @@ Aws::DynamoDB::Model::TransactGetItem * CSelectHelper::txget()
 
 Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * CSelectHelper::txwrite()
 {
+    std::string check_func;
+    if (m_exists)
+        check_func = "attribute_exists";
+    else if (m_not_exists)
+        check_func = "attribute_not_exists";
+    else
+    {
+        logerror("A SELECT command without an EXISTS or NOT EXISTS cannot be used in a write transaction.\n");
+        return NULL;
+    }
+
     Aws::DynamoDB::Model::TransactWriteItem tx;
     Aws::DynamoDB::Model::ConditionCheck cc;
     Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * rv = new Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem>;
@@ -313,7 +324,14 @@ Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> * CSelectHelper::txwrite()
     if (filter.size() > 0)
         filter += " AND ";
 
-    filter = "attribute_exists(" + st.new_attribute(m_pk) + ")";
+    if (m_projection->empty())
+        filter += check_func + "(" + st.new_attribute(m_pk) + ")";
+    else
+    {
+        // if the projection is non-empty, then the requestor wants those attributes to exist
+        for (auto p: *m_projection)
+            filter += check_func + "(" + st.new_attribute(p) + ")";
+    }
 
     cc.SetConditionExpression(filter);
 

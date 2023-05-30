@@ -77,17 +77,19 @@ namespace ddbsh
         // case it would only appear in the filter expression. So the
         // filter version always emits something.
         Aws::String __query_key_condition_expression(std::string pk, std::string rk, CSymbolTable * st) {
-            if ((m_lhs == pk || m_lhs == rk) && !is_negated())
+            assert(this->__query_safe(pk, rk));
+            if (m_lhs == pk || m_lhs == rk)
                 return this->__serialize(st);
             else
                 return "";
         };
 
         Aws::String __query_filter_expression(std::string pk, std::string rk, CSymbolTable * st) {
-            if (pk == m_lhs || rk == m_lhs)
-                return "";
-            else
+            assert(this->__query_safe(pk, rk));
+            if (!(pk == m_lhs || rk == m_lhs))
                 return this->__serialize(st);
+            else
+                return "";
         };
 
         Aws::String __update_delete_condition_check(std::string pk, std::string rk, CSymbolTable * st, bool top) {
@@ -101,6 +103,27 @@ namespace ddbsh
                 else
                     return this->__serialize(st);
             }
+        };
+
+        virtual bool __query_safe(std::string pk, std::string rk) {
+            if (m_lhs != pk && m_lhs != rk)
+                return true;
+
+            // m_lhs is either pk or rk
+            if (m_lhs == pk)
+            {
+                if (m_op == "=" && !is_negated())
+                    return true;
+
+                return false;
+            }
+            else if (m_lhs == rk) // this must be the case, but just to be sure.
+            {
+                if (m_op == "=" && is_negated())
+                    return false;
+            }
+
+            return true;
         };
 
         std::string m_lhs;

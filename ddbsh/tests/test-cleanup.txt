@@ -10,7 +10,10 @@ add_test(NAME test-cleanup COMMAND ddbshtest -c "drop table if exists nowait ddb
                                               drop table if exists nowait isel1; \
                                               drop table if exists nowait isel2; \
                                               drop table if exists nowait isel3; \
-                                              drop table if exists nowait isel4;
+                                              drop table if exists nowait isel4; \
+                                              drop table if exists iselN; \
+                                              drop table if exists iselNN; \
+                                              drop table if exists iselNS; \
                                               drop table if exists nowait st1; \
                                               drop table if exists nowait iut1; \
                                               drop table if exists nowait iut2; \
