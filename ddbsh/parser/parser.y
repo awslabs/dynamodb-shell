@@ -1532,7 +1532,7 @@ help_command: K_HELP K_ALTER K_TABLE ';'
            "   ALTER TABLE <name> ADD REPLICA <region> [replica_definition]\n"
            "   ALTER TABLE <name> UPDATE REPLICA <region> replica_definition\n"
            "   ALTER TABLE <name> DROP REPLICA <region>\n"
-           "   ALTER TABLE <name> SET TABLE PROTECTION [ENABLED|DISABLED]\n" );
+           "   ALTER TABLE <name> SET DELETION PROTECTION [ENABLED|DISABLED]\n" );
 
     $$ = NULL;
 };
