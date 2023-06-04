@@ -65,7 +65,7 @@ add_test(NAME itxt-12 COMMAND ddbshtest -c "begin; delete from itxt2 where a = 1
 
 add_test(NAME itxt-13 COMMAND ddbshtest -s -T ${RD}/itxt-13.exp -c "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; select * from itxt2 where a = 2 and b = 1; commit")
 
-add_test(NAME itxt-14 COMMAND ddbshtest -s -T ${RD}/itxt-14.exp -c "begin; not exists select * from itxt1 where a = 5; update itxt2 set updated = true where a = 2 and b = 1; commit")
+add_test(NAME itxt-14 COMMAND ddbshtest -s -T ${RD}/itxt-14.exp -c "begin; not exists select * from itxt1 where a = 5; update itxt2 set flag_updated = true where a = 2 and b = 1; commit")
 
 add_test(NAME itxt-15 COMMAND ddbshtest -s -T ${RD}/itxt-15.exp -c "select * from itxt2; select * from itxt1;")
 

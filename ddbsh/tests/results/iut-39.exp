@@ -16,6 +16,6 @@
 {b: 7, c: 8, gsipk: 6, pk: 105}
 {a: 1, b: 2, c: 3, pk: 0, x: 3, y: 10}
 {b: 3, c: 4, gsipk: 2, pk: 101}
-{b: 1, c: 2, gsipk: 0, pk: 109, updated: TRUE}
+{b: 1, c: 2, flag_updated: TRUE, gsipk: 0, pk: 109}
 {a: 6, b: 7, c: 8, pk: 5}
 {b: 9, c: 0, gsipk: 8, pk: 107}

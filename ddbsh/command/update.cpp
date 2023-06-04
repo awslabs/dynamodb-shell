@@ -287,6 +287,9 @@ Aws::DynamoDB::Model::UpdateItemRequest * CUpdateCommand::make_update_request(st
     uir->SetTableName(m_table_name);
     // don't call SetKey() that is up to the caller of this method.
 
+    if (m_returnvalue != Aws::DynamoDB::Model::ReturnValue::NONE)
+        uir->SetReturnValues(m_returnvalue);
+
     assert(m_set || m_remove);
 
     if (m_set)
@@ -398,6 +401,12 @@ int CUpdateCommand::do_update(Aws::DynamoDB::Model::UpdateItemRequest * uir,
         else
         {
             this->modified();
+
+            if (m_returnvalue != Aws::DynamoDB::Model::ReturnValue::NONE)
+            {
+                std::string i = CSelectHelper::show_item(result.GetResult().GetAttributes());
+                printf("%s\n", i.c_str());
+            }
 
             if(m_rate_limit)
                 m_rate_limit->consume_writes(result.GetResult().GetConsumedCapacity());

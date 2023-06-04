@@ -25,7 +25,7 @@ UpdateItem({
    "UpdateExpression":   "SET #aaaa1 = :vaaa1",
    "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 = :vaaa2",
    "ExpressionAttributeNames":   {
-      "#aaaa1":   "updated",
+      "#aaaa1":   "flag_updated",
       "#aaaa2":   "pk",
       "#aaaa3":   "gsipk"
    },

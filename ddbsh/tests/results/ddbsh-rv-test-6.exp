@@ -1,0 +1,5 @@
+DELETE (4 read, 4 modified, 0 ccf)
+{a: 1, b: 2, c: 3, x: 4, y: 4}
+{a: 2, b: 3, c: 4, x: 4, y: 4}
+{a: 3, b: four, c: 5, x: 4, y: 4}
+{a: 5, b: six, c: 7, x: 4, y: 4}

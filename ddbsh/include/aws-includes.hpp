@@ -94,4 +94,6 @@
 #include <aws/dynamodb/model/DescribeTableReplicaAutoScalingResult.h>
 #include <aws/dynamodb/model/TableAutoScalingDescription.h>
 
+#include <aws/dynamodb/model/ReturnValue.h>
+
 #endif

@@ -1077,7 +1077,7 @@ Some sample data is loaded into this table.
 
 **Purpose:** Delete data from a table.
 
-**Syntax:** DELETE FROM *table_or_index* \[WHERE *condition*\] [ratelimit]
+**Syntax:** DELETE FROM *table_or_index* \[WHERE *condition*\] [ratelimit] [return_values]
 
 Deletes data from a table. When a WHERE clause is provided, items matching the condition are identified and deleted. If no WHERE clause is provided, all items are deleted.
 
@@ -1086,6 +1086,8 @@ DynamoDB only supports item at a time deletes (or batches which delete batches o
 In standard SQL, a DELETE statement is an implicit transaction. In ddbsh, DELETE is NOT an implicit transaction. Each item is deleted individually. It is possible that an item is updated in the time between the SELECT and the subsequent DELETE. The item is only deleted if it matches the delete condition at the time when the DeleteItem() API is executed.
 
 For information about rate limiting see the section on [rate limiting](#Rate-Limiting). You can specify either a table or an index name in the UPDATE. If this is the update of a single item based on the PK and FK of the table, specifying an index name is immaterial. If a direct update of an item in the table based on a PK/FK is not possible, an index name will cause the query or scan to be performed on the index.
+
+For information about return values see the section [Return Values](#Return-Values).
 
 **Example: 1**
 
@@ -1253,11 +1255,13 @@ us-east-1>
 
 **Purpose:** Replaces an item in a table, if one exists. Creates a new one if one does not exist.
 
-**Syntax:** REPLACE INTO *table* ( <columns> ) VALUES <value> [ratelimit]
+**Syntax:** REPLACE INTO *table* ( <columns> ) VALUES <value> [ratelimit] [return_values]
 
 Inserts or replaces an item with the specified primary key. All primary key attributes must be specified. If an item already exists with that primary key, it is replaced.
 
 For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
+
+For information about return values see the section [Return Values](#Return-Values).
 
 **Example:**
 
@@ -1281,7 +1285,7 @@ us-east-1>
 
 **Purpose:** Selects items from a table or index.
 
-**Syntax:** SELECT \[CONSISTENT\] *|<columns> FROM *table*\[.*index*\] \[WHERE *condition*\] [ratelimit]
+**Syntax:** SELECT \[CONSISTENT\] *|<columns> FROM *table*\[.*index*\] \[WHERE *condition*\] [consumed_capacity] [ratelimit]
 
 Selects data from a table or index. If the optional *CONSISTENT* flag is specified, a consistent read is executed.
 
@@ -1290,6 +1294,13 @@ You can reference all scalar types (number, string and binary) as well as boolea
 List elements are indexed with a 0 base. Map elements use '.' as the separator.
 
 For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
+
+SELECT can return the consumed capacity during the operation. 
+
+``` SQL
+consumed_capacity := RETURN CONSUMED CAPACITY INDEXES |
+    RETURN CONSUMED CAPACITY TOTAL
+```
 
 **Example: 1**
 
@@ -1321,9 +1332,11 @@ SELECT will execute either a GetItem(), Query() or Scan() depending on whether t
 
 **Purpose:** Update items in a table.
 
-**Syntax:** UPDATE *table_or_index* SET *assignments* \[WHERE *condition*\] [ratelimit]
+**Syntax:** UPDATE *table_or_index* SET *assignments* \[WHERE *condition*\] [ratelimit] [return_values]
 
 For information about rate limiting see the section on [rate limiting](#Rate-Limiting). You can specify either a table or an index name in the UPDATE. If this is the update of a single item based on the PK and FK of the table, specifying an index name is immaterial. If a direct update of an item in the table based on a PK/FK is not possible, an index name will cause the query or scan to be performed on the index.
+
+For information about return values see the section [Return Values](#Return-Values).
 
 Updates items in the table with assignments as specified. The assignments can be of the form:
 
@@ -1376,11 +1389,13 @@ us-east-1>
 
 **Purpose:** Performs an UPDATE or INSERT
 
-**Syntax:** UPSERT *table_or_index* SET *assignments* \[WHERE *condition*\] [ratelimit]
+**Syntax:** UPSERT *table_or_index* SET *assignments* \[WHERE *condition*\] [ratelimit] [return_values]
 
 If an item is matched by the WHERE clause, it is updated. If one does not match the where clause then the *assignments* are converted are used to construct a new item.
 
 For information about rate limiting see the section on [rate limiting](#Rate-Limiting). You can specify either a table or an index name in the UPSERT. If this is the update of a single item based on the PK and FK of the table, specifying an index name is immaterial. If a direct update of an item in the table based on a PK/FK is not possible, an index name will cause the query or scan to be performed on the index.
+
+For information about return values see the section [Return Values](#Return-Values).
 
 **Example: 1**
 
@@ -1521,7 +1536,9 @@ UpdateItem({
 UPDATE
 ```
 
-### WHERE Clause
+# Data Manipulation Language - Special Topics
+
+## WHERE Clause
 
 You can use a WHERE clause with SELECT, UPDATE, DELETE and UPSERT.  In the WHERE clause, you can include multiple logical expressions which can be joined with the logical AND and logical OR. In addition, you can negate a logical expression with the NOT operator.
 
@@ -1663,7 +1680,7 @@ dynamodb-local (*)> select * from exprtest where a = 5;
 dynamodb-local (*)>
 ```
 
-### Rate Limiting
+## Rate Limiting
 
 *Note: Rate Limiting was added in DynamoDB Shell version 0.5.*
 
@@ -1767,6 +1784,120 @@ Query({
 ```
 
 would be processed as a query on the GSI and an update to the table. Performing an update/delete/upsert in this way reduces the cost by leveraging an index where available.
+
+## Return Values
+
+Support for Return values was added in ddbsh version 0.6.1.
+
+One of the very cool features of DynamoDB is that mutating APIs allow you to return an item either before or after the mutation (at no extra cost). This has some very interesting applications. First, what are return values?
+
+**This description relates to mutations that are not part of a transaction.**
+
+The mutating APIs are PutItem, DeleteItem and UpdateItem. You can read more about return values [here](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html#WorkingWithItems.ReturnValues).
+
+In DynamoDB Shell, you can specify return values in UPDATE, UPSERT, REPLACE, and DELETE. For obvious reasons, it is not supported on INSERT.
+
+Consider the following example that illustrates the implementation of a simple counter.
+
+First, we create a counter table as shown below.
+
+``` SQL
+us-east-1> create table counter (id string) primary key (id hash);
+CREATE
+us-east-1> insert into counter (id, value) values ("ticketId", 1);
+INSERT
+us-east-1> select * from counter;
+{id: ticketId, value: 1}
+us-east-1> 
+```
+
+To get the next available counter value and update the counter at the same time, we can perform an update like this.
+
+``` SQL
+update counter set value = value + 1 where id = "ticketId" return values updated old;
+{value: 1}
+UPDATE (0 read, 1 modified, 0 ccf)
+us-east-1> select * from counter;
+{id: ticketId, value: 2}
+us-east-1> 
+```
+
+The UPDATE above did three things:
+
+1. It captured the value of the "value" attribute for the item where id = "ticketId", and
+2. It incremented the value, and
+3. It returned the value before the UPDATE.
+
+Instead of UPDATED OLD, we could fetch the whole OLD item.
+
+``` SQL
+us-east-1> update counter set value = value + 1 where id = "ticketId" return values all old;
+{id: ticketId, value: 2}
+UPDATE (0 read, 1 modified, 0 ccf)
+us-east-1> select * from counter where id = "ticketId";
+{id: ticketId, value: 3}
+us-east-1> 
+```
+
+Return Values can also be used in bulk operations. Assume that you had a table with many counters, you could reinitialize them all in this way.
+
+``` SQL
+us-east-1> select * from counter;
+{id: ticketId, value: 3}
+{id: pageId, value: 27}
+{id: linkId, value: 403}
+{id: customerId, value: 20071}
+us-east-1> update counter set value = 1 return values all old;
+{id: ticketId, value: 3}
+{id: pageId, value: 27}
+{id: linkId, value: 403}
+{id: customerId, value: 20071}
+UPDATE (4 read, 4 modified, 0 ccf)
+us-east-1> select * from counter;
+{id: ticketId, value: 1}
+{id: pageId, value: 1}
+{id: linkId, value: 1}
+{id: customerId, value: 1}
+us-east-1> 
+
+```
+
+You can similarly use return values with UPSERT, if there is an old item, it will be returned.
+
+
+``` SQL
+us-east-1> select * from counter where id = "streetId";
+us-east-1> upsert counter set value = 5 where id = "streetId" return values all old;
+
+UPSERT (0 read, 1 modified, 0 ccf)
+us-east-1> 
+
+us-east-1> select * from counter where id = "streetId";
+{id: streetId, value: 5}
+us-east-1> upsert counter set value = 16 where id = "streetId" return values all old;
+{id: streetId, value: 5}
+UPSERT (0 read, 1 modified, 0 ccf)
+us-east-1> select * from counter where id = "streetId";
+{id: streetId, value: 16}
+us-east-1> 
+
+```
+
+And when you delete, you can get the item being deleted.
+
+``` SQL
+us-east-1> delete from counter return values all old;
+{id: streetId, value: 16}
+{id: ticketId, value: 1}
+{id: pageId, value: 1}
+{id: linkId, value: 1}
+{id: customerId, value: 2067}
+DELETE (5 read, 5 modified, 0 ccf)
+us-east-1> 
+```
+
+**Note:** It is cheaper to implement a monotonically increasing counter using return values than it is to do it with a read followed by a conditional write. The return of values is free so all you pay for is a single write with no condition.
+
 
 # Contributing
 

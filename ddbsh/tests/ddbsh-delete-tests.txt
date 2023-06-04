@@ -73,15 +73,15 @@ add_test(NAME ddbsh-delete-load-4 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests
 add_test(NAME ddbsh-delete-load-3-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-3-check.exp -c "select * from idt1")
 add_test(NAME ddbsh-delete-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-4-check.exp -c "select * from idt2")
 
-add_test(NAME ddbsh-delete-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-35.exp -c "explain update iut1.iut1gsi set updated = true where gsipk = 0")
+add_test(NAME ddbsh-delete-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-35.exp -c "explain update iut1.iut1gsi set flag_updated = true where gsipk = 0")
 
-add_test(NAME ddbsh-delete-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-36.exp -c "update iut1.iut1gsi set updated = true where gsipk = 0")
+add_test(NAME ddbsh-delete-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-36.exp -c "update iut1.iut1gsi set flag_updated = true where gsipk = 0")
 
 add_test(NAME ddbsh-delete-37 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-37.exp -c "select * from iut1")
 
-add_test(NAME ddbsh-delete-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-38.exp -c "explain update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+add_test(NAME ddbsh-delete-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-38.exp -c "explain update iut1.iut1gsi set flag_updated = true where gsipk > 0 and gsipk < 2")
 
-add_test(NAME ddbsh-delete-39 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-39.exp -c "update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+add_test(NAME ddbsh-delete-39 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-39.exp -c "update iut1.iut1gsi set flag_updated = true where gsipk > 0 and gsipk < 2")
 
 add_test(NAME ddbsh-delete-40 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-40.exp -c "select * from iut1.iut1gsi where gsipk > 0 and gsipk < 2")
 
