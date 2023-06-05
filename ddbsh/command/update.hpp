@@ -34,7 +34,11 @@ namespace ddbsh
         int run();
         ~CUpdateCommand();
 
-        void set(Aws::Vector<Aws::String> * table, Aws::Vector<CUpdateSetElement> * s, CWhere * where, CRateLimit * ratelimit) {
+        void set(Aws::Vector<Aws::String> * table,
+                 Aws::Vector<CUpdateSetElement> * s,
+                 CWhere * where,
+                 CRateLimit * ratelimit,
+                 Aws::DynamoDB::Model::ReturnValue returnvalue) {
             m_table_name = (*table)[0];
             if (table->size() > 1)
                 m_index_name = (*table)[1];
@@ -42,9 +46,14 @@ namespace ddbsh
             m_set = s;
             m_where = where;
             m_rate_limit = ratelimit;
+            m_returnvalue = returnvalue;
         };
 
-        void remove(Aws::Vector<Aws::String> * table, Aws::Vector<Aws::String> * r, CWhere * where, CRateLimit * ratelimit) {
+        void remove(Aws::Vector<Aws::String> * table,
+                    Aws::Vector<Aws::String> * r,
+                    CWhere * where,
+                    CRateLimit * ratelimit,
+                    Aws::DynamoDB::Model::ReturnValue returnvalue) {
             m_table_name = (*table)[0];
             if (table->size() > 1)
                 m_index_name = (*table)[1];
@@ -52,6 +61,7 @@ namespace ddbsh
             m_remove = r;
             m_where = where;
             m_rate_limit = ratelimit;
+            m_returnvalue = returnvalue;
         };
 
         void set_upsert() {
@@ -69,6 +79,7 @@ namespace ddbsh
         Aws::Vector<Aws::String> * m_remove;
         bool m_update;
         CRateLimit * m_rate_limit;
+        Aws::DynamoDB::Model::ReturnValue m_returnvalue;
 
         int do_scan(std::string pk, std::string rk);
         int do_query(std::string pk, std::string rk);

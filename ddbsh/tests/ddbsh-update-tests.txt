@@ -89,15 +89,15 @@ add_test(NAME iut-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-loa
 
 # update tables based on GSIs
 
-add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c "explain update iut1.iut1gsi set updated = true where gsipk = 0")
+add_test(NAME iut-37 COMMAND ddbshtest -q -T ${RD}/iut-37.exp -c "explain update iut1.iut1gsi set flag_updated = true where gsipk = 0")
 
-add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c "update iut1.iut1gsi set updated = true where gsipk = 0")
+add_test(NAME iut-38 COMMAND ddbshtest -q -T ${RD}/iut-38.exp -c "update iut1.iut1gsi set flag_updated = true where gsipk = 0")
 
 add_test(NAME iut-39 COMMAND ddbshtest -q -T ${RD}/iut-39.exp -c "select * from iut1")
 
-add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c "explain update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+add_test(NAME iut-40 COMMAND ddbshtest -q -T ${RD}/iut-40.exp -c "explain update iut1.iut1gsi set flag_updated = true where gsipk > 0 and gsipk < 2")
 
-add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c "update iut1.iut1gsi set updated = true where gsipk > 0 and gsipk < 2")
+add_test(NAME iut-41 COMMAND ddbshtest -q -T ${RD}/iut-41.exp -c "update iut1.iut1gsi set flag_updated = true where gsipk > 0 and gsipk < 2")
 
 add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c "select * from iut1.iut1gsi where gsipk > 0 and gsipk < 2")
 

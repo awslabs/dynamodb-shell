@@ -1,0 +1,26 @@
+add_test(NAME ddbsh-rv-test-drop-1 COMMAND ddbshtest -c "drop table if exists ddbsh_rv_test;")
+
+add_test(NAME ddbsh-rv-test-create-1 COMMAND ddbshtest -c "create table ddbsh_rv_test (a number) primary key (a hash); \
+              insert into ddbsh_rv_test (a, b, c) values (1, 2, 3), (2, 3, 4), (3, 4, 5), (4, 5, 6), (5, \"six\", 7);")
+
+add_test(NAME ddbsh-rv-test-1 COMMAND ddbshtest -s -T ${RD}/ddbsh-rv-test-1.exp -c "replace into \
+                                                    ddbsh_rv_test (a, b, c) values (3, \"four\", 5) \
+                                                    return values all old")
+
+add_test(NAME ddbsh-rv-test-2 COMMAND ddbshtest -s -T ${RD}/ddbsh-rv-test-2.exp -c "update ddbsh_rv_test \
+                                                                                    set x = 4 return values all old")
+
+add_test(NAME ddbsh-rv-test-3 COMMAND ddbshtest -s -T ${RD}/ddbsh-rv-test-3.exp -c "update ddbsh_rv_test \
+                                                                                    set y = 4 return values all new")
+
+add_test(NAME ddbsh-rv-test-4 COMMAND ddbshtest -s -T ${RD}/ddbsh-rv-test-4.exp -c "upsert ddbsh_rv_test \
+                                                                                    set y = 6, z = 3 where a = 4 \
+                                                                                    return values all old")
+
+add_test(NAME ddbsh-rv-test-5 COMMAND ddbshtest -s -T ${RD}/ddbsh-rv-test-5.exp -c "delete from ddbsh_rv_test \
+                                                                                    where a = 4 \
+                                                                                    return values all old")
+
+add_test(NAME ddbsh-rv-test-6 COMMAND ddbshtest -s -T ${RD}/ddbsh-rv-test-6.exp -c "delete from ddbsh_rv_test \
+                                                                                    return values all old")
+

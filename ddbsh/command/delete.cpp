@@ -268,6 +268,9 @@ Aws::DynamoDB::Model::DeleteItemRequest * CDeleteCommand::make_delete_request(st
     dir->SetTableName(m_table_name);
     // don't call SetKey() that is up to the caller of this method.
 
+    if (m_returnvalue != Aws::DynamoDB::Model::ReturnValue::NONE)
+        dir->SetReturnValues(m_returnvalue);
+
     if (m_where)
     {
         std::string cond = m_where->update_delete_condition_check(pk, rk, st);
@@ -330,6 +333,12 @@ int CDeleteCommand::do_delete(Aws::DynamoDB::Model::DeleteItemRequest * dir,
         else
         {
             this->modified();
+
+            if (m_returnvalue != Aws::DynamoDB::Model::ReturnValue::NONE)
+            {
+                std::string i = CSelectHelper::show_item(result.GetResult().GetAttributes());
+                printf("%s\n", i.c_str());
+            }
 
             if(m_rate_limit)
                 m_rate_limit->consume_writes(result.GetResult().GetConsumedCapacity());

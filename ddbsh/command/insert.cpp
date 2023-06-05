@@ -16,6 +16,7 @@
 #include "symbol_table.hpp"
 #include "get_key_schema.hpp"
 #include "strip_newlines.hpp"
+#include "select_helper.hpp"
 
 using namespace ddbsh;
 
@@ -28,6 +29,9 @@ int CInsertCommand::make_put_request(Aws::DynamoDB::Model::PutItemRequest * preq
 
     prequest->SetTableName(m_table_name);
     prequest->SetItem(nvmap);
+
+    if (m_returnvalue != Aws::DynamoDB::Model::ReturnValue::NONE)
+        prequest->SetReturnValues(m_returnvalue);
 
     if (m_ratelimit)
         prequest->SetReturnConsumedCapacity(Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL);
@@ -117,7 +121,15 @@ int CInsertCommand::run()
                 return 1;
             }
 
-            printf("%s\n", op);
+            if (m_returnvalue !=  Aws::DynamoDB::Model::ReturnValue::NONE)
+            {
+                std::string i = CSelectHelper::show_item(result.GetResult().GetAttributes());
+                printf("%s: %s\n", op, i.c_str());
+            }
+            else
+            {
+                printf("%s\n", op);
+            }
 
             if (m_ratelimit)
             {

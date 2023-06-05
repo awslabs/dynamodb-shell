@@ -34,8 +34,8 @@ add_test(NAME ddbsh-basic-test-7 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-basic-te
 
 add_test(NAME ddbsh-basic-test-8 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-8.exp -c "explain select * from ddbsh_test_table_1 where a = 3 and b = 4")
 
-add_test(NAME ddbsh-basic-test-9 COMMAND ddbshtest -c "select * from ddbsh_test_table_1 return total with ratelimit ( 1 rcu, 1 wcu )")
-set_property(TEST ddbsh-basic-test-9 PROPERTY WILL_FAIL PROPARTY PASS_REGULAR_EXPRESSION "You cannot specify both a ratelimit and a return_clause")
+add_test(NAME ddbsh-basic-test-9 COMMAND ddbshtest -c "select * from ddbsh_test_table_1 return consumed capacity total with ratelimit ( 1 rcu, 1 wcu )")
+set_property(TEST ddbsh-basic-test-9 PROPERTY WILL_FAIL PROPARTY PASS_REGULAR_EXPRESSION "You cannot specify both a ratelimit and a return_consumed_capacity.")
 
 add_test(NAME ddbsh-basic-test-10 COMMAND ddbshtest -q -T ${RD}/ddbsh-basic-test-10.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (6, 7, 8), (7, 8, 9), (8, 9, 10), (9, 10, 11), (10, 11, 12), (11, 12, 13), (12, 13, 14) with ratelimit ( 1 wcu )")
 
