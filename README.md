@@ -109,7 +109,7 @@ Cloning into 'dynamodb-shell'...
 % cmake ../aws-sdk-cpp -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH=/usr/local/ \
         -DCMAKE_INSTALL_PREFIX=/usr/local/ \
-        -DBUILD_ONLY="dynamodb" \
+        -DBUILD_ONLY="dynamodb;iam;sts" \
         -DBUILD_SHARED_LIBS=OFF \
         -DENABLE_TESTING=OFF \
         -DFORCE_SHARED_CRT=OFF
@@ -132,7 +132,7 @@ Cloning into 'dynamodb-shell'...
 % cmake ../aws-sdk-cpp -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH=/usr/local/ \
         -DCMAKE_INSTALL_PREFIX=/usr/local/ \
-        -DBUILD_ONLY="dynamodb" \
+        -DBUILD_ONLY="dynamodb;iam;sts" \
         -DBUILD_SHARED_LIBS=OFF \
         -DENABLE_TESTING=OFF \
         -DFORCE_SHARED_CRT=OFF
@@ -227,6 +227,41 @@ dynamodb-local (*)>
 ```
 
 The (*) at the end of the prompt indicates a non-standard endpoint is in use.
+
+## Cross Account Access
+
+In DynamoDB, a user can access resources (tables, indices) created and owned by another user using IAM policies. This is called a "Role Based Policy". You can find information about how to do this in the DynamoDB documentation [here][https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/configure-cross-account-access-to-amazon-dynamodb.html].
+
+The steps are described in brief below. Two accounts are involved here, one called the "ACTOR", and the other called "OWNER". The "OWNER" is the one who owns the table or index. The ACTOR is another account that is permitted access by the OWNER.
+
+1. As the OWNER, create a table
+2. As the OWNER, create a role with an AWS account as the trusted entity. Specify the account id for the ACTOR here. For the purpose of testing, I used the policy AmazonDynamoDBFullAccess. This is available in the web interface and a bit harder with the CLI.
+3. Find the ARN for the newly created policy.
+4. As the ACTOR, permit the user to Assume the role based on its ARN.
+5. Configure the ~/.aws/credentials file
+
+If you get this configured right, you can set the environment variable AWS_DEFAULT_PROFILE and specify the ARN in that profile section.
+
+In my test setup, and for the purposes of running tests, I have a profile called cross-acct in my ~/.aws/credentials file, and it looks like this.
+
+```
+[default]
+aws_access_key_id=<access-key-id-here>
+aws_secret_access_key=<secret-key-here>
+
+[cross-acct]
+role_arn=arn:aws:iam::OWNER:role/<role-name>
+source_profile=default
+```
+
+where OWNER is the account ID of the owner account, and ACTOR is the account ID of the actor account.
+
+When using DynamoDB Shell, you have to set AWS_DEFAULT_PROFILE like this.
+
+```
+$ export AWS_DEFAULT_PROFILE=cross-acct
+$ ddbsh
+```
 
 # Interface
 
@@ -1893,7 +1928,7 @@ us-east-1> delete from counter return values all old;
 {id: linkId, value: 1}
 {id: customerId, value: 2067}
 DELETE (5 read, 5 modified, 0 ccf)
-us-east-1> 
+us-east-1>
 ```
 
 **Note:** It is cheaper to implement a monotonically increasing counter using return values than it is to do it with a read followed by a conditional write. The return of values is free so all you pay for is a single write with no condition.

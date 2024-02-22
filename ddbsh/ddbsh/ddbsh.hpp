@@ -17,6 +17,11 @@
 
 #include <aws/core/Aws.h>
 #include <aws/dynamodb/DynamoDBClient.h>
+#include <aws/core/config/AWSProfileConfig.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/auth/AWSCredentialsProviderChain.h>
+#include <aws/sts/STSClient.h>
+#include <aws/sts/model/AssumeRoleRequest.h>
 #include <unistd.h>
 #include "logging.hpp"
 #include "input-source.hpp"
@@ -115,6 +120,14 @@ namespace ddbsh
 
         // command line abort on error
         bool m_abort_on_error;
+
+	// In order to handle delegated access and the
+	// AWS_USER_PROFILE get the credentials to use. The method
+	// here is based on the one I found in
+	// https://github.com/aws/aws-sdk-cpp/issues/150#issuecomment-416646025
+	std::string getProfileName();
+	Aws::Config::Profile getProfile();
+	Aws::Auth::AWSCredentials getCredentials();
     };
 };
 #endif

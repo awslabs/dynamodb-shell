@@ -159,13 +159,124 @@ std::string CDDBSh::getRegion()
         return m_region + " (*)";
 }
 
+// In order to handle delegated access and the AWS_USER_PROFILE get
+// the credentials to use. The method here is based on
+// https://github.com/aws/aws-sdk-cpp/issues/150#issuecomment-416646025
+
+// get the value of the AWS User Profile (if one is set) or "default",
+// the default.
+std::string CDDBSh::getProfileName()
+{
+    const char * env;
+    std::string profile = (env = std::getenv("AWS_DEFAULT_PROFILE")) != nullptr ? env : "default";
+    logdebug("[%s, %d] Using profile %s\n", __FILENAME__, __LINE__, profile.c_str());
+    return profile;
+}
+
+// get the current configuration profile that should be used.
+Aws::Config::Profile CDDBSh::getProfile()
+{
+    std::string profile_name = getProfileName();
+    Aws::Config::AWSConfigFileProfileConfigLoader credLoader(
+	Aws::Auth::ProfileConfigFileAWSCredentialsProvider::GetCredentialsProfileFilename());
+
+    if (credLoader.Load())
+    {
+	logdebug("[%s, %d] Looking for named credential profile. %s\n",
+		 __FILENAME__, __LINE__, profile_name.c_str());
+	// look for the named profile
+	auto credIter = credLoader.GetProfiles().find(profile_name);
+	if (credIter != credLoader.GetProfiles().end())
+	{
+	    logdebug("[%s, %d] Found named credential profile. %s\n",
+		 __FILENAME__, __LINE__, profile_name.c_str());
+
+	    return credIter->second;
+	}
+    }
+
+    // either the loader failed to load a file, or the profile (by
+    // name) wasn't found.
+
+    Aws::Config::AWSConfigFileProfileConfigLoader configLoader(Aws::Auth::GetConfigProfileFilename());
+    if (configLoader.Load())
+    {
+	logdebug("[%s, %d] Looking for named config profile. %s\n",
+		 __FILENAME__, __LINE__, profile_name.c_str());
+
+	// look for the named profile
+	auto configIter = configLoader.GetProfiles().find(profile_name);
+	if (configIter != configLoader.GetProfiles().end())
+	{
+	    logdebug("[%s, %d] Found named config profile. %s\n",
+		 __FILENAME__, __LINE__, profile_name.c_str());
+
+	    return configIter->second;
+	}
+    }
+
+    // no named profile could be found.
+    logdebug("[%s, %d] Using default (empty) profile.\n", __FILENAME__, __LINE__);
+    return Aws::Config::Profile();
+}
+
+Aws::Auth::AWSCredentials CDDBSh::getCredentials()
+{
+    // Does the default credentials provider chain help?
+    Aws::Auth::DefaultAWSCredentialsProviderChain defaultProviderChain;
+    Aws::Auth::AWSCredentials credentials = defaultProviderChain.GetAWSCredentials();
+    if(!credentials.GetAWSAccessKeyId().empty() && !credentials.GetAWSSecretKey().empty())
+    {
+	logdebug("[%s, %d] Using Access Key from the default provider chain. %s\n",
+		 __FILENAME__, __LINE__, credentials.GetAWSAccessKeyId().c_str());
+	return credentials;
+    }
+
+    //  default provider chain didn't work, look for current profile.
+    Aws::Config::Profile profile = getProfile();
+    Aws::String roleArn = profile.GetRoleArn();
+    Aws::String sourceProfile = profile.GetSourceProfile();
+
+    if(roleArn.empty() || sourceProfile.empty())
+    {
+	// no match, use the empty credentials
+	logdebug("[%s, %d] no profile credentials found, using default.\n",
+		 __FILENAME__, __LINE__);
+	return Aws::Auth::AWSCredentials("", "");
+    }
+
+    // We got role assumption here.
+    Aws::Auth::ProfileConfigFileAWSCredentialsProvider provider(sourceProfile.c_str());
+    Aws::STS::Model::AssumeRoleRequest roleRequest;
+
+    roleRequest.SetRoleArn(roleArn);
+    roleRequest.SetRoleSessionName(provider.GetAWSCredentials().GetAWSAccessKeyId());
+
+    Aws::STS::STSClient stsClient(provider.GetAWSCredentials());
+    Aws::STS::Model::AssumeRoleOutcome response = stsClient.AssumeRole(roleRequest);
+
+    if(!response.IsSuccess())
+    {
+	logdebug("[%s, %d] Failed to assume role %s. Using default.\n", __FILENAME__, __LINE__,
+		 roleArn.c_str());
+        return Aws::Auth::AWSCredentials("", "");
+    }
+
+    logdebug("[%s, %d] Assumed role %s\n", __FILENAME__, __LINE__, roleArn.c_str());
+    Aws::STS::Model::Credentials roleCredentials = response.GetResult().GetCredentials();
+    return Aws::Auth::AWSCredentials(roleCredentials.GetAccessKeyId(),
+                                     roleCredentials.GetSecretAccessKey(),
+                                     roleCredentials.GetSessionToken());
+}
+
 void CDDBSh::reconnect()
 {
     logdebug("[%s, %d] Will attempt reconnect.\n", __FILENAME__, __LINE__);
     delete p_dynamoDBClient;
 
     CDDBShDDBClientConfig clientConfig(m_region, m_endpoint);
-    p_dynamoDBClient = new Aws::DynamoDB::DynamoDBClient(clientConfig);
+    p_dynamoDBClient = new Aws::DynamoDB::DynamoDBClient(
+	getCredentials(), clientConfig);
 
     if(checkConnection())
         m_reconnect = false;
