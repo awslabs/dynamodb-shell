@@ -263,6 +263,25 @@ $ export AWS_DEFAULT_PROFILE=cross-acct
 $ ddbsh
 ```
 
+Note that if you put the configuration of the profile in the config file, the format is slightly different. You must prefix the profile name with the word "profile".
+
+The same cross-acct setting in the config file would look like this.
+
+```
+[profile cross-acct]
+role_arn=arn:aws:iam::OWNER:role/<role-name>
+source_profile=default
+```
+
+If you provide a malformed config section that is missing the "profile" prefix, you get an error.
+
+```
+% AWS_PROFILE=cross-acct ddbsh -d
+ddbsh - version 0.7
+[ddbsh.cpp, 250] Possibly malformed config profile (cross-acct) found. Profiles in the config file must have the prefix 'profile'.
+[...]
+```
+
 # Interface
 
 ddbsh exposes a readline based interface. The UP-ARROW and DOWN-ARROW keys allow you to view previous commands, and pick a previous command to reexecute.
