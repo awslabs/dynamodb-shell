@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Update Homebrew formulae
-        uses: dynamodb-shell-brew-pr-bot/action-homebrew-bump-formula@v3.10.0
+        uses: dynamodb-shell-brew-pr-bot/action-homebrew-bump-formula@v3.11.0
         with:
           token: "${{ secrets.TOKEN }}"
           tap: aws/homebrew-tap
