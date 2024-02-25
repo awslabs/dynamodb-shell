@@ -86,7 +86,7 @@ Cloning into 'dynamodb-shell'...
 
 % cd build
 
-% cmake ../ddbsh
+% cmake ../dynamodb-shell/ddbsh
 
 % make
 ```
@@ -153,7 +153,7 @@ Cloning into 'dynamodb-shell'...
 
 % mkdir build && cd build
 
-% cmake ../ddbsh -DCMAKE_BUILD_TYPE=Release
+% cmake ../dynamodb-shell/ddbsh -DCMAKE_BUILD_TYPE=Release
 
 % make
 
