@@ -23,7 +23,7 @@ jobs:
           cd aws-sdk-cpp
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF
           make && sudo make install
 
       - name: Build binaries
