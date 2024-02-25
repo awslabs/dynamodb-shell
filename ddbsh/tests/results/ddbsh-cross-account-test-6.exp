@@ -1,0 +1,10 @@
+GetItem({
+   "TableName":   "ddbsh_test_table_1",
+   "Key":   {
+      "a":   {
+         "N":   "3"
+      }
+   },
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE"
+})

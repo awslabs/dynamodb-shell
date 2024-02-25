@@ -1,0 +1,156 @@
+add_test(NAME ddbsh-cross-account-cli COMMAND ddbshtest -c "show tables")
+set_property(TEST ddbsh-cross-account-cli PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-delete-test-table-1 COMMAND ddbshtest -c "drop table if exists ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-delete-test-table-1 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-create-test-table-1 COMMAND ddbshtest -c "create table ddbsh_test_table_1 ( a number ) primary key ( a hash ) billing mode provisioned ( 200 RCU, 200 WCU )")
+set_property(TEST ddbsh-cross-account-create-test-table-1 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-create-test-table-1-fail COMMAND ddbshtest -c "create table ddbsh_test_table_1 ( a number ) primary key ( a hash ) billing mode provisioned ( 200 RCU, 200 WCU )")
+set_property(TEST ddbsh-cross-account-create-test-table-1-fail PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+set_property(TEST ddbsh-cross-account-create-test-table-1-fail PROPERTY PASS_REGULAR_EXPRESSION "Table already exists: ddbsh_test_table_1")
+
+# insert a few items
+add_test(NAME ddbsh-cross-account-insert-test-1 COMMAND ddbshtest -c "insert into ddbsh_test_table_1 (a, b, c) values (3, 4, 5); insert into ddbsh_test_table_1 (a, b, c) values (4, 5, 6); insert into ddbsh_test_table_1 (a, b, c) values (5, 6, 7);")
+set_property(TEST ddbsh-cross-account-insert-test-1 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+# check that the data exists now
+add_test(NAME ddbsh-cross-account-test-1 COMMAND ddbshtest -s -T ${RD}/ddbsh-cross-account-test-1.exp -q -c "select * from ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-test-1 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-2 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-2.exp -c "explain select * from ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-test-2 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-3 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-cross-account-test-3.exp -c "select a from ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-test-3 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-4 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-cross-account-test-4.exp -c "select a, b from ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-test-4 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-5 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-cross-account-test-5.exp -c "select * from ddbsh_test_table_1 where a = 3")
+set_property(TEST ddbsh-cross-account-test-5 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-6 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-6.exp -c "explain select * from ddbsh_test_table_1 where a = 3")
+set_property(TEST ddbsh-cross-account-test-6 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-7 COMMAND ddbshtest -s -q -T ${RD}/ddbsh-cross-account-test-7.exp -c "select * from ddbsh_test_table_1 where a = 3 and b = 4")
+set_property(TEST ddbsh-cross-account-test-7 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-8 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-8.exp -c "explain select * from ddbsh_test_table_1 where a = 3 and b = 4")
+set_property(TEST ddbsh-cross-account-test-8 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-9 COMMAND ddbshtest -c "select * from ddbsh_test_table_1 return consumed capacity total with ratelimit ( 1 rcu, 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-9 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+set_property(TEST ddbsh-cross-account-test-9 PROPERTY WILL_FAIL PROPARTY PASS_REGULAR_EXPRESSION "You cannot specify both a ratelimit and a return_consumed_capacity.")
+
+add_test(NAME ddbsh-cross-account-test-10 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-10.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (6, 7, 8), (7, 8, 9), (8, 9, 10), (9, 10, 11), (10, 11, 12), (11, 12, 13), (12, 13, 14) with ratelimit ( 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-10 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-11 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-11.exp -c "select * from ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-test-11 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-12 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-12.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (13, 14, 15) with ratelimit ( 1 rcu )")
+set_property(TEST ddbsh-cross-account-test-12 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-13 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-13.exp -c "select * from ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-test-13 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-14 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-14.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (14, 15, 16) with ratelimit ( 1 rcu, 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-14 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-15 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-15.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 rcu)")
+set_property(TEST ddbsh-cross-account-test-15 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-16 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-16.exp -c "update ddbsh_test_table_1 set delete_me = true where a > 10 with ratelimit ( 1 rcu, 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-16 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-17 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-17.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu)")
+set_property(TEST ddbsh-cross-account-test-17 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-18 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-18.exp -c "update ddbsh_test_table_1 remove c where a > 10 with ratelimit ( 1 rcu, 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-18 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-19 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-19.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu)")
+set_property(TEST ddbsh-cross-account-test-19 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-20 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-20.exp -c "replace into ddbsh_test_table_1 (a, b, c) values ( 13, 14, 15 ) with ratelimit ( 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-20 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-21 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-21.exp -c "select * from ddbsh_test_table_1 where a = 13 with ratelimit(1 wcu)")
+set_property(TEST ddbsh-cross-account-test-21 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-22 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-22.exp -c "upsert ddbsh_test_table_1 set upserted = true where a > 10 with ratelimit ( 1 wcu )")
+set_property(TEST ddbsh-cross-account-test-22 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-23 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-23.exp -c "select * from ddbsh_test_table_1 with ratelimit(1 wcu, 1 rcu)")
+set_property(TEST ddbsh-cross-account-test-23 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+
+add_test(NAME ddbsh-cross-account-test-24 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-24.exp -c "select * from ddbsh_test_table_1 where a = 10")
+set_property(TEST ddbsh-cross-account-test-24 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-25 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-25.exp -c "select * from ddbsh_test_table_1 where b > 20")
+set_property(TEST ddbsh-cross-account-test-25 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-26 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-26.exp -c "select * from ddbsh_test_table_1 where c < 30")
+set_property(TEST ddbsh-cross-account-test-26 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-27 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-27.exp -c "select * from ddbsh_test_table_1 where a >= 15")
+set_property(TEST ddbsh-cross-account-test-27 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-28 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-28.exp -c "select * from ddbsh_test_table_1 where b <= 25")
+set_property(TEST ddbsh-cross-account-test-28 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-29 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-29.exp -c "select * from ddbsh_test_table_1 where c > 35")
+set_property(TEST ddbsh-cross-account-test-29 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-30 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-30.exp -c "select * from ddbsh_test_table_1 where a <= 5")
+set_property(TEST ddbsh-cross-account-test-30 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-31 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-31.exp -c "select * from ddbsh_test_table_1 where b >= 30")
+set_property(TEST ddbsh-cross-account-test-31 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-32 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-32.exp -c "select * from ddbsh_test_table_1 where c <= 40")
+set_property(TEST ddbsh-cross-account-test-32 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-33 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-33.exp -c "select * from ddbsh_test_table_1 where a between 5 and 15")
+set_property(TEST ddbsh-cross-account-test-33 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-34 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-34.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (50, 15, 20), (51, 16, 21), (52, 17, 22), (53, 18, 23), (54, 19, 24) with ratelimit (1 wcu)")
+set_property(TEST ddbsh-cross-account-test-34 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-35 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-35.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (55, 20, 25), (56, 21, 26), (57, 22, 27), (58, 23, 28), (59, 24, 29) with ratelimit (1 wcu)")
+set_property(TEST ddbsh-cross-account-test-35 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-36 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-36.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (60, 25, 30), (61, 26, 31), (62, 27, 32), (63, 28, 33), (64, 29, 34) with ratelimit (1 wcu)")
+set_property(TEST ddbsh-cross-account-test-36 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-37 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-37.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (65, 30, 35), (66, 31, 36), (67, 32, 37), (68, 33, 38), (69, 34, 39) with ratelimit (1 wcu)")
+set_property(TEST ddbsh-cross-account-test-37 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-38 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-38.exp -c "insert into ddbsh_test_table_1 (a, b, c) values (70, 35, 40), (71, 36, 41), (72, 37, 42), (73, 38, 43), (74, 39, 44) with ratelimit (1 wcu)")
+set_property(TEST ddbsh-cross-account-test-38 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+add_test(NAME ddbsh-cross-account-test-40 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-40.exp -c "select * from ddbsh_test_table_1 where a > 50 and b < 8")
+set_property(TEST ddbsh-cross-account-test-40 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-41 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-41.exp -c "select * from ddbsh_test_table_1 where a = 54 and b > 9")
+set_property(TEST ddbsh-cross-account-test-41 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-42 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-42.exp -c "select * from ddbsh_test_table_1 where a < 57 and c > 10")
+set_property(TEST ddbsh-cross-account-test-42 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-43 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-43.exp -c "select * from ddbsh_test_table_1 where b >= 12")
+set_property(TEST ddbsh-cross-account-test-43 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-44 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-44.exp -c "select * from ddbsh_test_table_1 where c <= 10")
+set_property(TEST ddbsh-cross-account-test-44 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-45 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-45.exp -c "select * from ddbsh_test_table_1 where a > 60 and b < 11")
+set_property(TEST ddbsh-cross-account-test-45 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-46 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-46.exp -c "select * from ddbsh_test_table_1 where a = 58 and b > 12")
+set_property(TEST ddbsh-cross-account-test-46 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-47 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-47.exp -c "select * from ddbsh_test_table_1 where a < 61 and c > 13")
+set_property(TEST ddbsh-cross-account-test-47 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-48 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-48.exp -c "select * from ddbsh_test_table_1 where b >= 15")
+set_property(TEST ddbsh-cross-account-test-48 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+add_test(NAME ddbsh-cross-account-test-49 COMMAND ddbshtest -q -T ${RD}/ddbsh-cross-account-test-49.exp -c "select * from ddbsh_test_table_1 where c <= 14")
+set_property(TEST ddbsh-cross-account-test-49 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+# set_property(TEST ddbsh-cross-account-delete-test-table-1-fail PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")

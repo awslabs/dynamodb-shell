@@ -10,11 +10,11 @@ set(CMAKE_CXX_COMPILER "g++")
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 project(ddbsh
-        VERSION 0.6.1.0
+        VERSION 0.7.0.0
         DESCRIPTION "A DynamoDB interactive shell"
         HOMEPAGE_URL "https://www.ddbsh.org/")
 
-find_package(AWSSDK REQUIRED COMPONENTS dynamodb)
+find_package(AWSSDK REQUIRED COMPONENTS dynamodb iam sts)
 find_package(BISON)
 find_package(FLEX)
 find_package(ZLIB)
