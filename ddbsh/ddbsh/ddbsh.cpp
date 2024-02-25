@@ -215,7 +215,6 @@ Aws::Config::Profile CDDBSh::getProfile()
     // name) wasn't found. Note that the config file does prefix
     // profile names with the word "profile". Therefore specify the
     // second parameter (true), default is false.
-
     Aws::Config::AWSConfigFileProfileConfigLoader configLoader(Aws::Auth::GetConfigProfileFilename(), true);
     if (configLoader.Load())
     {
@@ -230,24 +229,6 @@ Aws::Config::Profile CDDBSh::getProfile()
 		 __FILENAME__, __LINE__, profile_name.c_str());
 
 	    return configIter->second;
-	}
-    }
-
-    // Let's see whether we find a malformed config file which doesn't
-    // have the "profile" prefix, and generate a useful error for the
-    // user.
-    Aws::Config::AWSConfigFileProfileConfigLoader badConfigLoader(Aws::Auth::GetConfigProfileFilename(), false);
-    if (badConfigLoader.Load())
-    {
-	logdebug("[%s, %d] Looking for a malformed named config profile. %s\n",
-		 __FILENAME__, __LINE__, profile_name.c_str());
-
-	auto configIter = badConfigLoader.GetProfiles().find(profile_name);
-	if (configIter != badConfigLoader.GetProfiles().end())
-	{
-	    logerror("[%s, %d] Possibly malformed config profile (%s) found. "
-		     "Profiles in the config file must have the prefix 'profile'.\n",
-		     __FILENAME__, __LINE__, profile_name.c_str());
 	}
     }
 
