@@ -92,3 +92,11 @@ add_test(NAME iins-insert-check-12 COMMAND ddbshtest -s -T ${RD}/iins-check-12.e
 
 add_test(NAME iins-insert-check-13 COMMAND ddbshtest -s -T ${RD}/iins-check-13.exp -c "select * from iins1 where lima.d.y[2] = 14")
 
+
+# add tests for null, [], and {} in maps and lists
+
+add_test(NAME iins-insert-10 COMMAND ddbshtest -c "insert into iins1(a, b, c) values (34, 35, {a: null, b: {}, c: []})")
+add_test(NAME iins-insert-check-14 COMMAND ddbshtest -s -T ${RD}/iins-check-14.exp -c "select * from iins1 where a = 34")
+
+add_test(NAME iins-insert-11 COMMAND ddbshtest -c "insert into iins1(a, b, c) values (35, 36, {a: null, b: {}, c: [null]})")
+add_test(NAME iins-insert-check-15 COMMAND ddbshtest -s -T ${RD}/iins-check-15.exp -c "select * from iins1 where a = 35")

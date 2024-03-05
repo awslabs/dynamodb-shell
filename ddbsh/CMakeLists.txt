@@ -10,7 +10,7 @@ set(CMAKE_CXX_COMPILER "g++")
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 project(ddbsh
-        VERSION 0.7.0.0
+        VERSION 0.7.0.1
         DESCRIPTION "A DynamoDB interactive shell"
         HOMEPAGE_URL "https://www.ddbsh.org/")
 

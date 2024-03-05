@@ -2271,6 +2271,30 @@ lee_rhs: T_WHOLE_NUMBER
 {
     logdebug("[%s, %d] lee_rhs: '{' map_element_list '}'\n", __FILENAME__, __LINE__);
     $$ = $2;
+} | K_NULL
+{
+    logdebug("[%s, %d] lee_rhs: K_NULL\n", __FILENAME__, __LINE__);
+    Aws::DynamoDB::Model::AttributeValue * nullvalue = NEW Aws::DynamoDB::Model::AttributeValue();
+    nullvalue->SetNull(true);
+
+    $$ = nullvalue;
+} | '[' ']'
+{
+    logdebug("[%s, %d] lee_rhs: '[' ']'\n", __FILENAME__, __LINE__);
+
+    Aws::DynamoDB::Model::AttributeValue * rv = NEW Aws::DynamoDB::Model::AttributeValue();
+    const Aws::Vector<std::shared_ptr<Aws::DynamoDB::Model::AttributeValue>> np;
+    rv->SetL(np);
+
+    $$ = rv;
+} | '{' '}'
+{
+    logdebug("[%s, %d] lee_rhs: '{' '}'\n", __FILENAME__, __LINE__);
+
+    Aws::DynamoDB::Model::AttributeValue * rv = NEW Aws::DynamoDB::Model::AttributeValue();
+    const Aws::Map<Aws::String, const std::shared_ptr<Aws::DynamoDB::Model::AttributeValue>> np;
+    rv->SetM(np);
+    $$ = rv;
 };
 
 map_element_list: string ':' lee_rhs

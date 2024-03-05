@@ -407,7 +407,11 @@ Aws::String CSelectHelper::serialize_value(Aws::DynamoDB::Model::AttributeValue 
                 value = value + ", " + serialize_value(*f);
         }
 
-        value = value + "]";
+	if (value.empty())
+	    value = "[]";
+	else
+	    value = value + "]";
+
         break;
 
     case Aws::DynamoDB::Model::ValueType::ATTRIBUTE_MAP:
@@ -418,7 +422,11 @@ Aws::String CSelectHelper::serialize_value(Aws::DynamoDB::Model::AttributeValue 
             else
                 value =  value + ", " + quote_if_required(m.first) + ":" + serialize_value(*(m.second));
         }
-        value = value + "}";
+
+	if (value.empty())
+	    value = "{}";
+	else
+	    value = value + "}";
 
         break;
 
