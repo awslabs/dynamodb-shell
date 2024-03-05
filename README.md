@@ -149,8 +149,6 @@ Cloning into 'dynamodb-shell'...
 ```
 % git clone https://github.com/awslabs/dynamodb-shell.git
 
-% cd dynamodb-shell
-
 % mkdir build && cd build
 
 % cmake ../dynamodb-shell/ddbsh -DCMAKE_BUILD_TYPE=Release
@@ -174,10 +172,10 @@ Test project /Users/amrithie/source/github/dynamodb-shell/build
 
 # Getting Started
 
-Running ddbsh is as simple as executing the ddbsh command. ddbsh is written in C++ and uses the DynamoDB API through the AWS DynamoDB SDK.
+Running ddbsh is as simple as executing the ddbsh command. ddbsh is written in C++ and uses the DynamoDB API through the AWS DynamoDB SDK. Assuming that you built it as above, and completed the install, then you should be able to run it with just this.
 
 ```
-$ ./ddbsh
+$ ddbsh
 ddbsh - version 0.2
 us-east-1> _
 ```
@@ -223,7 +221,7 @@ You will then be able to connect to DynamoDB Local.
 ```
 ddbsh
 ddbsh - version 0.2
-dynamodb-local (*)> 
+dynamodb-local (*)>
 ```
 
 The (*) at the end of the prompt indicates a non-standard endpoint is in use.
@@ -292,7 +290,7 @@ $ ./ddbsh
 ddbsh - version 0.2
 us-east-1> connect us-west-1;
 CONNECT
-us-west-1> 
+us-west-1>
 ```
 
 The prompt shows the region name, and the additional (*) if you are connected to a non-standard endpoint.
@@ -304,7 +302,7 @@ The prompt shows the region name, and the additional (*) if you are connected to
 ``` SQL
 us-east-1> show version;
 ddbsh - version 0.5.1
-us-east-1> 
+us-east-1>
 ```
 
 *Note:* The SHOW VERSION command was added in DynamoDB Shell version 0.5.1.
@@ -323,9 +321,9 @@ us-east-1>
 
 **Syntax:** ALTER TABLE *table* [alter-table-options]
 
-### SET billing\_mode\_and\_throughput 
+### SET billing\_mode\_and\_throughput
 
-Sets table and index billing mode and throughput. 
+Sets table and index billing mode and throughput.
 
 BILLING MODE PROVISIONED ( *NN* RCU, *MM* WCU )
 
@@ -345,7 +343,7 @@ Name: singlekey (ACTIVE)
 [...]
 Billing Mode: On Demand
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 **Example 2**
@@ -357,7 +355,7 @@ us-east-1> describe singlekey;
 [...]
 Billing Mode: Provisioned (200 RCU, 300 WCU)
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 ### SET TABLE CLASS *class*
@@ -381,7 +379,7 @@ us-east-1> describe singlekey;
 [...]
 Table Class: STANDARD_INFREQUENT_ACCESS
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 **Example 2**
@@ -393,7 +391,7 @@ us-east-1> describe singlekey;
 [...]
 Table Class: STANDARD_INFREQUENT_ACCESS
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 **Warning** There is a limit on the number of times you can change a table class. If you do it too often, you will get an error like this.
@@ -401,7 +399,7 @@ us-east-1>
 ```
 us-east-1> alter table singlekey set table class standard infrequent access;
 Error: Subscriber limit exceeded: Updates to TableClass are limited to 2 times in 30 day(s).
-us-east-1> 
+us-east-1>
 ```
 
 ### SET STREAM
@@ -437,7 +435,7 @@ us-east-1> describe singlekey;
 [...]
 Stream: NEW_IMAGE
 [...]
-us-east-1> 
+us-east-1>
 
 ```
 
@@ -450,7 +448,7 @@ us-east-1> describe singlekey;
 [...]
 Stream: Disabled
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 ### CREATE GSI
@@ -472,7 +470,7 @@ us-east-1> describe singlekey;
 [...]
 GSI xygsi: ( HASH x, RANGE y ),  Provisioned (22 RCU, 41 WCU), Projecting (ALL), Status: CREATING, Backfilling: YES
 [...]
-us-east-1> 
+us-east-1>
 
 ```
 
@@ -486,7 +484,7 @@ ALTER
 us-east-1> describe table1;
 [...]
 GSI xykeysgsi: ( HASH x, RANGE y ),  Provisioned (22 RCU, 41 WCU), Projecting (KEYS_ONLY), Status: CREATING, Backfilling: NO
-[...]us-east-1> 
+[...]us-east-1>
 
 ```
 
@@ -499,7 +497,7 @@ us-east-1> alter table singlekey (x number, y number, a number)
 us-east-1> create gsi xyagsi on (x hash) projecting include (y, a)
 us-east-1> billing mode provisioned (20 RCU, 30 WCU);
 ALTER
-us-east-1> 
+us-east-1>
 ```
 
 This index will project the keys as well as the attributes *y* and *a*.
@@ -509,7 +507,7 @@ This index will project the keys as well as the attributes *y* and *a*.
 ```
 us-east-1> alter table singlekey drop gsi xygsi;
 ALTER
-us-east-1> 
+us-east-1>
 ```
 
 ### SET *billing\_mode\_and\_throughput*
@@ -525,7 +523,7 @@ Billing Mode: Provisioned (10 RCU, 20 WCU)
 GSI pqgsi: ( HASH p ),  Provisioned (20 RCU, 30 WCU), Projecting (INCLUDE) (q), Status: CREATING, Backfilling: YES
 GSI xykeysgsi: ( HASH x, RANGE y ),  Provisioned (22 RCU, 41 WCU), Projecting (KEYS_ONLY), Status: ACTIVE, Backfilling: NO
 [...]
-us-east-1> 
+us-east-1>
 
 ```
 
@@ -540,14 +538,14 @@ Billing Mode: On Demand
 GSI pqgsi: ( HASH p ), Billing Mode: On Demand (mirrors table), Projecting (INCLUDE) (q), Status: UPDATING, Backfilling: YES
 GSI xykeysgsi: ( HASH x, RANGE y ), Billing Mode: On Demand (mirrors table), Projecting (KEYS_ONLY), Status: UPDATING, Backfilling: NO
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 Now we convert it back to a provisioned table.
 
 ```
-us-east-1> us-east-1> alter table table1 
-us-east-1> set billing mode provisioned (20 rcu, 30 wcu) 
+us-east-1> us-east-1> alter table table1
+us-east-1> set billing mode provisioned (20 rcu, 30 wcu)
 us-east-1> update gsi (pqgsi set billing mode provisioned (20 rcu, 30 wcu), xykeysgsi set billing mode provisioned (3 rcu, 5 wcu));
 ALTER
 ```
@@ -576,7 +574,7 @@ Name: ipt1 (ACTIVE)
 [...]
 PITR is Disabled.
 [...]
-us-east-1> 
+us-east-1>
 ```
 
 ### ADD REPLICA, UPDATE REPLICA, and DROP REPLICA
@@ -616,14 +614,14 @@ INSERT
 us-east-2> select * from global_customers;
 {custid: 102, name: Bob}
 {custid: 101, name: Alice}
-us-east-2> 
+us-east-2>
 
 us-east-2> connect us-west-1;
 CONNECT
 us-west-1> select * from global_customers;
 {custid: 102, name: Bob}
 {custid: 101, name: Alice}
-us-west-1> 
+us-west-1>
 
 
 ```
@@ -645,13 +643,13 @@ CONNECT
 us-east-2> select * from global_customers;
 {custid: 102, name: Bob}
 {active: TRUE, custid: 101, name: Alice}
-us-east-2> 
+us-east-2>
 
 us-east-2> alter table global_customers add replica us-west-2 table class standard infrequent access;
 ALTER
 us-east-2> connect us-west-2;
 CONNECT
-us-west-2> 
+us-west-2>
 
 ...
 
@@ -664,12 +662,12 @@ Table Class: STANDARD_INFREQUENT_ACCESS
 Replica Region: us-east-2 (Status: ACTIVE)
 Replica Region: us-west-1 (Status: ACTIVE)
 Replica Region: us-west-2 (Status: ACTIVE)
-us-west-2> 
+us-west-2>
 
 us-west-2> select * from global_customers;
 {custid: 102, name: Bob}
 {active: TRUE, custid: 101, name: Alice}
-us-west-2> 
+us-west-2>
 
 us-west-2> insert into global_customers (custid, name) values ( 103, "Charlie");
 INSERT
@@ -679,7 +677,7 @@ us-east-2> select * from global_customers;
 {custid: 102, name: Bob}
 {custid: 103, name: Charlie}
 {active: TRUE, custid: 101, name: Alice}
-us-east-2> 
+us-east-2>
 
 ```
 
@@ -702,7 +700,7 @@ us-east-1> describe dpe;
 [...]
 Deletion Protection: Disabled
 [...]
-us-east-1> 
+us-east-1>
 
 us-east-1> alter table dpe set deletion protection enabled;
 ALTER
@@ -711,7 +709,7 @@ Name: dpe (ACTIVE)
 [...]
 Deletion Protection: Enabled
 [...]
-us-east-1> 
+us-east-1>
 
 ```
 
@@ -728,7 +726,7 @@ Takes a backup of a table's data.
 ```
 us-east-1> backup table lsitest called lsitest-backup;
 BACKUP
-us-east-1> 
+us-east-1>
 ```
 
 The backup can be seen in the list of backups.
@@ -737,7 +735,7 @@ The backup can be seen in the list of backups.
 us-east-1> show backups;
 [...]
 Table: lsitest, Backup: lsitest-backup, Status: AVAILABLE, ARN: arn:aws:dynamodb:us-east-1:3221123459165:table/lsitest/backup/01667964345110-f260cfff, On: 2022-11-09T03:25:45Z, Expires: 1970-01-01T00:00:00Z
-us-east-1> 
+us-east-1>
 ```
 
 ## CREATE TABLE
@@ -792,7 +790,7 @@ The "IF NOT EXISTS" and "NOWAIT" options are transferred into the CREATE TABLE c
 ``` SQL
 us-east-1> show create table icd3;
 CREATE TABLE "icd3" ("k1" number, "k2" number, "pk" number, "rk" number) PRIMARY KEY ("pk" HASH, "rk" RANGE) BILLING MODE ON DEMAND GSI ("gsi1" ON ( "k1" HASH, "k2" RANGE ) PROJECTING INCLUDE (k3) BILLING MODE ON DEMAND ) TABLE CLASS STANDARD DELETION PROTECTION DISABLED
-us-east-1> 
+us-east-1>
 ```
 
 ## DESCRIBE
@@ -829,7 +827,7 @@ Backup Status: AVAILABLE
 Backup Type: USER
 Backup Creation Date/Time: 2022-08-24T20:31:23Z
 Backup Expiry Date/Time: 1970-01-01T00:00:00Z
-us-east-1> 
+us-east-1>
 ```
 
 ## DROP BACKUP
@@ -845,7 +843,7 @@ Deletes a backup.
 ```
 us-east-1> drop backup "arn:aws:dynamodb:us-east-1: 3221123459165:table/backuptest/backup/01661373083721-5d1c1146";
 DROP BACKUP
-us-east-1> 
+us-east-1>
 ```
 
 ## DROP TABLE
@@ -862,12 +860,12 @@ Drops a table. If a table by the name doesn't exist, an error is generated. If t
 us-east-1> drop table unknown;
 Drop Table Failed.
 	Requested resource not found: Table: unknown not found
-us-east-1> 
+us-east-1>
 ```
 
 ```
 us-east-1> drop table if exists unknown;
-us-east-1> 
+us-east-1>
 ```
 
 **Example 2**
@@ -876,7 +874,7 @@ us-east-1>
 us-east-1> drop table sample13;
 ..
 DROP
-us-east-1> 
+us-east-1>
 ```
 
 ## RESTORE TABLE
@@ -892,7 +890,7 @@ Creates a new table from a backup.
 ```
 us-east-1> restore table "new-lsitest" from backup "arn:aws:dynamodb:us-east-1: 3221123459165:table/lsitest/backup/01667964345110-f260cfff";
 RESTORE
-us-east-1> 
+us-east-1>
 ```
 
 This will create a new table called "new-lsitest" which will have the indexes and billing mode that was stored in the backup.
@@ -909,11 +907,11 @@ Table size (bytes): 0
 Item Count: 0
 Billing Mode: On Demand
 GSI gsi1: ( HASH c ), Billing Mode: On Demand (mirrors table), Projecting (ALL), Status: , Backfilling: NO
-LSI lsi1: ( HASH a, RANGE b ), 
+LSI lsi1: ( HASH a, RANGE b ),
 Stream: Disabled
 Table Class: Has not been set.
 SSE: Not set
-us-east-1> 
+us-east-1>
 ```
 
 Note that restores are run asynchronously and the table above is in the *CREATING* state.
@@ -957,7 +955,7 @@ LSI: None
 Stream: Disabled
 Table Class: Has not been set.
 SSE: Not set
-us-east-1> 
+us-east-1>
 
 ```
 
@@ -998,7 +996,7 @@ Table Max (RCU, WCU):  540000, 540000
 Total Tables (RCU, WCU): 520, 830
 Total GSI (RCU, WCU): 23, 35
 Total (RCU, WCU): 543, 865
-us-east-1> 
+us-east-1>
 ```
 
 ## SHOW TABLES
@@ -1015,7 +1013,7 @@ Lists tables, and provides some basic information about each.
 us-east-1> show tables;
  dml_test | ACTIVE | PAY_PER_REQUEST | STANDARD | cd6257e9-5947-45d1-9b1c-2fbaf06d59e0 | arn:aws:dynamodb:us-east-1:3221123459165:table/dml_test | TTL DISABLED | GSI: 0 | LSI : 0 |
 ```
- 
+
 The output lists the table name, its current status, billing mode, table class, table-id, table-arn, TTL status, and counts of GSIs and LSIs.
 
 ## EXPLAIN
@@ -1146,7 +1144,7 @@ us-east-1> select * from sampletable;
 {pk: 4, rk: two, x: 11, y: 32}
 {pk: 1, rk: three, y: 13}
 {pk: 1, rk: two, y: 12}
-us-east-1> 
+us-east-1>
 ```
 
 **Example: 2**
@@ -1262,7 +1260,7 @@ DeleteItem({
    }
 })
 DELETE
-us-east-1> 
+us-east-1>
 ```
 
 The PK is specified, so we are able to perform a Query() which returns two rows which are then deleted one at a time.
@@ -1294,7 +1292,7 @@ insert into sampletable ( pk, rk, x, y ) values ( 4, "two", 11, 32 );
 ```
 us-east-1> insert into sampletable (pk, rk, conflict) values ( 3, "three", "conflict" );
 [run, 83] INSERT failed. The conditional request failed
-us-east-1> 
+us-east-1>
 ```
 ## REPLACE
 
@@ -1322,7 +1320,7 @@ us-east-1> replace into sampletable (pk, rk, ins ) values ( 12, "nonexistant", "
 REPLACE
 us-east-1> select * from sampletable where pk = 12 and rk = "nonexistant";
 {ins: inserted, pk: 12, rk: nonexistant}
-us-east-1> 
+us-east-1>
 ```
 
 
@@ -1340,7 +1338,7 @@ List elements are indexed with a 0 base. Map elements use '.' as the separator.
 
 For information about rate limiting see the section on [rate limiting](#Rate-Limiting).
 
-SELECT can return the consumed capacity during the operation. 
+SELECT can return the consumed capacity during the operation.
 
 ``` SQL
 consumed_capacity := RETURN CONSUMED CAPACITY INDEXES |
@@ -1364,11 +1362,11 @@ gsi ( gsi1 on (zip hash, ht range) projecting include ( rk ) billing mode provis
 
 ```
 us-east-1> select * from sampletable.gsi1;
-us-east-1> insert into sampletable ( pk, rk, zip, ht) values ( 71, "somewhere", 12345, 45); 
+us-east-1> insert into sampletable ( pk, rk, zip, ht) values ( 71, "somewhere", 12345, 45);
 INSERT
 us-east-1> select * from sampletable.gsi1;
 {ht: 45, pk: 71, rk: somewhere, zip: 12345}
-us-east-1> 
+us-east-1>
 ```
 
 SELECT will execute either a GetItem(), Query() or Scan() depending on whether the request specifies a complete primary key (or not) and whether the request targets a table or index.
@@ -1427,7 +1425,7 @@ us-east-1> select * from sampletable where pk = 1;
 {newattr: 9, pk: 1, rk: one, x: 11}
 {newattr: 19, pk: 1, rk: three, y: 13}
 {newattr: 18, pk: 1, rk: two, y: 12}
-us-east-1> 
+us-east-1>
 ```
 
 ## UPSERT
@@ -1451,7 +1449,7 @@ us-east-1> upsert sampletable set op = "upsert" where pk = 2;
 UPSERT
 us-east-1> select * from sampletable where pk = 2 and rk = "one";
 {op: upsert, pk: 2, rk: one, x: 21, y: 43}
-us-east-1> 
+us-east-1>
 ```
 
 **Example: 2**
@@ -1464,7 +1462,7 @@ us-east-1> upsert sampletable set op = "upsert" where pk = 7 and rk = "seven";
 UPSERT
 us-east-1> select * from sampletable where pk = 7;
 {op: upsert, pk: 7, rk: seven}
-us-east-1> 
+us-east-1>
 ```
 
 ## EXPLAIN
@@ -1652,7 +1650,7 @@ The ATTRIBUTE_TYPE operator
 dynamodb-local (*)> select * from exprtest where attribute_type(b, string);
 {a: 3, b: cooperate}
 {a: 4, b: coffee}
-dynamodb-local (*)> 
+dynamodb-local (*)>
 ```
 
 Using parenthesis to group items in a WHERE clause
@@ -1692,7 +1690,7 @@ Scan({
    },
    "ConsistentRead":   false
 })
-dynamodb-local (*)> 
+dynamodb-local (*)>
 ```
 
 You can use a WHERE clause in an UPDATE as well.
@@ -1718,7 +1716,7 @@ dynamodb-local (*)>
 Now delete the attribute ‘c’
 
 ```
-dynamodb-local (*)> update exprtest remove c where a = 5; 
+dynamodb-local (*)> update exprtest remove c where a = 5;
 UPDATE (0 read, 1 modified, 0 ccf)
 dynamodb-local (*)> select * from exprtest where a = 5;
 {a: 5, b: 15}
@@ -1750,7 +1748,7 @@ us-east-1> insert into rate_limit_test (a, b) values ( 1, 2 ), (2, 3), (3, 4) wi
 INSERT
 INSERT
 INSERT
-us-east-1> 
+us-east-1>
 ```
 
 When this insert is performed, each write to the table consumes 2 WCUs (one for the base table and one for the index). Since the operation is issued with a ratelimit of 1 WCU, a delay is added automatically after each INSERT.
@@ -1762,7 +1760,7 @@ Consider this example.
 ``` SQL
 us-east-1> update rate_limit_test set updated = true with ratelimit ( 1 rcu, 1 wcu );
 UPDATE (3 read, 3 modified, 0 ccf)
-us-east-1> 
+us-east-1>
 ```
 
 Each of these updates will consume 2 WCU and therefore a similar delay will be inserted after each to bring the write limit down to 1 WCU. As this is a bulk opeartion, it is performed as a read (in this case, a Scan) followed by writes. The Scan() will be rate limited to the read limit.
@@ -1853,7 +1851,7 @@ us-east-1> insert into counter (id, value) values ("ticketId", 1);
 INSERT
 us-east-1> select * from counter;
 {id: ticketId, value: 1}
-us-east-1> 
+us-east-1>
 ```
 
 To get the next available counter value and update the counter at the same time, we can perform an update like this.
@@ -1864,7 +1862,7 @@ update counter set value = value + 1 where id = "ticketId" return values updated
 UPDATE (0 read, 1 modified, 0 ccf)
 us-east-1> select * from counter;
 {id: ticketId, value: 2}
-us-east-1> 
+us-east-1>
 ```
 
 The UPDATE above did three things:
@@ -1881,7 +1879,7 @@ us-east-1> update counter set value = value + 1 where id = "ticketId" return val
 UPDATE (0 read, 1 modified, 0 ccf)
 us-east-1> select * from counter where id = "ticketId";
 {id: ticketId, value: 3}
-us-east-1> 
+us-east-1>
 ```
 
 Return Values can also be used in bulk operations. Assume that you had a table with many counters, you could reinitialize them all in this way.
@@ -1903,7 +1901,7 @@ us-east-1> select * from counter;
 {id: pageId, value: 1}
 {id: linkId, value: 1}
 {id: customerId, value: 1}
-us-east-1> 
+us-east-1>
 
 ```
 
@@ -1915,7 +1913,7 @@ us-east-1> select * from counter where id = "streetId";
 us-east-1> upsert counter set value = 5 where id = "streetId" return values all old;
 
 UPSERT (0 read, 1 modified, 0 ccf)
-us-east-1> 
+us-east-1>
 
 us-east-1> select * from counter where id = "streetId";
 {id: streetId, value: 5}
@@ -1924,7 +1922,7 @@ us-east-1> upsert counter set value = 16 where id = "streetId" return values all
 UPSERT (0 read, 1 modified, 0 ccf)
 us-east-1> select * from counter where id = "streetId";
 {id: streetId, value: 16}
-us-east-1> 
+us-east-1>
 
 ```
 
