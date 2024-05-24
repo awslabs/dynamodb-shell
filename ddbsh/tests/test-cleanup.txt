@@ -24,4 +24,5 @@ add_test(NAME test-cleanup COMMAND ddbshtest -c "drop table if exists nowait ddb
                                               drop table if exists nowait transactions; \
                                               drop table if exists nowait itxt1; \
                                               drop table if exists nowait itxt2; \
-                                              drop table if exists nowait ddbsh_rv_test;")
+                                              drop table if exists nowait ddbsh_rv_test; \
+                                              drop table if exists icdthroughput;")

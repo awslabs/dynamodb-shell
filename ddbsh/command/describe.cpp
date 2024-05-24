@@ -82,8 +82,16 @@ static bool __show_billing_mode(const Aws::DynamoDB::Model::TableDescription& td
         }
         else if (bs.GetBillingMode() == Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST)
         {
-            printf("Billing Mode: On Demand\n");
+	    printf("Billing Mode: On Demand\n");
             table_is_on_demand = true;
+	    if (td.OnDemandThroughputHasBeenSet())
+	    {
+		printf("On Demand Throughput: (%lld RCU, %lld WCU)\n",
+		       td.GetOnDemandThroughput().MaxReadRequestUnitsHasBeenSet() ?
+		       td.GetOnDemandThroughput().GetMaxReadRequestUnits() : -1,
+		       td.GetOnDemandThroughput().MaxWriteRequestUnitsHasBeenSet() ?
+		       td.GetOnDemandThroughput().GetMaxWriteRequestUnits() : -1 );
+	    }
         }
         else
         {
@@ -131,6 +139,14 @@ static void __show_gsi(const Aws::DynamoDB::Model::TableDescription& td, bool ta
             else
             {
                 printf("Billing Mode: On Demand (mirrors table), ");
+		if (item.OnDemandThroughputHasBeenSet())
+		{
+		    printf("Throughput (%lld RCU, %lld WCU), ",
+			   item.GetOnDemandThroughput().MaxReadRequestUnitsHasBeenSet() ?
+			   item.GetOnDemandThroughput().GetMaxReadRequestUnits() : -1,
+			   item.GetOnDemandThroughput().MaxWriteRequestUnitsHasBeenSet() ?
+			   item.GetOnDemandThroughput().GetMaxWriteRequestUnits() : -1 );
+		}
             }
 
             if (item.ProjectionHasBeenSet())

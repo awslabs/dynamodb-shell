@@ -96,4 +96,6 @@
 
 #include <aws/dynamodb/model/ReturnValue.h>
 
+#include <aws/dynamodb/model/OnDemandThroughput.h>
+
 #endif

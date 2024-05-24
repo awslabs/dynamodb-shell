@@ -177,6 +177,7 @@ int yydebug = 1;
 %token <strval> K_ONLY
 %token <strval> K_OR
 %token <strval> K_PITR
+%token <strval> K_PREWARM
 %token <strval> K_PRIMARY
 %token <strval> K_PROJECTING
 %token <strval> K_PROTECTION
@@ -201,10 +202,12 @@ int yydebug = 1;
 %token <strval> K_TABLE
 %token <strval> K_TABLES
 %token <strval> K_TAGS
+%token <strval> K_THROUGHPUT
 %token <strval> K_TO
 %token <strval> K_TOTAL
 %token <strval> K_TRUE
 %token <strval> K_TTL
+%token <strval> K_UNLIMITED
 %token <strval> K_UPDATE
 %token <strval> K_UPDATED
 %token <strval> K_UPSERT
@@ -826,7 +829,7 @@ help_command: K_HELP K_CREATE ';'
            "   attribute_type := NUMBER|STRING|BINARY\n"
            "   primary_key := PRIMARY KEY key_schema\n"
            "   key_schema := ( attribute_name HASH [, attribute_name RANGE])\n\n"
-           "   billing_mode_and_throughput := (BILLING MODE ON DEMAND)|BILLING MODE provisioned)\n"
+           "   billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)\n"
            "   provisioned := ( RR RCU, WW WCU )\n\n"
            "   gsi_list := GSI ( gsi_spec )\n"
            "   gsi_spec := gsi [, gsi ...]\n"
@@ -838,6 +841,7 @@ help_command: K_HELP K_CREATE ';'
            "   lsi := lsi_name ON key_schema index_projection\n\n"
            "   streams := STREAM ( stream_type ) | STREAM DISABLED\n"
            "   stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n\n"
+	   "   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]\n"
            "   table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS\n"
            "   deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]\n"
            "   tags := TAGS ( tag [, tag ...] )\n"
@@ -1055,6 +1059,49 @@ billing_mode_and_throughput: K_BILLING K_MODE K_ON K_DEMAND
     b->throughput.SetWriteCapacityUnits(0);
 
     $$ = b;
+} | K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+{
+    logdebug("[%s, %d] billing_mode_and_throughput: K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT ( T_WHOLE_NUMBER K_RCU,T_WHOLE_NUMBER K_WCU )\n",
+	     __FILENAME__, __LINE__);
+    billing_mode_and_throughput_t * b = NEW billing_mode_and_throughput_t;
+
+    b->mode = Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST;
+    b->throughput.SetReadCapacityUnits(0);
+    b->throughput.SetWriteCapacityUnits(0);
+
+    b->od_throughput.SetMaxReadRequestUnits(atoll($7));
+    b->od_throughput.SetMaxWriteRequestUnits(atoll($10));
+    FREE($7);
+    FREE($10);
+    $$ = b;
+} | K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+{
+    logdebug("[%s, %d] billing_mode_and_throughput: K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT ( T_WHOLE_NUMBER K_WCU,T_WHOLE_NUMBER K_RCU )\n",
+	     __FILENAME__, __LINE__);
+    billing_mode_and_throughput_t * b = NEW billing_mode_and_throughput_t;
+
+    b->mode = Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST;
+    b->throughput.SetReadCapacityUnits(0);
+    b->throughput.SetWriteCapacityUnits(0);
+
+    b->od_throughput.SetMaxReadRequestUnits(atoll($10));
+    b->od_throughput.SetMaxWriteRequestUnits(atoll($7));
+    FREE($7);
+    FREE($10);
+    $$ = b;
+} | K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT K_UNLIMITED
+{
+    logdebug("[%s, %d] billing_mode_and_throughput: K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT K_UNLIMITED\n",
+	     __FILENAME__, __LINE__);
+    billing_mode_and_throughput_t * b = NEW billing_mode_and_throughput_t;
+
+    b->mode = Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST;
+    b->throughput.SetReadCapacityUnits(0);
+    b->throughput.SetWriteCapacityUnits(0);
+
+    b->od_throughput.SetMaxReadRequestUnits(-1);
+    b->od_throughput.SetMaxWriteRequestUnits(-1);
+    $$ = b;
 } | K_BILLING K_MODE K_PROVISIONED '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
 {
     logdebug("[%s, %d] billing_mode_and_throughput: K_BILLING K_MODE K_PROVISIONED '(' T_WHOLE_NUMBER K_RCU ',' "
@@ -1170,6 +1217,8 @@ gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput
 
     if ($5 != NULL && $5->mode == Aws::DynamoDB::Model::BillingMode::PROVISIONED)
         gsi->SetProvisionedThroughput($5->throughput);
+    else if ($5 != NULL && $5->mode == Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST)
+	gsi->SetOnDemandThroughput($5->od_throughput);
 
     if ($5 != NULL)
         FREE($5);
@@ -1193,6 +1242,8 @@ alter_table_gsi_create: string K_ON key_schema index_projection optional_billing
 
     if ($5 != NULL && $5->mode == Aws::DynamoDB::Model::BillingMode::PROVISIONED)
         cgsia->SetProvisionedThroughput($5->throughput);
+    else if ($5 != NULL && $5->mode == Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST)
+	cgsia->SetOnDemandThroughput($5->od_throughput);
 
     if ($5 != NULL)
         FREE($5);
@@ -1219,6 +1270,9 @@ alter_table_gsi_update_element: string K_SET billing_mode_and_throughput
 
     if ($3 != NULL && $3->mode == Aws::DynamoDB::Model::BillingMode::PROVISIONED)
         ugsia->SetProvisionedThroughput($3->throughput);
+    else if ($3 != NULL && $3->mode == Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST)
+	ugsia->SetOnDemandThroughput($3->od_throughput);
+
 
     if ($3 != NULL)
         FREE($3);
@@ -1517,7 +1571,7 @@ help_command: K_HELP K_ALTER K_TABLE ';'
 {
     printf("ALTER TABLE - make changes to an existing table.\n\n"
            "   ALTER TABLE <name> SET billing_mode_and_throughput\n"
-           "      billing_mode_and_throughput := (BILLING MODE ON DEMAND)|BILLING MODE provisioned)\n"
+           "      billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)\n"
            "      provisioned := ( RR RCU, WW WCU )\n\n"
            "   ALTER TABLE <name> SET table_class\n"
            "      table_class := TABLE CLASS STANDARD | TABLE CLASS INFREQUENT ACCESS\n\n"
@@ -1537,7 +1591,9 @@ help_command: K_HELP K_ALTER K_TABLE ';'
            "   ALTER TABLE <name> ADD REPLICA <region> [replica_definition]\n"
            "   ALTER TABLE <name> UPDATE REPLICA <region> replica_definition\n"
            "   ALTER TABLE <name> DROP REPLICA <region>\n"
-           "   ALTER TABLE <name> SET DELETION PROTECTION [ENABLED|DISABLED]\n" );
+           "   ALTER TABLE <name> SET DELETION PROTECTION [ENABLED|DISABLED]\n"
+   	   "   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]\n"
+);
 
     $$ = NULL;
 };

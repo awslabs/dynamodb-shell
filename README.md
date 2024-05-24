@@ -329,9 +329,11 @@ BILLING MODE PROVISIONED ( *NN* RCU, *MM* WCU )
 
 Set the table to provisioned mode with the specified throughput.
 
-BILLING MODE ON DEMAND
+BILLING MODE ON DEMAND [throughput]
 
 Set the table to on demand billing mode.
+
+throughput: THROUGHPUT ( *NN* RCU, *MM* WCU )
 
 **Example 1**
 
@@ -400,6 +402,39 @@ us-east-1>
 us-east-1> alter table singlekey set table class standard infrequent access;
 Error: Subscriber limit exceeded: Updates to TableClass are limited to 2 times in 30 day(s).
 us-east-1>
+```
+
+**Example 3**
+
+Specify an on-demand throughput limit
+
+```
+us-east-1> alter table icdthroughput set billing mode on demand throughput (200 wcu, 10 rcu );
+ALTER
+us-east-1> describe icdthroughput;
+[...]
+Billing Mode: On Demand
+On Demand Throughput: (10 RCU, 200 WCU)
+[...]
+```
+
+Clear the on-demand throughput limit for reads, but not writes.
+
+```
+us-east-1> alter table icdthroughput set billing mode on demand throughput (200 wcu, -1 rcu );
+ALTER
+us-east-1> describe icdthroughput;
+[...]
+Billing Mode: On Demand
+On Demand Throughput: (-1 RCU, 200 WCU)
+[...]
+```
+
+Clear all on-demand throghput limits.
+
+```
+us-east-1> alter table icdthroughput set billing mode on demand throughput unlimited;
+ALTER
 ```
 
 ### SET STREAM
@@ -745,30 +780,36 @@ us-east-1>
 **Syntax:**
 
 ```
-CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
-             ( attribute_name, attribute_type [,...] )
-    primary_key billing_mode_and_throughput
-    [gsi_list] [lsi_list] [streams] [table_class] [tags];
+   CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
+         ( attribute_name, attribute_type [,...] )
+   primary_key billing_mode_and_throughput
+   [gsi_list] [lsi_list] [streams] [table_class] [tags] ;
 
-    attribute_type := NUMBER|STRING|BINARY
-    primary_key := PRIMARY KEY key_schema
-    key_schema := ( attribute_name HASH [, attribute_name RANGE])\n
-    billing_mode_and_throughput := (BILLING MODE ON DEMAND)|BILLING MODE provisioned)
-    provisioned := ( RR RCU, WW WCU )\n
-    gsi_list := GSI ( gsi_spec )
-    gsi_spec := gsi [, gsi ...]
-    gsi := gsi_name ON key_schema index_projection [billing_mode_and_throughput]
-    index_projection := (PROJECTING ALL) | (PROJECTING KEYS ONLY) | (PROJECTING INCLUDE projection_list)
-    projection_list := ( attribute [, attribute ...] )\n
-    lsi_list := LSI ( lsi_spec )
-    lsi_spec := lsi [, lsi ...]
-    lsi := lsi_name ON key_schema index_projection\n
-    streams := STREAM ( stream_type ) | STREAM DISABLED
-    stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n
-    table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS\n
-    deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]
-    tags := TAGS ( tag [, tag ...] )
-    tag := name : value
+   attribute_type := NUMBER|STRING|BINARY
+   primary_key := PRIMARY KEY key_schema
+   key_schema := ( attribute_name HASH [, attribute_name RANGE])
+
+   billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)
+   provisioned := ( RR RCU, WW WCU )
+
+   gsi_list := GSI ( gsi_spec )
+   gsi_spec := gsi [, gsi ...]
+   gsi := gsi_name ON key_schema index_projection [billing_mode_and_throughput]
+   index_projection := (PROJECTING ALL) | (PROJECTING KEYS ONLY) | (PROJECTING INCLUDE projection_list)
+   projection_list := ( attribute [, attribute ...] )
+
+   lsi_list := LSI ( lsi_spec )
+   lsi_spec := lsi [, lsi ...]
+   lsi := lsi_name ON key_schema index_projection
+
+   streams := STREAM ( stream_type ) | STREAM DISABLED
+   stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES
+
+   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]
+   table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS
+   deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]
+   tags := TAGS ( tag [, tag ...] )
+   tag := name : value
 ```
 
 ## SHOW CREATE TABLE
@@ -1941,6 +1982,75 @@ us-east-1>
 
 **Note:** It is cheaper to implement a monotonically increasing counter using return values than it is to do it with a read followed by a conditional write. The return of values is free so all you pay for is a single write with no condition.
 
+## On-Demand Throughput
+
+DynamoDB supports throughput limiting on On-Demand tables.
+
+On-Demand throughput can be set on tables and indexes. The current settings can be displayed with the describe command.
+
+For example, here is the creation of a table with throughput limits specified.
+
+``` SQL
+create table customer ( pk number, a number ) primary key (pk hash) billing mode on demand throughput (40 rcu, 30 wcu)
+          gsi (gsipka on ( a hash ) projecting all billing mode on demand throughput (50 rcu, 70 wcu))
+```
+
+You can observe these settings as shown below.
+
+```
+us-east-1> describe customer;
+Name: customer (ACTIVE)
+Billing Mode: On Demand
+On Demand Throughput: (40 RCU, 30 WCU)
+[...]
+GSI gsipka: ( HASH a ), Billing Mode: On Demand (mirrors table), Throughput (50 RCU, 70 WCU), Projecting (ALL), Status: ACTIVE, Backfilling: NO
+[...]
+us-east-1> 
+```
+
+You can update the on demand throughput like this, here it resets the table to have unlimited WCUs.
+
+``` SQL
+us-east-1> alter table customer set billing mode on demand throughput (50 rcu, -1 wcu);
+ALTER
+us-east-1> describe customer;
+[...]
+Billing Mode: On Demand
+On Demand Throughput: (50 RCU, -1 WCU)
+```
+
+And here the throughput limit is removed altogether.
+
+``` SQL
+us-east-1> alter table customer set billing mode on demand throughput unlimited;
+ALTER
+us-east-1> describe customer;
+[...]
+Billing Mode: On Demand
+PITR is Disabled.
+```
+
+The index throughputs can also be updated.
+
+``` SQL
+us-east-1> alter table customer update gsi ( gsipka set billing mode on demand throughput (-1 rcu, 4 wcu));
+ALTER
+us-east-1> describe customer;
+[...]
+GSI gsipka: ( HASH a ), Billing Mode: On Demand (mirrors table), Throughput (-1 RCU, 4 WCU), Projecting (ALL), Status: ACTIVE, Backfilling: NO
+
+```
+
+Or removed altogether.
+
+``` SQL
+us-east-1> alter table customer update gsi ( gsipka set billing mode on demand throughput unlimited);
+ALTER
+us-east-1> describe customer;
+[...]
+GSI gsipka: ( HASH a ), Billing Mode: On Demand (mirrors table), Projecting (ALL), Status: ACTIVE, Backfilling: NO
+[...]
+```
 
 # Contributing
 

@@ -31,6 +31,8 @@ namespace ddbsh
             CUpdateTableCommand(table_name) {
             if (billing_mode_and_throughput->mode == Aws::DynamoDB::Model::BillingMode::PROVISIONED)
                 m_update_table_request->SetProvisionedThroughput(billing_mode_and_throughput->throughput);
+	    else
+		m_update_table_request->SetOnDemandThroughput(billing_mode_and_throughput->od_throughput);
 
             m_update_table_request->SetBillingMode(billing_mode_and_throughput->mode);
 

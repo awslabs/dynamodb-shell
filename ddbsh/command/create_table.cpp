@@ -51,6 +51,16 @@ int CCreateTableCommand::run()
                 request.SetProvisionedThroughput(
                     m_billing_mode_and_throughput->throughput);
             }
+	    else if (m_billing_mode_and_throughput->mode ==
+                Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST)
+	    {
+		request.SetOnDemandThroughput(m_billing_mode_and_throughput->od_throughput);
+	    }
+	    else
+	    {
+		logerror("Error creating table - unknown billing mode.\n");
+		return 1;
+	    }
         }
         else
         {

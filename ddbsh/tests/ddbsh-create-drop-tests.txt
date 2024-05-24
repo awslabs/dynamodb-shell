@@ -6,6 +6,7 @@ add_test(NAME icd-drop-table-5 COMMAND ddbshtest -c "drop table if exists icd5")
 add_test(NAME icd-drop-table-6 COMMAND ddbshtest -c "drop table if exists icd6")
 add_test(NAME icd-drop-table-7 COMMAND ddbshtest -c "drop table if exists icd7")
 add_test(NAME icd-drop-table-8 COMMAND ddbshtest -c "drop table if exists icd8")
+add_test(NAME icd-drop-table-9 COMMAND ddbshtest -c "drop table if exists icdthroughput")
 
 add_test(NAME icd-create-table-1
          COMMAND ddbshtest -c "create table icd1 ( pk number ) primary key ( pk hash ) billing mode on demand")
@@ -43,8 +44,92 @@ add_test( NAME icd-create-table-7
 
 add_test( NAME icd-create-table-8
           COMMAND ddbshtest -c "create table icddpd ( pk number ) \
-                             primary key (pk hash ) \
+                             primary key (pk hash) \
                              billing mode on demand deletion protection disabled")
 
 add_test( NAME icd-create-table-9
           COMMAND ddbshtest -c "drop table icddpd")
+
+# create table will, by default, wait and use on-demand
+add_test( NAME icd-create-table-10
+          COMMAND ddbshtest -c "create table icdthroughput ( pk number, a number ) primary key (pk hash) \
+          gsi (gsipka on ( a hash ) projecting all)" )
+
+add_test( NAME icd-create-table-11
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-11 PROPERTY FAIL_REGULAR_EXPRESSION "On Demand Throughput:")
+
+add_test( NAME icd-create-table-12
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 rcu, 20 wcu )")
+
+add_test( NAME icd-create-table-13
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-13 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]10 RCU, 20 WCU[)]")
+
+add_test( NAME icd-create-table-14
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 rcu, 200 wcu )" )
+
+add_test( NAME icd-create-table-15
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-15 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]10 RCU, 200 WCU[)]")
+
+add_test( NAME icd-create-table-16
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 wcu, 200 rcu )" )
+
+add_test( NAME icd-create-table-17
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-17 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]200 RCU, 10 WCU[)]")
+
+add_test( NAME icd-create-table-18
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput (-1 rcu, -1 wcu)")
+
+# this is because for a small period of time, we actually return On Demand Throughput values of -1, -1 :(
+add_test( NAME icd-create-table-18a COMMAND sleep 5)
+
+add_test( NAME icd-create-table-19
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-19 PROPERTY FAIL_REGULAR_EXPRESSION "On Demand Throughput")
+
+add_test( NAME icd-create-table-20
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 wcu, 200 rcu )" )
+
+add_test( NAME icd-create-table-21
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-21 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]200 RCU, 10 WCU[)]")
+
+add_test( NAME icd-create-table-22
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput unlimited")
+
+# this is because for a small period of time, we actually return On Demand Throughput values of -1, -1 :(
+
+add_test( NAME icd-create-table-22a COMMAND sleep 5)
+
+add_test( NAME icd-create-table-23
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-23 PROPERTY FAIL_REGULAR_EXPRESSION "On Demand Throughput")
+
+add_test( NAME icd-create-table-24
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 rcu, -1 wcu )" )
+
+add_test( NAME icd-create-table-25
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-25 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]10 RCU, -1 WCU[)]")
+
+add_test( NAME icd-create-table-26
+          COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 wcu, -1 rcu )" )
+
+add_test( NAME icd-create-table-27
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-27 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]-1 RCU, 10 WCU[)]")
+
+# gsi throughput tests
+
+add_test( NAME icd-create-table-28
+          COMMAND ddbshtest -c "alter table icdthroughput update gsi (gsipka set billing mode on demand throughput unlimited )")
+
+add_test( NAME icd-create-table-29
+          COMMAND ddbshtest -c "alter table icdthroughput update gsi (gsipka set billing mode on demand throughput (200 rcu, 300 wcu))")
+
+add_test( NAME icd-create-table-30
+          COMMAND ddbshtest -c "describe icdthroughput" )
+set_property(TEST icd-create-table-30 PROPERTY PASS_REGULAR_EXPRESSION "On Demand [(]mirrors table[)], Throughput [(]200 RCU, 300 WCU[)],")

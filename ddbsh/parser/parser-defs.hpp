@@ -25,6 +25,7 @@ typedef struct
 {
     Aws::DynamoDB::Model::BillingMode mode;
     Aws::DynamoDB::Model::ProvisionedThroughput throughput;
+    Aws::DynamoDB::Model::OnDemandThroughput od_throughput;
 } billing_mode_and_throughput_t;
 
 #endif
