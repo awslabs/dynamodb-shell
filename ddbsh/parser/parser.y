@@ -342,6 +342,7 @@ int yydebug = 1;
 %type <update_set_element> use_lhs
 %type <value_list> value_list
 %type <warm_throughput> optional_warm_throughput
+%type <warm_throughput> warm_throughput
 %type <where> optional_where_clause
 %type <where> where_clause
 
@@ -1137,9 +1138,9 @@ billing_mode_and_throughput: K_BILLING K_MODE K_ON K_DEMAND
     $$ = b;
 };
 
-optional_warm_throughput: K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+warm_throughput: K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
 {
-    logdebug("[%s, %d] optional_warm_throughput: K_WARM K_THROUGHPUT (T_WHOLE_NUMBER K_RCU, T_WHOLE_NUMBER K_WCU)\n",
+    logdebug("[%s, %d] warm_throughput: K_WARM K_THROUGHPUT (T_WHOLE_NUMBER K_RCU, T_WHOLE_NUMBER K_WCU)\n",
 	     __FILENAME__, __LINE__);
     Aws::DynamoDB::Model::WarmThroughput * wt = NEW Aws::DynamoDB::Model::WarmThroughput;
 
@@ -1152,7 +1153,7 @@ optional_warm_throughput: K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHO
     $$ = wt;
 } | K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
 {
-    logdebug("[%s, %d] optional_warm_throughput: K_WARM K_THROUGHPUT (T_WHOLE_NUMBER K_WCU, T_WHOLE_NUMBER K_RCU)\n",
+    logdebug("[%s, %d] warm_throughput: K_WARM K_THROUGHPUT (T_WHOLE_NUMBER K_WCU, T_WHOLE_NUMBER K_RCU)\n",
 	     __FILENAME__, __LINE__);
     Aws::DynamoDB::Model::WarmThroughput * wt = NEW Aws::DynamoDB::Model::WarmThroughput;
 
@@ -1163,6 +1164,12 @@ optional_warm_throughput: K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHO
     FREE($7);
 
     $$ = wt;
+};
+
+optional_warm_throughput : warm_throughput
+{
+    logdebug("[%s, %d] optional_warm_throughput: warm_throughput\n", __FILENAME__, __LINE__);
+    $$ = $1;
 } |
 {
     logdebug("[%s, %d] optional_warm_throughput: \n", __FILENAME__, __LINE__);
@@ -1314,9 +1321,27 @@ alter_table_gsi_update_element: string K_SET billing_mode_and_throughput
     else if ($3 != NULL && $3->mode == Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST)
 	ugsia->SetOnDemandThroughput($3->od_throughput);
 
-
     if ($3 != NULL)
         FREE($3);
+
+    Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate * gsiu = NEW Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate();
+
+    gsiu->SetUpdate(*ugsia);
+
+    $$ = gsiu;
+    delete ugsia;
+    FREE($1);
+} | string K_SET warm_throughput
+{
+    logdebug("[%s, %d] alter_table_gsi_update_element: string K_SET "
+	     "warm_throughput\n", __FILENAME__, __LINE__);
+
+    Aws::DynamoDB::Model::UpdateGlobalSecondaryIndexAction * ugsia = NEW Aws::DynamoDB::Model::UpdateGlobalSecondaryIndexAction;
+
+    ugsia->SetIndexName($1);
+
+    ugsia->SetWarmThroughput(*$3);
+    FREE($3);
 
     Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate * gsiu = NEW Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate();
 
@@ -1611,9 +1636,10 @@ table_tag: string ':' string
 help_command: K_HELP K_ALTER K_TABLE ';'
 {
     printf("ALTER TABLE - make changes to an existing table.\n\n"
-           "   ALTER TABLE <name> SET billing_mode_and_throughput\n"
+           "   ALTER TABLE <name> SET billing_mode_and_throughput [warm_throughput]\n"
            "      billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)\n"
            "      provisioned := ( RR RCU, WW WCU )\n\n"
+	   "   ALTER TABLE <name> SET warm_throughput\n\n"
            "   ALTER TABLE <name> SET table_class\n"
            "      table_class := TABLE CLASS STANDARD | TABLE CLASS INFREQUENT ACCESS\n\n"
            "   ALTER TABLE <name> SET streams\n"
@@ -1623,7 +1649,8 @@ help_command: K_HELP K_ALTER K_TABLE ';'
            "      create_gsi_spec := <name> ON key_schema index_projection [billing_mode_and_throughput]\n"
            "   ALTER TABLE <name> DROP GSI <gsiname>\n\n"
            "   ALTER TABLE <name> SET billing_mode_and_throughput UPDATE GSI ( gsi_update [, ...] )\n"
-           "      gsi_update := <gsiname> SET billing_mode_and_throughput\n\n"
+           "      gsi_update := <gsiname> SET billing_mode_and_throughput\n"
+	   "      gsi_update := <gsiname> SET warm_throughput\n\n"
            "   ALTER TABLE <name> UPDATE GSI ( gsi_update [, ...] )\n\n"
            "   ALTER TABLE <name> SET TTL DISABLED\n\n"
            "   ALTER TABLE <name> SET TTL ( attribute_name )\n\n"
@@ -1634,20 +1661,34 @@ help_command: K_HELP K_ALTER K_TABLE ';'
            "   ALTER TABLE <name> DROP REPLICA <region>\n"
            "   ALTER TABLE <name> SET DELETION PROTECTION [ENABLED|DISABLED]\n"
    	   "   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]\n"
+	   "   warm_throughput := WARM THROUGHPUT ( RR RCU, WW WCU )\n"
 );
 
     $$ = NULL;
 };
 
-alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';'
+alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput ';'
 {
-    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';'\n",
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput "
+	     "optional_warm_throughput ';'\n",
              __FILENAME__, __LINE__);
+
+    CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5, $6);
+
+    FREE($3);
+    // $5 is freed in CUpdateTableCommand
+    // $6 is freed in CUpdateTableCommand
+    $$ = utc;
+} | K_ALTER K_TABLE string K_SET warm_throughput ';'
+{
+    logdebug("[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET warm_throughput;\n",
+	     __FILENAME__, __LINE__);
 
     CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5);
 
     FREE($3);
     // $5 is freed in CUpdateTableCommand
+
     $$ = utc;
 } | K_ALTER K_TABLE string K_SET sse_specification ';'
 {
@@ -1690,22 +1731,23 @@ alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput ';
 
     FREE($3);
     $$ = utc;
-} | K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'
+} | K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'
 {
     logdebug(
-        "[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'\n",
+        "[%s, %d] alter_table_command: K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput "
+	"K_UPDATE K_GSI '(' alter_table_gsi_update ')' ';'\n",
         __FILENAME__, __LINE__);
 
     // if this command seeks to set the table to billing mode on demand, then one should not specify
     // settings for the indices - those are implied.
     if ($5->mode == Aws::DynamoDB::Model::BillingMode::PROVISIONED)
     {
-        CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5, $9);
+        CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5, $6, $10);
         $$ = utc;
     }
     else
     {
-        CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5);
+        CUpdateTableCommand * utc = NEW CUpdateTableCommand($3, $5, $6);
         logmsg ("[%s, %d] Setting table to on-demand, ignoring specifications for indices.\n", __FILENAME__, __LINE__);
         $$ = utc;
     }

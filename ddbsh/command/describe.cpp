@@ -73,7 +73,8 @@ static void __show_table_warm_throughput(
     {
 	const Aws::DynamoDB::Model::TableWarmThroughputDescription &wt = td.GetWarmThroughput();
 	const long long rups = wt.GetReadUnitsPerSecond(), wups = wt.GetWriteUnitsPerSecond();
-	printf ("Warm Throughput: (%lld RCU, %lld WCU)\n", rups, wups);
+	printf ("Warm Throughput: (%lld RCU, %lld WCU, Status %s)\n", rups, wups,
+		Aws::DynamoDB::Model::TableStatusMapper::GetNameForTableStatus(wt.GetStatus()).c_str());
     }
 }
 
@@ -203,7 +204,8 @@ static void __show_gsi(const Aws::DynamoDB::Model::TableDescription& td, bool ta
 		const Aws::DynamoDB::Model::GlobalSecondaryIndexWarmThroughputDescription gsiwt =
 		    item.GetWarmThroughput();
 		const long long rups = gsiwt.GetReadUnitsPerSecond(), wups = gsiwt.GetWriteUnitsPerSecond();
-		printf (", Warm Throughput: (%lld RCU, %lld WCU)", rups, wups);
+		printf (", Warm Throughput: (%lld RCU, %lld WCU, Status %s)", rups, wups,
+		    Aws::DynamoDB::Model::IndexStatusMapper::GetNameForIndexStatus(gsiwt.GetStatus()).c_str());
 	    }
 
 	    printf("\n");
