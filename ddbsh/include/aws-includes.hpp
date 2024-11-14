@@ -98,4 +98,8 @@
 
 #include <aws/dynamodb/model/OnDemandThroughput.h>
 
+#include <aws/dynamodb/model/WarmThroughput.h>
+#include <aws/dynamodb/model/TableWarmThroughputDescription.h>
+#include <aws/dynamodb/model/GlobalSecondaryIndexWarmThroughputDescription.h>
+
 #endif
