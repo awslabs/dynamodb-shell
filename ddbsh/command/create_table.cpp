@@ -87,6 +87,9 @@ int CCreateTableCommand::run()
         if (m_tags)
             request.SetTags(*m_tags);
 
+	if (m_warm_throughput)
+	    request.SetWarmThroughput(*m_warm_throughput);
+
         if (explaining())
         {
             printf("CreateTable(%s)\n", explain_string(request.SerializePayload()).c_str());

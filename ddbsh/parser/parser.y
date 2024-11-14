@@ -87,6 +87,7 @@ int yydebug = 1;
     Aws::Vector<Aws::String> * update_remove_list;
     Aws::Vector<Aws::Vector<Aws::DynamoDB::Model::AttributeValue>> * value_list;
     Aws::Vector<CUpdateSetElement> * update_set;
+    Aws::DynamoDB::Model::WarmThroughput * warm_throughput;
     CLogicalExpression * logical_expression;
     CRateLimit * ratelimit;
     CUpdateSetElement * update_set_element;
@@ -177,7 +178,6 @@ int yydebug = 1;
 %token <strval> K_ONLY
 %token <strval> K_OR
 %token <strval> K_PITR
-%token <strval> K_PREWARM
 %token <strval> K_PRIMARY
 %token <strval> K_PROJECTING
 %token <strval> K_PROTECTION
@@ -213,6 +213,7 @@ int yydebug = 1;
 %token <strval> K_UPSERT
 %token <strval> K_VALUES
 %token <strval> K_VERSION
+%token <strval> K_WARM
 %token <strval> K_WCU
 %token <strval> K_WHERE
 %token <strval> K_WITH
@@ -340,6 +341,7 @@ int yydebug = 1;
 %type <update_set_element> update_set_element
 %type <update_set_element> use_lhs
 %type <value_list> value_list
+%type <warm_throughput> optional_warm_throughput
 %type <where> optional_where_clause
 %type <where> where_clause
 
@@ -823,7 +825,7 @@ help_command: K_HELP K_CREATE ';'
     printf("CREATE TABLE - Creates a DynamoDB table.\n\n");
     printf("   CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>\n"
            "         ( attribute_name, attribute_type [,...] )\n"
-           "   primary_key billing_mode_and_throughput\n"
+           "   primary_key [billing_mode_and_throughput] [warm_throughput]\n"
            "   [gsi_list] [lsi_list] [streams] [table_class] [tags] ;\n\n"
 
            "   attribute_type := NUMBER|STRING|BINARY\n"
@@ -833,7 +835,7 @@ help_command: K_HELP K_CREATE ';'
            "   provisioned := ( RR RCU, WW WCU )\n\n"
            "   gsi_list := GSI ( gsi_spec )\n"
            "   gsi_spec := gsi [, gsi ...]\n"
-           "   gsi := gsi_name ON key_schema index_projection [billing_mode_and_throughput]\n"
+           "   gsi := gsi_name ON key_schema index_projection [billing_mode_and_throughput][warm_throughput]\n"
            "   index_projection := (PROJECTING ALL) | (PROJECTING KEYS ONLY) | (PROJECTING INCLUDE projection_list)\n"
            "   projection_list := ( attribute [, attribute ...] )\n\n"
            "   lsi_list := LSI ( lsi_spec )\n"
@@ -842,6 +844,7 @@ help_command: K_HELP K_CREATE ';'
            "   streams := STREAM ( stream_type ) | STREAM DISABLED\n"
            "   stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES\n\n"
 	   "   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]\n"
+	   "   warm_throughput := WARM THROUGHPUT ( RR RCU, WW WCU )\n"
            "   table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS\n"
            "   deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]\n"
            "   tags := TAGS ( tag [, tag ...] )\n"
@@ -851,13 +854,13 @@ help_command: K_HELP K_CREATE ';'
 };
 
 create_table_command: K_CREATE K_TABLE if_not_exists_clause nowait_clause string '(' attribute_name_type_list ')'
-                      primary_key optional_billing_mode_and_throughput gsi_list lsi_list
+                      primary_key optional_billing_mode_and_throughput optional_warm_throughput gsi_list lsi_list
                       optional_stream_specification
                       optional_sse_specification optional_table_class optional_deletion_protection optional_table_tags ';'
 {
     logdebug("[%s, %d] create_table_command\n", __FILENAME__, __LINE__);
     CCreateTableCommand * create = NEW CCreateTableCommand(
-        $5, $3, $4, $7, $9, $10, $11, $12, $13, $14, $15, $16, $17);
+        $5, $3, $4, $7, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
     FREE($5);
     $$ = create;
 };
@@ -1134,6 +1137,38 @@ billing_mode_and_throughput: K_BILLING K_MODE K_ON K_DEMAND
     $$ = b;
 };
 
+optional_warm_throughput: K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+{
+    logdebug("[%s, %d] optional_warm_throughput: K_WARM K_THROUGHPUT (T_WHOLE_NUMBER K_RCU, T_WHOLE_NUMBER K_WCU)\n",
+	     __FILENAME__, __LINE__);
+    Aws::DynamoDB::Model::WarmThroughput * wt = NEW Aws::DynamoDB::Model::WarmThroughput;
+
+    wt->SetReadUnitsPerSecond(atoll($4));
+    wt->SetWriteUnitsPerSecond(atoll($7));
+
+    FREE($4);
+    FREE($7);
+
+    $$ = wt;
+} | K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+{
+    logdebug("[%s, %d] optional_warm_throughput: K_WARM K_THROUGHPUT (T_WHOLE_NUMBER K_WCU, T_WHOLE_NUMBER K_RCU)\n",
+	     __FILENAME__, __LINE__);
+    Aws::DynamoDB::Model::WarmThroughput * wt = NEW Aws::DynamoDB::Model::WarmThroughput;
+
+    wt->SetReadUnitsPerSecond(atoll($7));
+    wt->SetWriteUnitsPerSecond(atoll($4));
+
+    FREE($4);
+    FREE($7);
+
+    $$ = wt;
+} |
+{
+    logdebug("[%s, %d] optional_warm_throughput: \n", __FILENAME__, __LINE__);
+    $$ = NULL;
+};
+
 optional_billing_mode_and_throughput: billing_mode_and_throughput
 {
     logdebug("[%s, %d] optional_billing_mode_and_throughput: billing_mode_and_throughput\n", __FILENAME__, __LINE__);
@@ -1204,10 +1239,10 @@ lsi_specification: lsi
     delete $3;
 };
 
-gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput
+gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput optional_warm_throughput
 {
-    logdebug("[%s, %d] gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput\n",
-             __FILENAME__, __LINE__);
+    logdebug("[%s, %d] gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput "
+	     "optional_warm_throughput\n", __FILENAME__, __LINE__);
 
     Aws::DynamoDB::Model::GlobalSecondaryIndex * gsi = NEW Aws::DynamoDB::Model::GlobalSecondaryIndex;
 
@@ -1222,6 +1257,12 @@ gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput
 
     if ($5 != NULL)
         FREE($5);
+
+    if ($6 != NULL)
+    {
+	gsi->SetWarmThroughput(*$6);
+	FREE($6);
+    }
 
     $$ = gsi;
     FREE($1);

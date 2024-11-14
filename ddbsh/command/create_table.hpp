@@ -29,6 +29,7 @@ namespace ddbsh
             Aws::Vector<Aws::DynamoDB::Model::AttributeDefinition> * attribute_definition,
             Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement> * key_schema,
             billing_mode_and_throughput_t * billing_mode_and_throughput,
+	    Aws::DynamoDB::Model::WarmThroughput * warm_throughput,
             Aws::Vector<Aws::DynamoDB::Model::GlobalSecondaryIndex> * gsi_list,
             Aws::Vector<Aws::DynamoDB::Model::LocalSecondaryIndex> * lsi_list,
             Aws::DynamoDB::Model::StreamSpecification * stream_specification,
@@ -42,6 +43,7 @@ namespace ddbsh
           m_attribute_definition { attribute_definition },
           m_key_schema { key_schema },
           m_billing_mode_and_throughput { billing_mode_and_throughput },
+	  m_warm_throughput { warm_throughput },
           m_gsi_list { gsi_list },
           m_lsi_list { lsi_list },
           m_stream_specification { stream_specification },
@@ -63,6 +65,7 @@ namespace ddbsh
         Aws::DynamoDB::Model::SSESpecification * m_sse_specification;
         Aws::DynamoDB::Model::TableClass m_table_class;
         Aws::Vector<Aws::DynamoDB::Model::Tag> * m_tags;
+	Aws::DynamoDB::Model::WarmThroughput * m_warm_throughput;
         bool m_if_not_exists;
         bool m_nowait;
         bool m_deletion_protection;
