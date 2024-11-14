@@ -1277,10 +1277,10 @@ gsi:string K_ON key_schema index_projection optional_billing_mode_and_throughput
     delete $4;
 };
 
-alter_table_gsi_create: string K_ON key_schema index_projection optional_billing_mode_and_throughput
+alter_table_gsi_create: string K_ON key_schema index_projection optional_billing_mode_and_throughput optional_warm_throughput
 {
-    logdebug("[%s, %d] alter_table_gsi_create: string K_ON key_schema index_projection optional_billing_mode_and_throughput\n",
-             __FILENAME__, __LINE__);
+    logdebug("[%s, %d] alter_table_gsi_create: string K_ON key_schema index_projection optional_billing_mode_and_throughput"
+	     " optional_warm_throughput\n", __FILENAME__, __LINE__);
 
     Aws::DynamoDB::Model::CreateGlobalSecondaryIndexAction * cgsia = NEW Aws::DynamoDB::Model::CreateGlobalSecondaryIndexAction;
 
@@ -1295,6 +1295,12 @@ alter_table_gsi_create: string K_ON key_schema index_projection optional_billing
 
     if ($5 != NULL)
         FREE($5);
+
+    if ($6 != NULL)
+    {
+	cgsia->SetWarmThroughput(*$6);
+	FREE($6);
+    }
 
     Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate * gsiu =
         NEW Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate();

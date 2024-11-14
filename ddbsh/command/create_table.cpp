@@ -126,6 +126,7 @@ CCreateTableCommand::~CCreateTableCommand()
     delete m_attribute_definition;
     delete m_key_schema;
     FREE(m_billing_mode_and_throughput);
+    FREE(m_warm_throughput);
     delete m_gsi_list;
     delete m_lsi_list;
     delete m_stream_specification;

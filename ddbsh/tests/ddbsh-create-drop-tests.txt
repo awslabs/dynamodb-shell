@@ -7,6 +7,8 @@ add_test(NAME icd-drop-table-6 COMMAND ddbshtest -c "drop table if exists icd6")
 add_test(NAME icd-drop-table-7 COMMAND ddbshtest -c "drop table if exists icd7")
 add_test(NAME icd-drop-table-8 COMMAND ddbshtest -c "drop table if exists icd8")
 add_test(NAME icd-drop-table-9 COMMAND ddbshtest -c "drop table if exists icdthroughput")
+add_test(NAME icd-drop-table-10 COMMAND ddbshtest -c "drop table if exists icdwarmthroughput0")
+add_test(NAME icd-drop-table-11 COMMAND ddbshtest -c "drop table if exists icdwarmthroughput1")
 
 add_test(NAME icd-create-table-1
          COMMAND ddbshtest -c "create table icd1 ( pk number ) primary key ( pk hash ) billing mode on demand")
@@ -133,3 +135,43 @@ add_test( NAME icd-create-table-29
 add_test( NAME icd-create-table-30
           COMMAND ddbshtest -c "describe icdthroughput" )
 set_property(TEST icd-create-table-30 PROPERTY PASS_REGULAR_EXPRESSION "On Demand [(]mirrors table[)], Throughput [(]200 RCU, 300 WCU[)],")
+
+add_test( NAME icd-create-table-31
+          COMMAND ddbshtest -c "create table icdwarmthroughput0 ( a number ) \
+                               primary key (a hash) \
+                               billing mode on demand warm throughput ( 13000 rcu, 4000 wcu )" )
+
+add_test( NAME icd-create-table-32
+          COMMAND ddbshtest -c "describe icdwarmthroughput0" )
+set_property(TEST icd-create-table-32 PROPERTY PASS_REGULAR_EXPRESSION "13000 RCU, 4000 WCU, Status ACTIVE")
+
+add_test( NAME icd-create-table-33
+          COMMAND ddbshtest -c "alter table icdwarmthroughput0 set warm throughput (4000 wcu, 14000 rcu)")
+
+add_test( NAME icd-create-table-34
+          COMMAND ddbshtest -c "describe icdwarmthroughput0" )
+set_property(TEST icd-create-table-34 PROPERTY PASS_REGULAR_EXPRESSION "Status UPDATING")
+
+add_test( NAME icd-create-table-35
+          COMMAND ddbshtest -c "alter table icdwarmthroughput0 (a number) create gsi icdwt0gsi0 on (a hash) projecting all \
+                  warm throughput (12000 rcu, 4000 wcu)")
+
+add_test( NAME icd-create-table-36
+          COMMAND ddbshtest -c "describe icdwarmthroughput0" )
+set_property(TEST icd-create-table-36 PROPERTY PASS_REGULAR_EXPRESSION "12000 RCU, 4000 WCU, Status UPDATING")
+
+add_test( NAME icd-create-table-38
+          COMMAND ddbshtest -c "create table icdwarmthroughput1 ( a number, b number ) \
+                               primary key (a hash) \
+                               billing mode on demand warm throughput ( 13000 rcu, 4000 wcu ) \
+                               GSI (firstgsi on (b hash) projecting all warm throughput (13001 rcu, 4001 wcu))" )
+
+add_test( NAME icd-create-table-39
+          COMMAND ddbshtest -c "describe icdwarmthroughput1" )
+set_property(TEST icd-create-table-39 PROPERTY PASS_REGULAR_EXPRESSION "13000 RCU, 4000 WCU, Status ACTIVE")
+
+add_test( NAME icd-create-table-40
+          COMMAND ddbshtest -c "describe icdwarmthroughput1" )
+set_property(TEST icd-create-table-39 PROPERTY PASS_REGULAR_EXPRESSION "13001 RCU, 4001 WCU, Status ACTIVE")
+
+
