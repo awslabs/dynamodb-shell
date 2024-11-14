@@ -87,6 +87,9 @@ int CCreateTableCommand::run()
         if (m_tags)
             request.SetTags(*m_tags);
 
+	if (m_warm_throughput)
+	    request.SetWarmThroughput(*m_warm_throughput);
+
         if (explaining())
         {
             printf("CreateTable(%s)\n", explain_string(request.SerializePayload()).c_str());
@@ -123,6 +126,7 @@ CCreateTableCommand::~CCreateTableCommand()
     delete m_attribute_definition;
     delete m_key_schema;
     FREE(m_billing_mode_and_throughput);
+    FREE(m_warm_throughput);
     delete m_gsi_list;
     delete m_lsi_list;
     delete m_stream_specification;

@@ -66,6 +66,18 @@ static void __show_table_basic_info(
     printf("Deletion Protection: %s\n", td.GetDeletionProtectionEnabled() ? "Enabled" : "Disabled");
 }
 
+static void __show_table_warm_throughput(
+    const Aws::DynamoDB::Model::TableDescription& td)
+{
+    if (td.WarmThroughputHasBeenSet())
+    {
+	const Aws::DynamoDB::Model::TableWarmThroughputDescription &wt = td.GetWarmThroughput();
+	const long long rups = wt.GetReadUnitsPerSecond(), wups = wt.GetWriteUnitsPerSecond();
+	printf ("Warm Throughput: (%lld RCU, %lld WCU, Status %s)\n", rups, wups,
+		Aws::DynamoDB::Model::TableStatusMapper::GetNameForTableStatus(wt.GetStatus()).c_str());
+    }
+}
+
 static bool __show_billing_mode(const Aws::DynamoDB::Model::TableDescription& td)
 {
     bool table_is_on_demand = false;
@@ -185,7 +197,18 @@ static void __show_gsi(const Aws::DynamoDB::Model::TableDescription& td, bool ta
             }
 
             printf(", Status: %s", Aws::DynamoDB::Model::IndexStatusMapper::GetNameForIndexStatus(item.GetIndexStatus()).c_str());
-            printf(", Backfilling: %s\n", item.GetBackfilling() ? "YES" : "NO");
+            printf(", Backfilling: %s", item.GetBackfilling() ? "YES" : "NO");
+
+	    if (item.WarmThroughputHasBeenSet ())
+	    {
+		const Aws::DynamoDB::Model::GlobalSecondaryIndexWarmThroughputDescription gsiwt =
+		    item.GetWarmThroughput();
+		const long long rups = gsiwt.GetReadUnitsPerSecond(), wups = gsiwt.GetWriteUnitsPerSecond();
+		printf (", Warm Throughput: (%lld RCU, %lld WCU, Status %s)", rups, wups,
+		    Aws::DynamoDB::Model::IndexStatusMapper::GetNameForIndexStatus(gsiwt.GetStatus()).c_str());
+	    }
+
+	    printf("\n");
         }
     }
     else
@@ -307,6 +330,7 @@ int CDescribeCommand::run()
         {
             __show_table_basic_info(td);
             table_is_on_demand = __show_billing_mode(td);
+	    __show_table_warm_throughput(td);
         }
 
         Aws::DynamoDB::Model::DescribeContinuousBackupsRequest pitr;

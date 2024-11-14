@@ -2052,6 +2052,68 @@ GSI gsipka: ( HASH a ), Billing Mode: On Demand (mirrors table), Projecting (ALL
 [...]
 ```
 
+# Warm Throughput
+
+DynamoDB added support for warm throughput for tables and indexes. You can now specify warm throughput during table/index creation, or subsequently using ALTER TABLE.
+
+For example, you could create a table with a large warm throughput as an on demand table, without having to switch to provisioned and such.
+
+```
+us-east-1> explain create table customers (custid number) primary key (custid hash) warm throughput (2000000 rcu, 1000000 wcu);
+CreateTable({
+   "AttributeDefinitions":   [{
+         "AttributeName":   "custid",
+         "AttributeType":   "N"
+      }],
+   "TableName":   "customers",
+   "KeySchema":   [{
+         "AttributeName":   "custid",
+         "KeyType":   "HASH"
+      }],
+   "BillingMode":   "PAY_PER_REQUEST",
+   "TableClass":   "STANDARD",
+   "DeletionProtectionEnabled":   false,
+   "WarmThroughput":   {
+      "ReadUnitsPerSecond":   2000000,
+      "WriteUnitsPerSecond":   1000000
+   }
+})
+CREATE
+```
+
+The above would create an on demand table with 2MM RCU and 1MM WCU (if your account permits this).
+
+Similarly, you could add a new index to a table called customertxns this way.
+
+```
+us-east-1> alter table customertxns (custid string, txid string) create gsi txngsi on (txid hash, custid range) projecting all warm throughput (15000 rcu, 4000 wcu);
+ALTER
+us-east-1>
+```
+
+You could see the warm throughput of the table in the output of DESCRIBE like this.
+
+```
+us-east-1> describe customertxns;
+Name: customertxns (ACTIVE)
+Key: HASH custid
+Attributes:  custid, S,  txid, S
+Created at: 2024-09-30T00:57:12Z
+...
+Table size (bytes): 0
+Item Count: 0
+Deletion Protection: Disabled
+Billing Mode: On Demand
+Warm Throughput: (12000 RCU, 4000 WCU, Status ACTIVE)
+PITR is Disabled.
+GSI txngsi: ( HASH txid, RANGE custid ), Billing Mode: On Demand (mirrors table), Projecting (ALL), Status: CREATING, Backfilling: YES, Warm Throughput: (15000 RCU, 4000 WCU, Status UPDATING)
+LSI: None
+Stream: Disabled
+Table Class: STANDARD
+SSE: Not set
+us-east-1>
+```
+
 # Contributing
 
 If you find bugs or errors of any kind, please do let the maintainers know. If you are so inclined, please let the maintainers know that you would like to submit pull-requests. We will do our best to respond in a timely manner and where possible accept pull-requests and changes.
