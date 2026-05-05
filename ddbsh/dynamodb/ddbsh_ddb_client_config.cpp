@@ -14,12 +14,16 @@
 
 using namespace ddbsh;
 
-CDDBShDDBClientConfig::CDDBShDDBClientConfig(std::string region, std::string endpoint)
+CDDBShDDBClientConfig::CDDBShDDBClientConfig(std::string region, std::string endpoint, std::string ca_bundle)
 {
     char userAgent[128];
     sprintf(userAgent, "ddbsh - version %s", ddbsh_version());
     this->userAgent = userAgent;
     this->region = region;
+
+    if (!ca_bundle.empty())
+        this->caFile = ca_bundle;
+
     if (!endpoint.empty())
     {
         Aws::DynamoDB::DynamoDBClientConfiguration config;

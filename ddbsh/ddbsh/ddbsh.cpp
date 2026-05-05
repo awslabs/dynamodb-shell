@@ -58,8 +58,15 @@ CDDBSh::CDDBSh()
 
     if (std::getenv("DDBSH_ENDPOINT_OVERRIDE") != nullptr)
         m_endpoint = std::getenv("DDBSH_ENDPOINT_OVERRIDE");
+    else if (std::getenv("AWS_ENDPOINT_URL") != nullptr)
+        m_endpoint = std::getenv("AWS_ENDPOINT_URL");
     else
         m_endpoint = "";
+
+    if (std::getenv("AWS_CA_BUNDLE") != nullptr)
+        m_ca_bundle = std::getenv("AWS_CA_BUNDLE");
+    else
+        m_ca_bundle = "";
 
     // load history file
     m_history_file = getenv("HOME");
@@ -70,6 +77,38 @@ CDDBSh::CDDBSh()
     m_reconnect = true;
 
     Aws::InitAPI(m_options);
+
+    // Read endpoint_url and ca_bundle from the AWS config profile
+    // (~/.aws/config) if not already set from environment variables.
+    // The credentials file (~/.aws/credentials) does not contain
+    // these settings, so we load the config file directly.
+    {
+        Aws::Config::AWSConfigFileProfileConfigLoader configLoader(
+            Aws::Auth::GetConfigProfileFilename(), true);
+        if (configLoader.Load())
+        {
+            std::string profile_name = getProfileName();
+            auto it = configLoader.GetProfiles().find(profile_name);
+            if (it != configLoader.GetProfiles().end())
+            {
+                if (m_endpoint.empty())
+                {
+                    Aws::String ep = it->second.GetValue("endpoint_url");
+                    if (!ep.empty())
+                        m_endpoint = ep;
+                }
+                if (m_ca_bundle.empty())
+                {
+                    Aws::String ca = it->second.GetValue("ca_bundle");
+                    if (!ca.empty())
+                        m_ca_bundle = ca;
+                }
+            }
+        }
+    }
+
+    logdebug("[%s, %d] m_endpoint = '%s', m_ca_bundle = '%s'\n",
+             __FILENAME__, __LINE__, m_endpoint.c_str(), m_ca_bundle.c_str());
 
     // initializer
     st_uniq = 0;
@@ -291,7 +330,7 @@ void CDDBSh::reconnect()
     logdebug("[%s, %d] Will attempt reconnect.\n", __FILENAME__, __LINE__);
     delete p_dynamoDBClient;
 
-    CDDBShDDBClientConfig clientConfig(m_region, m_endpoint);
+    CDDBShDDBClientConfig clientConfig(m_region, m_endpoint, m_ca_bundle);
     p_dynamoDBClient = new Aws::DynamoDB::DynamoDBClient(
 	getCredentials(), clientConfig);
 

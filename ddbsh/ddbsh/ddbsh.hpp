@@ -102,6 +102,7 @@ namespace ddbsh
         std::string m_region;
         std::string m_endpoint;
         std::string m_config_file;
+        std::string m_ca_bundle;
 
         bool m_quit;
         bool m_reconnect;
