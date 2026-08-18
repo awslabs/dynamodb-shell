@@ -109,3 +109,9 @@ add_test(NAME iut-42 COMMAND ddbshtest -q -T ${RD}/iut-42.exp -c "select * from 
 # add_test(NAME iut-48 COMMAND ddbshtest -q -T ${RD}/iut-48.exp -c
 # add_test(NAME iut-49 COMMAND ddbshtest -q -T ${RD}/iut-49.exp -c
 #
+
+# Regression: SET x = if_not_exists(x, v) previously did not parse -- the
+# if_not_exists keyword was declared in the grammar but missing from the keyword
+# table, so the token was never produced and the grammar branch was dead. It now
+# emits a proper "SET #x = if_not_exists(#x, :v)" UpdateExpression.
+add_test(NAME iut-ifne-1 COMMAND ddbshtest -T ${RD}/iut-ifne-1.exp -c "explain update iut1 set x = if_not_exists(x, 5) where pk = 1")
