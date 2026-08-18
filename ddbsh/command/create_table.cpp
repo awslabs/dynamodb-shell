@@ -102,7 +102,8 @@ int CCreateTableCommand::run()
             if (result.IsSuccess())
             {
                 if (!m_nowait)
-                    wait_for_table_active(m_table_name, p_dynamoDBClient);
+                    if (!wait_for_table_active(m_table_name, p_dynamoDBClient))
+                        return 1; // reason already logged by the waiter
 
             }
             else

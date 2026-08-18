@@ -50,7 +50,8 @@ int CDropTableCommand::run()
             else
             {
                 if (!m_nowait)
-                    wait_for_table_gone(m_table, p_dynamoDBClient);
+                    if (!wait_for_table_gone(m_table, p_dynamoDBClient))
+                        return 1; // reason already logged by the waiter
 
                 printf("DROP\n");
             }
