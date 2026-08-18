@@ -121,26 +121,15 @@ namespace ddbsh
         };
 
         Aws::String __query_filter_expression(std::string pk, std::string rk, CSymbolTable * st) {
-            std::string rv;
-            bool first = true;
-
-            for (auto p : m_exprlist) {
-                std::string thisval = p->query_filter_expression(pk, rk, st);
-
-                if (!thisval.empty()) {
-                    if (!first)
-                        rv = rv + " OR ";
-                    else
-                        first = false;
-
-                    rv = rv + thisval;
-                }
-            }
-
-            if (is_paren_group())
-                rv = "(" + rv + ")";
-
-            return rv;
+            // Nothing under an OR can be part of a KeyConditionExpression (a KCE
+            // is a single anded chain), so the ENTIRE OR subtree belongs in the
+            // FilterExpression -- including comparisons on the partition/sort key.
+            // Serializing the whole node is byte-identical to the previous
+            // per-child join for non-key attributes, and additionally includes
+            // key-attribute comparisons (e.g. "a = 1 AND (b = 2 OR b = 3)") that
+            // were previously dropped from both the key condition and the filter,
+            // silently returning wrong results.
+            return __serialize(st);
         };
 
         virtual Aws::String __update_delete_condition_check(std::string pk, std::string rk, CSymbolTable * st, bool top) {

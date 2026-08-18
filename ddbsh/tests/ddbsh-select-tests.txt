@@ -377,3 +377,9 @@ add_test(NAME isel-220 COMMAND ddbshtest -T ${RD}/isel-220.exp -c "select * from
 
 add_test(NAME isel-221 COMMAND ddbshtest -T ${RD}/isel-221.exp -c "select * from iselNN.globalsecNS where c > 3")
 add_test(NAME isel-222 COMMAND ddbshtest -T ${RD}/isel-222.exp -c "select * from iselNN.globalsecNS where c = 4 and begins_with(d, \"t\")")
+
+# Regression: a key-attribute (here the range key b) comparison nested under an
+# OR is not part of a KeyConditionExpression, so the whole OR must appear in the
+# FilterExpression. Previously it was dropped from both, silently returning all
+# a = 2 items. The explain must now show the FilterExpression on b.
+add_test(NAME isel-or-1 COMMAND ddbshtest -T ${RD}/isel-or-1.exp -c "explain select * from isel1 where a = 2 and (b = 3 or b = 4)")
