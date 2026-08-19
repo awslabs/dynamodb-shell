@@ -16,8 +16,11 @@
 #include <aws/dynamodb/DynamoDBClient.h>
 
 bool table_exists (std::string name, Aws::DynamoDB::DynamoDBClient * pClient);
-bool table_active (std::string name, Aws::DynamoDB::DynamoDBClient * pClient);
-void wait_for_table_active(std::string name, Aws::DynamoDB::DynamoDBClient * pClient);
-void wait_for_table_gone(std::string name, Aws::DynamoDB::DynamoDBClient * pClient);
+
+// Block until the table reaches the desired control-plane state. Both return
+// true on success, or false (with the reason logged) on a terminal error or if
+// the overall deadline is exceeded -- they never hang indefinitely.
+bool wait_for_table_active(std::string name, Aws::DynamoDB::DynamoDBClient * pClient);
+bool wait_for_table_gone(std::string name, Aws::DynamoDB::DynamoDBClient * pClient);
 
 #endif
