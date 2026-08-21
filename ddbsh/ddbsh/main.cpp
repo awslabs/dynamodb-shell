@@ -32,9 +32,11 @@ typedef struct
     char * expected;
     char * record;
 
-    // the three below are NOT from the command line
-    FILE * origstdout;
-    FILE * origstderr;
+    // the three below are NOT from the command line.
+    // saved_* hold dup()'d file descriptors for the real stdout/stderr so
+    // revert_output() can restore them after freopen() redirection.
+    int saved_stdout_fd;
+    int saved_stderr_fd;
     char * recordint;
 #endif
 } cmdline_t;
@@ -146,34 +148,52 @@ static void capture_output(cmdline_t * cmdline)
     if (!cmdline->record && !cmdline->expected)
         return;
 
-    // if user has asked for recording with no sorting, there's no
-    // need for an intermediate file. Directly record into the output
-    // file.
+    // Decide where captured output goes. If the user asked for recording
+    // with no sorting, write straight into the output file; otherwise use an
+    // intermediate temp file that process_recording() will sort/diff.
+    const char * target;
     if (cmdline->record && !cmdline->sort)
     {
-        cmdline->origstdout = stdout;
-        if ((stdout = fopen(cmdline->record, "w")) == NULL)
-        {
-            perror(cmdline->record);
-            exit(1);
-        }
-
-        cmdline->origstderr = stderr;
-        stderr = stdout;
+        target = cmdline->record;
     }
     else
     {
         cmdline->recordint = mktemp(strdup((char *)"/tmp/ddbsh-recXXXXXXX"));
+        target = cmdline->recordint;
+    }
 
-        cmdline->origstdout = stdout;
-        if ((stdout = fopen(cmdline->recordint, "w")) == NULL)
-        {
-            perror(cmdline->recordint);
-            exit(1);
-        }
+    // Redirect stdout/stderr into the capture file using freopen() rather
+    // than reassigning the stdout/stderr pointers. On some libc
+    // implementations (notably glibc, where stdout is copy-relocated into the
+    // executable), printf() writes through libc's internal stream object, so
+    // assigning a new FILE* to the application's `stdout` pointer does NOT
+    // redirect output -- the capture file stays empty and the data leaks to
+    // the terminal. freopen() rebinds the underlying stream and works
+    // portably. We dup() the real fds first so revert_output() can restore
+    // them for process_recording()'s own output.
+    fflush(stdout);
+    fflush(stderr);
 
-        cmdline->origstderr = stderr;
-        stderr = stdout;
+    cmdline->saved_stdout_fd = dup(fileno(stdout));
+    cmdline->saved_stderr_fd = dup(fileno(stderr));
+
+    if (cmdline->saved_stdout_fd == -1 || cmdline->saved_stderr_fd == -1)
+    {
+        perror("dup");
+        exit(1);
+    }
+
+    if (freopen(target, "w", stdout) == NULL)
+    {
+        perror(target);
+        exit(1);
+    }
+
+    // send stderr to the same file as stdout
+    if (dup2(fileno(stdout), fileno(stderr)) == -1)
+    {
+        perror("dup2");
+        exit(1);
     }
 }
 
@@ -181,9 +201,21 @@ static void revert_output(cmdline_t * cmdline)
 {
     if (cmdline->record || cmdline->expected)
     {
-        fclose(stdout);
-        stdout = cmdline->origstdout;
-        stderr = cmdline->origstderr;
+        // Flush the captured data into the file, then rebind stdout/stderr
+        // back to the real descriptors saved in capture_output(). We do NOT
+        // fclose(stdout) here: it remains the standard stream, just pointing
+        // at a different fd.
+        fflush(stdout);
+        fflush(stderr);
+
+        dup2(cmdline->saved_stdout_fd, fileno(stdout));
+        dup2(cmdline->saved_stderr_fd, fileno(stderr));
+
+        close(cmdline->saved_stdout_fd);
+        close(cmdline->saved_stderr_fd);
+
+        clearerr(stdout);
+        clearerr(stderr);
     }
 }
 
