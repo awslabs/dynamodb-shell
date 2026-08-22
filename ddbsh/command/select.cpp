@@ -133,28 +133,28 @@ int CSelectCommand::do_query()
 
     request = m_helper.query_request();
 
+    // EXPLAIN must not contact the service: print the request and return.
+    if (explaining())
+    {
+        printf("Query(%s)\n", explain_string(request->SerializePayload()).c_str());
+        delete request;
+        return 0;
+    }
+
     int ct = 0, retval = 0;
     CConsumedCapacityTotalizer cc;
 
     do
     {
-        if (explaining())
-        {
-            printf("Query(%s)\n", explain_string(request->SerializePayload()).c_str());
-        }
-
         const Aws::DynamoDB::Model::QueryOutcome& result = p_dynamoDBClient->Query(*request);
         if (result.IsSuccess())
         {
             const Aws::Vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> &items =
                 result.GetResult().GetItems();
 
-            if (!explaining())
+            for (auto f: CSelectHelper::show_items(items))
             {
-                for (auto f: CSelectHelper::show_items(items))
-                {
-                    printf("%s\n", f.c_str());
-                }
+                printf("%s\n", f.c_str());
             }
 
             cc.add(result.GetResult().GetConsumedCapacity());
@@ -198,27 +198,27 @@ int CSelectCommand::do_scan()
 
     request = m_helper.scan_request();
 
+    // EXPLAIN must not contact the service: print the request and return.
+    if (explaining())
+    {
+        printf("Scan(%s)\n", explain_string(request->SerializePayload()).c_str());
+        delete request;
+        return 0;
+    }
+
     int ct = 0, retval = 0;
     CConsumedCapacityTotalizer cc;
 
     do
     {
-        if (explaining())
-        {
-            printf("Scan(%s)\n", explain_string(request->SerializePayload()).c_str());
-        }
-
         const Aws::DynamoDB::Model::ScanOutcome& result = p_dynamoDBClient->Scan(*request);
         if (result.IsSuccess())
         {
             const Aws::Vector<Aws::Map<Aws::String, Aws::DynamoDB::Model::AttributeValue>> &items = result.GetResult().GetItems();
 
-            if (!explaining())
+            for (auto f: CSelectHelper::show_items(items))
             {
-                for (auto f: CSelectHelper::show_items(items))
-                {
-                    printf("%s\n", f.c_str());
-                }
+                printf("%s\n", f.c_str());
             }
 
             cc.add(result.GetResult().GetConsumedCapacity());
