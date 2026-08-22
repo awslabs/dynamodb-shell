@@ -1,9 +1,7 @@
-Query({
+Scan({
    "TableName":   "isel1",
-   "ConsistentRead":   false,
    "ReturnConsumedCapacity":   "NONE",
-   "FilterExpression":   "(#aaaa2 = :vaaa2 OR #aaaa2 = :vaaa3)",
-   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "FilterExpression":   "#aaaa1 = :vaaa1 AND (#aaaa2 = :vaaa2 OR #aaaa2 = :vaaa3)",
    "ExpressionAttributeNames":   {
       "#aaaa1":   "a",
       "#aaaa2":   "b"
@@ -18,5 +16,6 @@ Query({
       ":vaaa3":   {
          "N":   "4"
       }
-   }
+   },
+   "ConsistentRead":   false
 })

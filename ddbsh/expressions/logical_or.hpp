@@ -155,9 +155,20 @@ namespace ddbsh
             return rv;
         };
 
-        // run query_safe across all items that are and'ed
-        // together. Fail fast.
+        // run query_safe across all items that are or'ed together.
+        //
+        // Everything under an OR is emitted into the FilterExpression: an
+        // OR can never be part of a KeyConditionExpression (a KCE is a
+        // single anded chain). DynamoDB forbids key attributes in a Query
+        // FilterExpression, so if this OR subtree references the partition
+        // or sort key, a Query is not legal for this predicate -- it must
+        // be a Scan. (A key comparison's own query_safe() returns true on
+        // the assumption it becomes a key condition; that assumption does
+        // not hold under an OR, hence this explicit key-reference check.)
         virtual bool __query_safe(std::string pk, std::string rk) {
+            if (count(pk) > 0 || (!rk.empty() && count(rk) > 0))
+                return false;
+
             for (auto p: m_exprlist) {
                 if (!p->query_safe(pk, rk))
                     return false;
