@@ -69,6 +69,7 @@ static keywords_t keywords_table[] = {
     { "hash", K_HASH, "K_HASH" },
     { "help", K_HELP, "K_HELP" },
     { "if", K_IF, "K_IF" },
+    { "if_not_exists", K_IF_NOT_EXISTS, "K_IF_NOT_EXISTS" },
     { "image", K_IMAGE, "K_IMAGE" },
     { "images", K_IMAGES, "K_IMAGES" },
     { "in", K_IN, "K_IN" },

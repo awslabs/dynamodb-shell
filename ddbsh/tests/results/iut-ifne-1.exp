@@ -1,0 +1,19 @@
+UpdateItem({
+   "TableName":   "iut1",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = if_not_exists(#aaaa1,:vaaa1)",
+   "ConditionExpression":   "attribute_exists(#aaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "x",
+      "#aaaa2":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "5"
+      }
+   }
+})

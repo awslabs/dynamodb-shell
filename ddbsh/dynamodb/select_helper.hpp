@@ -77,17 +77,18 @@ namespace ddbsh
         std::string m_index_name;
         std::string m_pk;
         std::string m_rk;
-        bool m_rate_limited;
-        bool m_exists;
-        bool m_not_exists;
+        bool m_rate_limited = false;
+        bool m_exists = false;
+        bool m_not_exists = false;
 
         // never delete m_where_clone, it is a copy of something in the
         // caller.
         CWhere * m_where_clone;
 
-        bool m_consistent;
+        bool m_consistent = false;
         Aws::Vector<Aws::String> * m_projection;
-        Aws::DynamoDB::Model::ReturnConsumedCapacity m_consumed_capacity;
+        Aws::DynamoDB::Model::ReturnConsumedCapacity m_consumed_capacity =
+            Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE;
 
         std::string serialize_projection(CSymbolTable * st);
         std::string serialize_projection();
