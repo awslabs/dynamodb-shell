@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/run-tests — code-repo test entry point.
+#
+# Builds the ddbsh/ddbshtest binaries and runs the CTest golden suite against
+# REAL DynamoDB (us-east-1) using the standard AWS resolution chain (~/.aws
+# credentials/config, AWS_PROFILE, AWS_REGION). No endpoint override is used;
+# DynamoDB Local and extenddb are not used (human decisions 2026-08-17/22).
+#
+# The test target (endpoint + access key id) is echoed and verified before any
+# test runs. Two artifacts are written into this repo's discussions/ directory,
+# named by the current HEAD short hash so they are tracked in version control
+# and copied back by the orchestration repo's devtools/run-tests:
+#
+#   discussions/test-<suite>-<HEAD-short>.log   full ctest output
+#   discussions/test-<suite>-<HEAD-short>.txt   summary (target + pass/fail counts)
+#
+# Usage:
+#   devtools/run-tests                     # full suite (label: all)
+#   devtools/run-tests -R isel             # ctest regex filter (label derived)
+#   devtools/run-tests --suite select -R isel
+#   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
+#
+# WARNING: this talks to a real AWS account. create/insert/update/delete/drop
+# operate on real tables and data, incur real cost, and are irreversible. Use a
+# dedicated test account/region.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# --- Argument parsing -------------------------------------------------------
+# Optional --suite <label>; all other args pass through to ctest.
+SUITE=""
+CTEST_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --suite)
+            SUITE="${2:-}"
+            shift 2
+            ;;
+        *)
+            CTEST_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Derive a suite label if not given: use the -R regex if present, else "all".
+if [ -z "$SUITE" ]; then
+    for ((i = 0; i < ${#CTEST_ARGS[@]}; i++)); do
+        if [ "${CTEST_ARGS[$i]}" = "-R" ]; then
+            SUITE="${CTEST_ARGS[$((i + 1))]:-all}"
+            break
+        fi
+    done
+fi
+[ -z "$SUITE" ] && SUITE="all"
+# Sanitize the label for use in a filename.
+SUITE="$(printf '%s' "$SUITE" | tr -c 'A-Za-z0-9._-' '-')"
+
+# --- Repo / build resolution ------------------------------------------------
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_DIR="${DDBSH_BUILD_DIR:-$REPO_DIR/build}"
+SRC_DIR="$REPO_DIR/ddbsh"
+DISCUSSIONS_DIR="$REPO_DIR/discussions"
+mkdir -p "$DISCUSSIONS_DIR"
+
+LOG_FILE="$DISCUSSIONS_DIR/test-${SUITE}-${HASH}.log"
+SUMMARY_FILE="$DISCUSSIONS_DIR/test-${SUITE}-${HASH}.txt"
+
+# AWS SDK shared libraries (mirrors devtools/ddbsh-aws in the orchestration repo).
+export LD_LIBRARY_PATH="${DDBSH_SDK_LIB:-$HOME/.local/aws-sdk-cpp/lib64}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Prefer the regional STS endpoint (the legacy global endpoint is disabled on
+# some accounts; cross-account AssumeRole tests need this).
+export AWS_STS_REGIONAL_ENDPOINTS="${AWS_STS_REGIONAL_ENDPOINTS:-regional}"
+
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+export AWS_REGION="$REGION"
+
+# --- Build ------------------------------------------------------------------
+if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    echo "=== Configuring build (no CMakeCache at $BUILD_DIR) ==="
+    cmake -S "$SRC_DIR" -B "$BUILD_DIR"
+fi
+echo "=== Building ddbsh/ddbshtest ($HASH) ==="
+cmake --build "$BUILD_DIR"
+
+if [ ! -x "$BUILD_DIR/ddbshtest" ]; then
+    echo "error: $BUILD_DIR/ddbshtest not found after build." >&2
+    exit 1
+fi
+
+# --- Target echo + verification ---------------------------------------------
+# No endpoint override => the real regional DynamoDB endpoint.
+ENDPOINT="dynamodb.${REGION}.amazonaws.com (real DynamoDB, no override)"
+ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-$(aws configure get aws_access_key_id 2>/dev/null || true)}"
+[ -z "$ACCESS_KEY_ID" ] && ACCESS_KEY_ID="(unresolved)"
+CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text --region "$REGION" 2>/dev/null || echo '(sts unavailable)')"
+
+{
+    echo "ddbsh test run"
+    echo "  commit:        $HASH"
+    echo "  suite:         $SUITE"
+    echo "  timestamp:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "  region:        $REGION"
+    echo "  endpoint:      $ENDPOINT"
+    echo "  access key id: $ACCESS_KEY_ID"
+    echo "  caller arn:    $CALLER_ARN"
+} | tee "$SUMMARY_FILE"
+
+if [ "$ACCESS_KEY_ID" = "(unresolved)" ]; then
+    echo "error: could not resolve an AWS access key id; refusing to run against an unknown target." >&2
+    echo "  provide credentials via ~/.aws or AWS_ACCESS_KEY_ID/AWS_PROFILE." | tee -a "$SUMMARY_FILE" >&2
+    exit 1
+fi
+
+# --- Run --------------------------------------------------------------------
+echo "=== Running ctest (suite: $SUITE) ===" | tee -a "$SUMMARY_FILE"
+set +e
+ctest --test-dir "$BUILD_DIR" --output-on-failure ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"} 2>&1 | tee "$LOG_FILE"
+RC=${PIPESTATUS[0]}
+set -e
+
+# Extract the ctest summary line(s) into the summary artifact.
+{
+    echo ""
+    echo "=== ctest summary ==="
+    grep -E "tests passed|tests failed|Total Test time|Errors while running CTest" "$LOG_FILE" || true
+    echo ""
+    echo "ctest exit code: $RC"
+} | tee -a "$SUMMARY_FILE"
+
+echo "=== Artifacts ==="
+echo "  $LOG_FILE"
+echo "  $SUMMARY_FILE"
+
+exit $RC
