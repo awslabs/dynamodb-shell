@@ -7,14 +7,22 @@ add_test(NAME ipt-create-table COMMAND ddbshtest -c "create table ipt1 ( a numbe
 add_test(NAME ipt-pitr-disabled-by-default COMMAND ddbshtest -c "describe ipt1")
 set_property(TEST ipt-pitr-disabled-by-default PROPERTY PASS_REGULAR_EXPRESSION "PITR is Disabled.")
 
-add_test(NAME ipt-pitr-enable-sleep COMMAND sleep 10)
-add_test(NAME ipt-pitr-enable COMMAND ddbshtest -c "alter table ipt1 set pitr enabled")
+# Enable PITR, retrying through the transient post-create window where DynamoDB
+# rejects the enable with ContinuousBackupsUnavailableException ("Backups are
+# being enabled for the table ... Please retry later"). This condition is not
+# observable via describe, so we retry the enable itself (was: sleep 10 before
+# enable). ddbsh's own enable command is still the operation under test.
+add_test(NAME ipt-pitr-enable COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait retry-cmd -- $<TARGET_FILE:ddbshtest> -c "alter table ipt1 set pitr enabled")
 
+# wait until PITR is actually reported ENABLED before asserting on describe.
+add_test(NAME ipt-pitr-enable-wait COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait pitr ipt1 ENABLED)
 add_test(NAME ipt-pitr-enabled COMMAND ddbshtest -c "describe ipt1")
 set_property(TEST ipt-pitr-enabled PROPERTY PASS_REGULAR_EXPRESSION "PITR is Enabled")
 
 add_test(NAME ipt-pitr-disable COMMAND ddbshtest -c "alter table ipt1 set pitr disabled")
 
-add_test(NAME ipt-pitr-disable-sleep COMMAND sleep 10)
+# wait until PITR is actually reported DISABLED before asserting on describe
+# (was: sleep 10).
+add_test(NAME ipt-pitr-disable-sleep COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait pitr ipt1 DISABLED)
 add_test(NAME ipt-pitr-disabled COMMAND ddbshtest -c "describe ipt1")
 set_property(TEST ipt-pitr-disabled PROPERTY PASS_REGULAR_EXPRESSION "PITR is Disabled.")
