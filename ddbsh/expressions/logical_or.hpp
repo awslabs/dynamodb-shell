@@ -44,6 +44,10 @@ namespace ddbsh
 
                 e1->m_exprlist.insert(std::end(e1->m_exprlist), std::begin(e2->m_exprlist), std::end(e2->m_exprlist));
 
+                // e2's children are now owned by e1. Clear e2's list before
+                // deleting it so ~CLogicalOr does not delete the spliced
+                // children a second time (double-free / use-after-free).
+                e2->m_exprlist.clear();
                 delete e2;
                 return e1;
             } else if (!expr1->is_negated() &&
