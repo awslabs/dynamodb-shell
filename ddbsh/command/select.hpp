@@ -39,6 +39,8 @@ namespace ddbsh
 
         CSelectCommand() {
             m_exists = false;
+            m_not_exists = false;
+            m_returns = Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE;
             m_ratelimit = NULL;
             m_where = NULL;
         };
