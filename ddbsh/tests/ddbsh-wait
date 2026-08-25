@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-wait -- bounded control-plane poll helper for the CTest golden suite.
+#
+# Several test suites mutate a table's control plane (billing mode / on-demand
+# throughput, GSI throughput, PITR) and then assert on a subsequent `describe`.
+# DynamoDB applies these changes asynchronously, so the original suite inserted
+# fixed `sleep`s between the mutation and the assertion. Fixed sleeps are racy
+# against real DynamoDB (the settle time is not bounded by a constant), which
+# produced the non-deterministic Bucket A `icd-create-table` / `ipt-pitr`
+# failures. This helper replaces those sleeps with a deterministic bounded poll:
+# it waits until the asserted control-plane state is actually reached, then
+# exits 0; on timeout it exits non-zero so CTest marks the step (and thus the
+# suite) failed instead of silently proceeding to a flaky assertion.
+#
+# It uses the AWS CLI against real DynamoDB via the same standard ~/.aws
+# credential/region resolution as devtools/run-tests (no endpoint override).
+#
+# Usage:
+#   ddbsh-wait table-settled <table>
+#       Wait until TableStatus == ACTIVE and every GSI IndexStatus == ACTIVE
+#       (i.e. no table-level or index-level update is still in progress).
+#
+#   ddbsh-wait pitr <table> <ENABLED|DISABLED>
+#       Wait until the table's PointInTimeRecoveryStatus equals the target.
+#
+#   ddbsh-wait retry-cmd -- <command> [args...]
+#       Run <command>, retrying while it exits non-zero, until it succeeds or
+#       the ceiling is reached. Used for control-plane operations that DynamoDB
+#       answers with a transient "retry later" error (e.g. enabling PITR during
+#       the post-create window when continuous backups are still being enabled
+#       -- a condition that is NOT observable via any describe call). The
+#       command under test still runs (and must eventually succeed), so its
+#       coverage is preserved; only the transient race is absorbed.
+#
+# Tunables (env): DDBSH_WAIT_CEILING (seconds, default 900 = 15m),
+#                 DDBSH_WAIT_CADENCE (seconds, default 5).
+#
+# TODO(portability): POSIX bash + AWS CLI; a Windows test-runner equivalent is
+# Step-2 infra (the golden suite is not run on Windows yet).
+
+set -uo pipefail
+
+CEILING="${DDBSH_WAIT_CEILING:-900}"
+CADENCE="${DDBSH_WAIT_CADENCE:-5}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+
+die() {
+    echo "ddbsh-wait: $*" >&2
+    exit 1
+}
+
+MODE="${1:-}"
+[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|pitr|retry-cmd> ..."
+
+# retry-cmd is handled separately: it takes a command, not a table, and does
+# not itself query the control plane.
+if [ "$MODE" = "retry-cmd" ]; then
+    shift
+    [ "${1:-}" = "--" ] && shift
+    [ $# -gt 0 ] || die "usage: ddbsh-wait retry-cmd -- <command> [args...]"
+    echo "ddbsh-wait: retrying [$*] until success (ceiling ${CEILING}s, cadence ${CADENCE}s)"
+    start=$SECONDS
+    while :; do
+        if "$@"; then
+            echo "ddbsh-wait: command succeeded after $((SECONDS - start))s"
+            exit 0
+        fi
+        if [ $((SECONDS - start)) -ge "$CEILING" ]; then
+            die "timed out after ${CEILING}s; command [$*] never succeeded"
+        fi
+        sleep "$CADENCE"
+    done
+fi
+
+command -v aws >/dev/null 2>&1 || die "AWS CLI not found on PATH (required to poll control-plane state)"
+
+TABLE="${2:-}"
+[ -n "$TABLE" ] || die "usage: ddbsh-wait $MODE <table> [args]"
+
+describe_table_query() {
+    # $1 = JMESPath query; prints text result (empty on failure).
+    aws dynamodb describe-table --table-name "$TABLE" --region "$REGION" \
+        --query "$1" --output text 2>/dev/null
+}
+
+table_settled() {
+    local status gsi_statuses
+    status="$(describe_table_query 'Table.TableStatus')"
+    [ "$status" = "ACTIVE" ] || return 1
+
+    # Every GSI (if any) must be ACTIVE. With `--output text`, a table without
+    # GSIs yields "None" (JMESPath null) or an empty string; either means "no
+    # GSIs to wait on". Otherwise the statuses are whitespace-separated.
+    gsi_statuses="$(describe_table_query 'Table.GlobalSecondaryIndexes[].IndexStatus')"
+    if [ -z "$gsi_statuses" ] || [ "$gsi_statuses" = "None" ]; then
+        return 0
+    fi
+    # settled iff no status is anything other than ACTIVE.
+    ! printf '%s\n' $gsi_statuses | grep -qvE '^ACTIVE$'
+}
+
+pitr_matches() {
+    local want="$1" status
+    status="$(aws dynamodb describe-continuous-backups --table-name "$TABLE" --region "$REGION" \
+        --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus' \
+        --output text 2>/dev/null)"
+    [ "$status" = "$want" ]
+}
+
+case "$MODE" in
+    table-settled)
+        check() { table_settled; }
+        desc="table $TABLE to settle (TableStatus + all GSIs ACTIVE)"
+        ;;
+    pitr)
+        WANT="${3:-}"
+        [ -n "$WANT" ] || die "usage: ddbsh-wait pitr <table> <ENABLED|DISABLED>"
+        check() { pitr_matches "$WANT"; }
+        desc="table $TABLE PITR to reach $WANT"
+        ;;
+    *)
+        die "unknown mode: $MODE (expected table-settled|pitr)"
+        ;;
+esac
+
+echo "ddbsh-wait: waiting for $desc (ceiling ${CEILING}s, cadence ${CADENCE}s)"
+start=$SECONDS
+while :; do
+    if check; then
+        echo "ddbsh-wait: reached after $((SECONDS - start))s"
+        exit 0
+    fi
+    if [ $((SECONDS - start)) -ge "$CEILING" ]; then
+        die "timed out after ${CEILING}s waiting for $desc"
+    fi
+    sleep "$CADENCE"
+done

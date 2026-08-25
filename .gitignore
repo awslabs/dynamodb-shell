@@ -33,3 +33,11 @@
 
 # ignore the build directory in its entirety
 build
+
+# Test artifacts are staged here by devtools/run-tests and tracked in the
+# orchestration repo's discussions/ (named by HEAD short hash), not here.
+/discussions/
+
+# CTest scratch output
+/Testing/
+/ddbsh/tests/Testing/

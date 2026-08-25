@@ -61,8 +61,17 @@ add_test( NAME icd-create-table-11
           COMMAND ddbshtest -c "describe icdthroughput" )
 set_property(TEST icd-create-table-11 PROPERTY FAIL_REGULAR_EXPRESSION "On Demand Throughput:")
 
+# The alters below mutate the table's billing mode / on-demand throughput and
+# GSI throughput. DynamoDB applies these asynchronously, so each mutation is
+# followed by a bounded poll (ddbsh-wait table-settled) that waits until the
+# table and all its GSIs are ACTIVE again before the next describe/alter. This
+# replaces the original fixed `sleep`s, which were racy against real DynamoDB
+# (the non-deterministic Bucket A flake). See discussion 2026-08-22-P2-01 (D8).
+
 add_test( NAME icd-create-table-12
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 rcu, 20 wcu )")
+
+add_test( NAME icd-create-table-12a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
 
 add_test( NAME icd-create-table-13
           COMMAND ddbshtest -c "describe icdthroughput" )
@@ -71,12 +80,16 @@ set_property(TEST icd-create-table-13 PROPERTY PASS_REGULAR_EXPRESSION "On Deman
 add_test( NAME icd-create-table-14
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 rcu, 200 wcu )" )
 
+add_test( NAME icd-create-table-14a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
+
 add_test( NAME icd-create-table-15
           COMMAND ddbshtest -c "describe icdthroughput" )
 set_property(TEST icd-create-table-15 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]10 RCU, 200 WCU[)]")
 
 add_test( NAME icd-create-table-16
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 wcu, 200 rcu )" )
+
+add_test( NAME icd-create-table-16a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
 
 add_test( NAME icd-create-table-17
           COMMAND ddbshtest -c "describe icdthroughput" )
@@ -85,8 +98,9 @@ set_property(TEST icd-create-table-17 PROPERTY PASS_REGULAR_EXPRESSION "On Deman
 add_test( NAME icd-create-table-18
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput (-1 rcu, -1 wcu)")
 
-# this is because for a small period of time, we actually return On Demand Throughput values of -1, -1 :(
-add_test( NAME icd-create-table-18a COMMAND sleep 5)
+# for a small period of time, DynamoDB still reports On Demand Throughput -1,-1
+# during the transition; poll until the table has settled (was: sleep 5).
+add_test( NAME icd-create-table-18a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
 
 add_test( NAME icd-create-table-19
           COMMAND ddbshtest -c "describe icdthroughput" )
@@ -95,6 +109,8 @@ set_property(TEST icd-create-table-19 PROPERTY FAIL_REGULAR_EXPRESSION "On Deman
 add_test( NAME icd-create-table-20
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 wcu, 200 rcu )" )
 
+add_test( NAME icd-create-table-20a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
+
 add_test( NAME icd-create-table-21
           COMMAND ddbshtest -c "describe icdthroughput" )
 set_property(TEST icd-create-table-21 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]200 RCU, 10 WCU[)]")
@@ -102,9 +118,9 @@ set_property(TEST icd-create-table-21 PROPERTY PASS_REGULAR_EXPRESSION "On Deman
 add_test( NAME icd-create-table-22
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput unlimited")
 
-# this is because for a small period of time, we actually return On Demand Throughput values of -1, -1 :(
-
-add_test( NAME icd-create-table-22a COMMAND sleep 5)
+# for a small period of time, DynamoDB still reports On Demand Throughput -1,-1
+# during the transition; poll until the table has settled (was: sleep 5).
+add_test( NAME icd-create-table-22a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
 
 add_test( NAME icd-create-table-23
           COMMAND ddbshtest -c "describe icdthroughput" )
@@ -113,12 +129,16 @@ set_property(TEST icd-create-table-23 PROPERTY FAIL_REGULAR_EXPRESSION "On Deman
 add_test( NAME icd-create-table-24
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 rcu, -1 wcu )" )
 
+add_test( NAME icd-create-table-24a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
+
 add_test( NAME icd-create-table-25
           COMMAND ddbshtest -c "describe icdthroughput" )
 set_property(TEST icd-create-table-25 PROPERTY PASS_REGULAR_EXPRESSION "On Demand Throughput\: [(]10 RCU, -1 WCU[)]")
 
 add_test( NAME icd-create-table-26
           COMMAND ddbshtest -c "alter table icdthroughput set billing mode on demand throughput ( 10 wcu, -1 rcu )" )
+
+add_test( NAME icd-create-table-26a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
 
 add_test( NAME icd-create-table-27
           COMMAND ddbshtest -c "describe icdthroughput" )
@@ -129,8 +149,14 @@ set_property(TEST icd-create-table-27 PROPERTY PASS_REGULAR_EXPRESSION "On Deman
 add_test( NAME icd-create-table-28
           COMMAND ddbshtest -c "alter table icdthroughput update gsi (gsipka set billing mode on demand throughput unlimited )")
 
+# wait for the GSI update to finish before issuing the next GSI update, else
+# DynamoDB rejects it with ResourceInUseException (index still updating).
+add_test( NAME icd-create-table-28a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
+
 add_test( NAME icd-create-table-29
           COMMAND ddbshtest -c "alter table icdthroughput update gsi (gsipka set billing mode on demand throughput (200 rcu, 300 wcu))")
+
+add_test( NAME icd-create-table-29a COMMAND ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait table-settled icdthroughput)
 
 add_test( NAME icd-create-table-30
           COMMAND ddbshtest -c "describe icdthroughput" )
