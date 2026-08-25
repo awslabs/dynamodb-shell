@@ -291,7 +291,7 @@ static void __show_table_sse(
     {
         const Aws::DynamoDB::Model::SSEDescription &sse = td.GetSSEDescription();
 
-        printf("SSE: (%s)",
+        printf("SSE: (%s)\n",
             Aws::DynamoDB::Model::SSEStatusMapper::GetNameForSSEStatus(sse.GetStatus()).c_str());
     }
     else
