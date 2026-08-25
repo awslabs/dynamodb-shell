@@ -42,7 +42,7 @@ int CDescribeBackupCommand::run()
             const Aws::DynamoDB::Model::SourceTableDetails &std = bd.GetSourceTableDetails();
 
             printf("Table Name: %s\n", std.GetTableName().c_str());
-            printf("Tabld Id: %s\n", std.GetTableId().c_str());
+            printf("Table Id: %s\n", std.GetTableId().c_str());
             printf("Table Arn: %s\n", std.GetTableArn().c_str());
             printf("Table Size (bytes): %lld\n", std.GetTableSizeBytes());
             printf("Item Count: %lld\n", std.GetItemCount());
