@@ -84,9 +84,9 @@ std::string CShowCreateTableCommand::show_gsis(const Aws::Vector<Aws::DynamoDB::
                 rv += "PROJECTING INCLUDE (";
                 for (int iy = 0; iy < pa.size(); iy ++)
                 {
-                    if (ix != 0)
+                    if (iy != 0)
                         rv += ", ";
-                    rv += pa[ix];
+                    rv += pa[iy];
                 }
 
                 rv += ")";
@@ -143,9 +143,9 @@ std::string CShowCreateTableCommand::show_lsis(const Aws::Vector<Aws::DynamoDB::
                 rv += "PROJECTING INCLUDE (";
                 for (int iy = 0; iy < pa.size(); iy ++)
                 {
-                    if (ix != 0)
+                    if (iy != 0)
                         rv += ", ";
-                    rv += pa[ix];
+                    rv += pa[iy];
                 }
 
                 rv += ")";
