@@ -29,6 +29,8 @@ namespace ddbsh
             m_set = NULL;
             m_remove = NULL;
             m_where = NULL;
+            m_rate_limit = NULL;
+            m_returnvalue = Aws::DynamoDB::Model::ReturnValue::NONE;
         };
 
         int run();

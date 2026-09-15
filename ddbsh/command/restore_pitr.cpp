@@ -44,6 +44,7 @@ int CRestorePITRCommand::run()
                      outcome.GetError().GetExceptionName().c_str(),
                      outcome.GetError().GetRequestId().c_str(),
                      outcome.GetError().GetMessage().c_str());
+            return -1;
         }
         else
         {

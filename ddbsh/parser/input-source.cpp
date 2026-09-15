@@ -63,11 +63,15 @@ static FILE * finput;
 static int readinputfile(char * buffer, int size)
 {
     int ix = 0;
+    int ch;
 
     logdebug("[%s, %d] %s, size = %d\n", __FILENAME__, __LINE__, __FUNCTION__, size);
-    while(!feof(finput) && ix < size - 1)
+    // Read the character and test for EOF *before* storing it. The original
+    // stored fgetc()'s result unconditionally and only then checked feof(),
+    // which appended a stray (char)EOF (0xFF) byte at end-of-file.
+    while (ix < size - 1 && (ch = fgetc(finput)) != EOF)
     {
-        buffer[ix++] = fgetc(finput);
+        buffer[ix++] = (char) ch;
     }
 
     buffer[ix] = 0;

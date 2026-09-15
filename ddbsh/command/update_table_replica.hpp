@@ -117,9 +117,9 @@ namespace ddbsh
     private:
         std::string m_table;
 
-        Aws::DynamoDB::Model::DeleteReplicationGroupMemberAction * m_delete;
-        Aws::DynamoDB::Model::UpdateReplicationGroupMemberAction * m_update;
-        Aws::DynamoDB::Model::CreateReplicationGroupMemberAction * m_create;
+        Aws::DynamoDB::Model::DeleteReplicationGroupMemberAction * m_delete = nullptr;
+        Aws::DynamoDB::Model::UpdateReplicationGroupMemberAction * m_update = nullptr;
+        Aws::DynamoDB::Model::CreateReplicationGroupMemberAction * m_create = nullptr;
     };
 }
 #endif

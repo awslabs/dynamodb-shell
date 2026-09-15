@@ -20,7 +20,7 @@ char * unquote(const char * s)
     char * uq;
     int l = strlen(s);
 
-    if (*s == '"' && s[l-1] == '"')
+    if (l >= 2 && *s == '"' && s[l-1] == '"')
     {
         uq = STRDUP((char *) s+1);
         uq[l-2] = 0;

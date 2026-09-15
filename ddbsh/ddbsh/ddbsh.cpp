@@ -296,9 +296,13 @@ void CDDBSh::reconnect()
 	getCredentials(), clientConfig);
 
     if(checkConnection())
+    {
         m_reconnect = false;
-    else
         logdebug("[%s, %d] The reconnect was successful.\n",
+                 __FILENAME__, __LINE__);
+    }
+    else
+        logdebug("[%s, %d] The reconnect failed.\n",
                  __FILENAME__, __LINE__);
 
     return;

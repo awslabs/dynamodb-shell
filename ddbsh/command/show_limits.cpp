@@ -86,6 +86,13 @@ int CShowLimitsCommand::run()
             for (const auto& s : lto.GetResult().GetTableNames())
             {
                 CDescribeHelper dh(s, p_dynamoDBClient);
+
+                // A table listed by ListTables can vanish (or its describe
+                // can fail) before we describe it here. Skip such tables
+                // rather than dereferencing an unset DescribeTableResult.
+                if (!dh.has_dtr())
+                    continue;
+
                 Aws::DynamoDB::Model::TableDescription td = dh.GetDTR().GetTable();
 
                 logdebug("[%s, %d] Looking up table %s (type: %s)\n", __FILENAME__, __LINE__, td.GetTableName().c_str(),

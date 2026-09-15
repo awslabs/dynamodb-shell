@@ -31,7 +31,7 @@ int CDropBackupCommand::run()
 
     if (explaining())
     {
-        printf("DescribeBackup(%s)\n", explain_string(request.SerializePayload()).c_str());
+        printf("DeleteBackup(%s)\n", explain_string(request.SerializePayload()).c_str());
     }
     else
     {
