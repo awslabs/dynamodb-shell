@@ -1,8 +1,15 @@
 # set(CMAKE_VERBOSE_MAKEFILE ON)
 
 cmake_minimum_required(VERSION 3.21)
-set(CMAKE_C_COMPILER "gcc")
-set(CMAKE_CXX_COMPILER "g++")
+# Do not hardcode the compiler: let CMake/toolchain selection or
+# -DCMAKE_C_COMPILER/-DCMAKE_CXX_COMPILER choose it. Pinning "gcc"/"g++"
+# forces the system default (e.g. gcc11 on AL2023) and causes a C++ runtime
+# ABI mismatch when linking against an AWS SDK built with a newer compiler
+# (undefined reference to __cxa_call_terminate). The Step-2 reimplementation
+# CMake topology (D14) drops these permanently; removed here so the current
+# tree builds against a gcc14-built SDK.
+# set(CMAKE_C_COMPILER "gcc")
+# set(CMAKE_CXX_COMPILER "g++")
 
 # add_compile_options(-g)
 # add_link_options(-lc -g)
