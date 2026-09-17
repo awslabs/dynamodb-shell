@@ -967,7 +967,7 @@ Name: ipt1 (ACTIVE)
 Key: HASH a, RANGE b
 Attributes:  a, N,  b, N
 Created at: 2022-11-21T20:05:22Z
-Table ARN: arn:aws:dynamodb:us-east-1:632195519165:table/ipt1
+Table ARN: arn:aws:dynamodb:us-east-1:123456789012:table/ipt1
 Table ID: 6b1078cb-e81d-419f-99e8-e6c28e071a47
 Table size (bytes): 0
 Item Count: 0
@@ -985,7 +985,7 @@ Name: cloneipt1 (CREATING)
 Key: HASH a, RANGE b
 Attributes:  b, N,  a, N
 Created at: 2022-11-22T01:57:11Z
-Table ARN: arn:aws:dynamodb:us-east-1:632195519165:table/cloneipt1
+Table ARN: arn:aws:dynamodb:us-east-1:123456789012:table/cloneipt1
 Table ID: 514794c5-bc60-4c54-9fdf-e2c1c670074e
 Table size (bytes): 0
 Item Count: 0
