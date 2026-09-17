@@ -35,21 +35,24 @@ const char* env_or(const char* name, const char* fallback) {
 }
 
 // Feed one statement's text through the engine and write the result. Returns
-// false when the statement asks the shell to quit.
+// false when the statement asks the shell to quit. The exit decision is typed:
+// we parse first and inspect Statement::kind (available pre-render) rather than
+// matching the rendered status-token string, so adding status tokens later
+// cannot accidentally look like a quit.
 bool run_statement(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
                    const std::string& text) {
-    auto outcome = session.run(text);
+    auto stmt = session.parse(text);
+    if (!stmt.has_value()) {
+        std::fputs(renderer.render_error(stmt.error()).c_str(), stderr);
+        return true;
+    }
+    auto outcome = session.execute(*stmt);
     if (!outcome.has_value()) {
         std::fputs(renderer.render_error(outcome.error()).c_str(), stderr);
         return true;
     }
     std::fputs(renderer.render(*outcome).c_str(), stdout);
-    // QUIT renders a StatusOutcome{"QUIT"}; detect it to stop the loop.
-    if (const auto* status = std::get_if<ddbsh::StatusOutcome>(&*outcome);
-        status != nullptr && status->token == "QUIT") {
-        return false;
-    }
-    return true;
+    return stmt->kind != ddbsh::StatementKind::quit;
 }
 
 }  // namespace

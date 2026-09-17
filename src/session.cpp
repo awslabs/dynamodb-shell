@@ -49,7 +49,14 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
         case StatementKind::empty:
             return ExecOutcome{EmptyOutcome{}};
         case StatementKind::show_version:
-            // Mirrors the original's "ddbsh - version <v>" line (arch §7, parser.y).
+            // Faithful to the original: SHOW VERSION prints "ddbsh - version
+            // <v>\n". In the original this happens inside the parser ACTION for
+            // show_version_command (parser.y:646-648: builds no command, prints
+            // the line during the parse), NOT via the startup banner
+            // (main.cpp:359, which is a separate non-quiet-only path). We move
+            // that side effect out of the parser into execute() and carry the
+            // line as data (ReportOutcome) so the engine never writes to a
+            // stream (P2a-03); the Renderer emits the identical bytes.
             return ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}};
         case StatementKind::quit:
             return ExecOutcome{StatusOutcome{"QUIT"}};

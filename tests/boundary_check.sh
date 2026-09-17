@@ -23,6 +23,15 @@ set -euo pipefail
 ROOT="${1:?usage: boundary_check.sh <repo-root>}"
 SCAN_DIRS=("$ROOT/include/ddbsh" "$ROOT/src")
 
+# Fail legibly if an expected scan dir is missing (e.g. a future reorg moves
+# the tree) rather than letting `find` error out opaquely under `set -e`.
+for d in "${SCAN_DIRS[@]}"; do
+    if [ ! -d "$d" ]; then
+        echo "boundary_check: expected scan directory not found: $d" >&2
+        exit 2
+    fi
+done
+
 PATTERNS=(
     '#include[[:space:]]*<iostream>'
     '\bstd::cout\b'

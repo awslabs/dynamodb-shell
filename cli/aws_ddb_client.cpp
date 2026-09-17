@@ -17,8 +17,11 @@ namespace ddbsh::cli {
 
 namespace {
 
-Result<void> not_yet() {
-    return fail(Errc::service_error, "IDDBClient operation not implemented in the 2a skeleton");
+// The 2a skeleton has no request/response translation yet; the seam ops return
+// this clear error. The walking-skeleton statements never reach them.
+Error not_yet() {
+    return Error{Errc::service_error, "IDDBClient operation not implemented in the 2a skeleton",
+                 std::nullopt, std::nullopt};
 }
 
 }  // namespace
@@ -37,19 +40,19 @@ AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoin
 AwsDDBClient::~AwsDDBClient() = default;
 
 Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn&) {
-    return fail(not_yet().error());
+    return fail(not_yet());
 }
 
 Result<QueryOut> AwsDDBClient::query(const QueryIn&) {
-    return fail(not_yet().error());
+    return fail(not_yet());
 }
 
 Result<ScanOut> AwsDDBClient::scan(const ScanIn&) {
-    return fail(not_yet().error());
+    return fail(not_yet());
 }
 
 Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn&) {
-    return fail(not_yet().error());
+    return fail(not_yet());
 }
 
 }  // namespace ddbsh::cli
