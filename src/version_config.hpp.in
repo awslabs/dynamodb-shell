@@ -1,0 +1,17 @@
+// Copyright 2026 ddbsh reimplementation contributors.
+// SPDX-License-Identifier: Apache-2.0
+//
+// version_config.hpp.in — configured by CMake into the build tree.
+//
+// Private (not installed): carries the numeric version components from the
+// CMake project() VERSION so version.cpp can assemble the string form.
+
+#ifndef DDBSH_VERSION_CONFIG_HPP
+#define DDBSH_VERSION_CONFIG_HPP
+
+#define DDBSH_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define DDBSH_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define DDBSH_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define DDBSH_VERSION_TWEAK @PROJECT_VERSION_TWEAK@
+
+#endif // DDBSH_VERSION_CONFIG_HPP
