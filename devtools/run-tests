@@ -75,8 +75,12 @@ mkdir -p "$DISCUSSIONS_DIR"
 LOG_FILE="$DISCUSSIONS_DIR/test-${SUITE}-${HASH}.log"
 SUMMARY_FILE="$DISCUSSIONS_DIR/test-${SUITE}-${HASH}.txt"
 
+# AWS SDK install prefix (where AWSSDKConfig.cmake / the libs live). The oracle
+# CMake resolves the SDK via find_package(AWSSDK), so first-time configure must
+# be told the prefix; overridable via DDBSH_SDK_PREFIX.
+DDBSH_SDK_PREFIX="${DDBSH_SDK_PREFIX:-$HOME/.local/aws-sdk-cpp}"
 # AWS SDK shared libraries (mirrors devtools/ddbsh-aws in the orchestration repo).
-export LD_LIBRARY_PATH="${DDBSH_SDK_LIB:-$HOME/.local/aws-sdk-cpp/lib64}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${DDBSH_SDK_LIB:-$DDBSH_SDK_PREFIX/lib64}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # Prefer the regional STS endpoint (the legacy global endpoint is disabled on
 # some accounts; cross-account AssumeRole tests need this).
 export AWS_STS_REGIONAL_ENDPOINTS="${AWS_STS_REGIONAL_ENDPOINTS:-regional}"
@@ -87,7 +91,7 @@ export AWS_REGION="$REGION"
 # --- Build ------------------------------------------------------------------
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
     echo "=== Configuring build (no CMakeCache at $BUILD_DIR) ==="
-    cmake -S "$SRC_DIR" -B "$BUILD_DIR"
+    cmake -S "$SRC_DIR" -B "$BUILD_DIR" -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX"
 fi
 echo "=== Building ddbsh/ddbshtest ($HASH) ==="
 cmake --build "$BUILD_DIR"
