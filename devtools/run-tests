@@ -64,7 +64,11 @@ SUITE="$(printf '%s' "$SUITE" | tr -c 'A-Za-z0-9._-' '-')"
 # --- Repo / build resolution ------------------------------------------------
 HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_DIR="${DDBSH_BUILD_DIR:-$REPO_DIR/build}"
-SRC_DIR="$REPO_DIR/ddbsh"
+# The fidelity oracle is the original C++11 ddbsh, relocated to oracle/ when the
+# reimplementation took over the top-level tree (P2a-01 D-Q3). This is the
+# golden-suite build the harness exercises against real DynamoDB; the C++23
+# reimplementation (include/ src/ cli/ tests/) is built separately via presets.
+SRC_DIR="$REPO_DIR/oracle"
 DISCUSSIONS_DIR="$REPO_DIR/discussions"
 mkdir -p "$DISCUSSIONS_DIR"
 
