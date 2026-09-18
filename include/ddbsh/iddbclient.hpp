@@ -85,6 +85,17 @@ struct PutItemIn {
 };
 struct PutItemOut {};
 
+// ---- ListTables ------------------------------------------------------------
+// A minimal seam op used by the 2a readiness-gate smoke program to prove real
+// backend reachability. It is NOT the full SHOW TABLES command (arch §7:
+// ListTables + a DescribeTable per table), which lands in its own sub-phase;
+// this only surfaces the raw table-name list. Pagination is folded in by the
+// adapter (it follows LastEvaluatedTableName), so callers get the full list.
+struct ListTablesIn {};
+struct ListTablesOut {
+    std::vector<std::string> table_names;
+};
+
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
 class IDDBClient {
@@ -95,6 +106,7 @@ public:
     virtual Result<QueryOut> query(const QueryIn&) = 0;
     virtual Result<ScanOut> scan(const ScanIn&) = 0;
     virtual Result<PutItemOut> put_item(const PutItemIn&) = 0;
+    virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     // update/delete/transact/describe/create/drop/backup/pitr + CancelToken:
     // added per sub-phase (2b-2d).
 };

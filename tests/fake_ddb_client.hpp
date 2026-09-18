@@ -23,6 +23,7 @@ public:
     Result<QueryOut> query(const QueryIn&) override { return QueryOut{}; }
     Result<ScanOut> scan(const ScanIn&) override { return ScanOut{}; }
     Result<PutItemOut> put_item(const PutItemIn&) override { return PutItemOut{}; }
+    Result<ListTablesOut> list_tables(const ListTablesIn&) override { return ListTablesOut{}; }
 };
 
 }  // namespace ddbsh::test

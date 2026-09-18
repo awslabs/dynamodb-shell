@@ -12,6 +12,7 @@
 #include "aws_ddb_client.hpp"
 
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/dynamodb/model/ListTablesRequest.h>
 
 namespace ddbsh::cli {
 
@@ -53,6 +54,32 @@ Result<ScanOut> AwsDDBClient::scan(const ScanIn&) {
 
 Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn&) {
     return fail(not_yet());
+}
+
+Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
+    // Follow LastEvaluatedTableName so the caller gets the complete list even
+    // when the account has more tables than one page returns.
+    ListTablesOut out;
+    Aws::String start_table;
+    do {
+        Aws::DynamoDB::Model::ListTablesRequest request;
+        if (!start_table.empty()) {
+            request.SetExclusiveStartTableName(start_table);
+        }
+        auto outcome = client_->ListTables(request);
+        if (!outcome.IsSuccess()) {
+            const auto& err = outcome.GetError();
+            return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                              std::string(err.GetExceptionName().c_str()),
+                              std::string(err.GetRequestId().c_str())});
+        }
+        const auto& result = outcome.GetResult();
+        for (const auto& name : result.GetTableNames()) {
+            out.table_names.emplace_back(name.c_str());
+        }
+        start_table = result.GetLastEvaluatedTableName();
+    } while (!start_table.empty());
+    return out;
 }
 
 }  // namespace ddbsh::cli

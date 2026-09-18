@@ -113,6 +113,20 @@ target_include_directories(dynamodb-shell PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/c
 target_link_libraries(dynamodb-shell
     PRIVATE ddbsh::ddbsh ddbsh_warnings readline ${AWSSDK_LINK_LIBRARIES})
 
+# --- 2a readiness-gate smoke program (temporary, D-Gate) ---------------------
+# Gated OFF by default; a throwaway diagnostic removed once the gate is cleared
+# and the reorg proceeds. Proves engine pipeline + version wiring and real
+# backend reachability via the AwsDDBClient seam.
+option(DDBSH_BUILD_SMOKE_GATE "Build the 2a readiness-gate smoke program" OFF)
+if(DDBSH_BUILD_SMOKE_GATE)
+    add_executable(ddbsh-smoke-gate
+                   cli/smoke_gate.cpp
+                   cli/aws_ddb_client.cpp)
+    target_include_directories(ddbsh-smoke-gate PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
+    target_link_libraries(ddbsh-smoke-gate
+        PRIVATE ddbsh::ddbsh ddbsh_warnings ${AWSSDK_LINK_LIBRARIES})
+endif()
+
 # --- tests -------------------------------------------------------------------
 if(DDBSH_BUILD_TESTS)
     include(FetchContent)

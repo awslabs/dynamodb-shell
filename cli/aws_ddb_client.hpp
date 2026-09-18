@@ -10,9 +10,10 @@
 //
 // 2a scope: constructs the client and implements the four seam ops the walking
 // skeleton / near-term ports declare. Full request shaping and Value
-// translation land per sub-phase (2d); the 2a implementations return a
+// translation land per sub-phase (2d); those 2a implementations return a
 // service_error placeholder until then (the walking statements do not call
-// them).
+// them). list_tables() is the exception: it is fully implemented here so the
+// 2a readiness-gate smoke program can prove real backend reachability.
 
 #ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
 #define DDBSH_CLI_AWS_DDB_CLIENT_HPP
@@ -38,6 +39,7 @@ public:
     Result<QueryOut> query(const QueryIn&) override;
     Result<ScanOut> scan(const ScanIn&) override;
     Result<PutItemOut> put_item(const PutItemIn&) override;
+    Result<ListTablesOut> list_tables(const ListTablesIn&) override;
 
 private:
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;
