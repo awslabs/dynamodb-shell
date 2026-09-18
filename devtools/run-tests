@@ -79,6 +79,12 @@ SUMMARY_FILE="$DISCUSSIONS_DIR/test-${SUITE}-${HASH}.txt"
 # CMake resolves the SDK via find_package(AWSSDK), so first-time configure must
 # be told the prefix; overridable via DDBSH_SDK_PREFIX.
 DDBSH_SDK_PREFIX="${DDBSH_SDK_PREFIX:-$HOME/.local/aws-sdk-cpp}"
+# Compiler: the prebuilt AWS SDK was compiled with gcc14; the oracle must link
+# against it with the same toolchain (default cc/c++ = gcc 11 fails to resolve
+# __cxa_call_terminate against the gcc14-built CRT static libs). Overridable
+# via CC/CXX for other environments.
+DDBSH_CC="${CC:-gcc14-gcc}"
+DDBSH_CXX="${CXX:-gcc14-g++}"
 # AWS SDK shared libraries (mirrors devtools/ddbsh-aws in the orchestration repo).
 export LD_LIBRARY_PATH="${DDBSH_SDK_LIB:-$DDBSH_SDK_PREFIX/lib64}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # Prefer the regional STS endpoint (the legacy global endpoint is disabled on
@@ -91,7 +97,10 @@ export AWS_REGION="$REGION"
 # --- Build ------------------------------------------------------------------
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
     echo "=== Configuring build (no CMakeCache at $BUILD_DIR) ==="
-    cmake -S "$SRC_DIR" -B "$BUILD_DIR" -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX"
+    cmake -S "$SRC_DIR" -B "$BUILD_DIR" \
+        -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX" \
+        -DCMAKE_C_COMPILER="$DDBSH_CC" \
+        -DCMAKE_CXX_COMPILER="$DDBSH_CXX"
 fi
 echo "=== Building ddbsh/ddbshtest ($HASH) ==="
 cmake --build "$BUILD_DIR"
