@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "execute/select_executor.hpp"
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
 
@@ -82,15 +83,26 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             impl_->config.endpoint = connect.endpoint;
             return ExecOutcome{StatusOutcome{"CONNECT"}};
         }
+        case StatementKind::select_statement: {
+            // EXPLAIN of a SELECT must not contact the service; it renders the
+            // serialized request(s) instead, which lands with the EXPLAIN
+            // Renderer slice (W6). Until then an explaining SELECT reports
+            // not-implemented rather than executing.
+            if (statement.ast()->explain) {
+                return fail(Errc::not_implemented,
+                            "EXPLAIN SELECT is not yet available in this build");
+            }
+            const auto& select = std::get<engine::SelectCmd>(statement.ast()->command);
+            return engine::execute_select(select, impl_->client, impl_->next_alias_prefix());
+        }
         case StatementKind::show_tables:
         case StatementKind::describe:
         case StatementKind::drop_table:
         case StatementKind::create_table:
         case StatementKind::insert:
-        case StatementKind::select_statement:
-            // Parsed in W2/W3; execution (behind IDDBClient) lands in W4/W5.
-            // Until then, report a clear not-implemented Error rather than a
-            // parse error (D19), so the command surface is observable and
+            // Parsed in W2/W3; execution (behind IDDBClient) lands in W5
+            // follow-on. Until then, report a clear not-implemented Error rather
+            // than a parse error (D19), so the command surface is observable and
             // tested.
             return fail(Errc::not_implemented,
                         "command parsed but not yet executable in this build");

@@ -42,6 +42,21 @@ using ExpressionAttributeNames = std::vector<std::pair<std::string, std::string>
 /// ratelimit forces TOTAL at plan time.
 enum class ReturnConsumedCapacity { none, total, indexes };
 
+/// Consumed-capacity figures a read/write returns when ReturnConsumedCapacity
+/// is not NONE. Each field is optional because the SDK sets them independently
+/// (a TableName plus any of CapacityUnits / ReadCapacityUnits /
+/// WriteCapacityUnits). The engine totalizes these across paginated Query/Scan
+/// responses (arch §10, CConsumedCapacityTotalizer) and the Renderer formats
+/// the `SELECT (table, cu, rcu, wcu)` line (arch §9) only when the user asked
+/// for it (RETURN CONSUMED CAPACITY) — a ratelimit forces the service to return
+/// capacity but does not display it.
+struct ConsumedCapacity {
+    std::optional<std::string> table_name;
+    std::optional<double> capacity_units;
+    std::optional<double> read_capacity_units;
+    std::optional<double> write_capacity_units;
+};
+
 // ---- GetItem ---------------------------------------------------------------
 // The engine aliases projection attributes through a SymbolTable, so the
 // request carries the serialized ProjectionExpression and the matching
@@ -59,6 +74,7 @@ struct GetItemIn {
 };
 struct GetItemOut {
     std::optional<ItemRow> item;
+    std::optional<ConsumedCapacity> consumed_capacity;
 };
 
 // ---- Query -----------------------------------------------------------------
@@ -77,6 +93,7 @@ struct QueryIn {
 struct QueryOut {
     std::vector<ItemRow> items;
     std::optional<ValueMap> last_evaluated_key;
+    std::optional<ConsumedCapacity> consumed_capacity;
 };
 
 // ---- Scan ------------------------------------------------------------------
@@ -94,6 +111,7 @@ struct ScanIn {
 struct ScanOut {
     std::vector<ItemRow> items;
     std::optional<ValueMap> last_evaluated_key;
+    std::optional<ConsumedCapacity> consumed_capacity;
 };
 
 // ---- PutItem ---------------------------------------------------------------
