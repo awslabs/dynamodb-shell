@@ -12,6 +12,7 @@
 #include "aws_ddb_client.hpp"
 
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
 
 namespace ddbsh::cli {
@@ -79,6 +80,52 @@ Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
         }
         start_table = result.GetLastEvaluatedTableName();
     } while (!start_table.empty());
+    return out;
+}
+
+namespace {
+
+// Load a HASH/RANGE key schema from an SDK KeySchemaElement list into the
+// SDK-free TableKeySchema (ignores any future key types, as the planner only
+// needs pk/rk; the original logged-and-failed on unknown types).
+TableKeySchema load_key_schema(
+    const Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement>& key_schema) {
+    TableKeySchema out;
+    for (const auto& element : key_schema) {
+        if (element.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
+            out.hash_key = element.GetAttributeName().c_str();
+        } else if (element.GetKeyType() == Aws::DynamoDB::Model::KeyType::RANGE) {
+            out.range_key = element.GetAttributeName().c_str();
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in) {
+    Aws::DynamoDB::Model::DescribeTableRequest request;
+    request.SetTableName(in.table_name);
+    auto outcome = client_->DescribeTable(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+
+    const auto& table = outcome.GetResult().GetTable();
+    DescribeTableOut out;
+    out.table_name = table.GetTableName().c_str();
+    out.key_schema = load_key_schema(table.GetKeySchema());
+    for (const auto& lsi : table.GetLocalSecondaryIndexes()) {
+        out.local_secondary_indexes.push_back(
+            SecondaryIndexSchema{lsi.GetIndexName().c_str(), load_key_schema(lsi.GetKeySchema())});
+    }
+    for (const auto& gsi : table.GetGlobalSecondaryIndexes()) {
+        out.global_secondary_indexes.push_back(
+            SecondaryIndexSchema{gsi.GetIndexName().c_str(), load_key_schema(gsi.GetKeySchema())});
+    }
     return out;
 }
 

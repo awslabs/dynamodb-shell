@@ -40,6 +40,7 @@ public:
     Result<ScanOut> scan(const ScanIn&) override;
     Result<PutItemOut> put_item(const PutItemIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
+    Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
 
 private:
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;
