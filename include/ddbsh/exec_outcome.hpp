@@ -8,9 +8,9 @@
 // engine writes nothing to any stream.
 //
 // 2b scope: StatusOutcome, ReportOutcome, EmptyOutcome (walking skeleton) plus
-// SelectOutcome (W5 — SELECT execution). BulkWriteOutcome,
-// ConditionalWriteOutcome, transact/explain/help arms land in later sub-phases
-// per the P2a-03 schema.
+// SelectOutcome (W5 — SELECT execution) and WriteOutcome (W5 part 2 —
+// INSERT/REPLACE). BulkWriteOutcome, ConditionalWriteOutcome,
+// transact/explain/help arms land in later sub-phases per the P2a-03 schema.
 
 #ifndef DDBSH_EXEC_OUTCOME_HPP
 #define DDBSH_EXEC_OUTCOME_HPP
@@ -51,9 +51,23 @@ struct SelectOutcome {
     std::optional<ConsumedCapacity> consumed_capacity;
 };
 
+/// The result of an INSERT / REPLACE: one status token per row written
+/// (arch §7 — a multi-row `VALUES (..),(..)` emits one `INSERT`/`REPLACE` line
+/// per row, in order). One `CInsertCommand` backs both verbs in the original,
+/// so `tokens` holds the already-chosen verb string ("INSERT" or "REPLACE")
+/// repeated per row; the Renderer emits each on its own line. (P2a-03 §4.1
+/// flagged `MultiOutcome` vs a per-row vector as a developer choice; a single
+/// outcome carrying the row tokens is simpler, byte-identical, and avoids a
+/// self-referential variant — chosen here. RETURN VALUES payloads land with
+/// return-values support in a later sub-phase.)
+struct WriteOutcome {
+    std::vector<std::string> tokens;
+};
+
 /// Discriminated union over the observable shapes a command produces. Extended
 /// per sub-phase (BulkWriteOutcome, ExplainOutcome, ...).
-using ExecOutcome = std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome>;
+using ExecOutcome =
+    std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome, WriteOutcome>;
 
 }  // namespace ddbsh
 

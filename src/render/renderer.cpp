@@ -5,11 +5,13 @@
 //
 // The Renderer owns ALL output formatting so byte-compat lives in one place
 // (P2a-03 §5). This implementation covers StatusOutcome / ReportOutcome /
-// EmptyOutcome, the error path, and (W5) SelectOutcome — the item format
+// EmptyOutcome, the error path, (W5) SelectOutcome, and (W5 part 2)
+// WriteOutcome — the item format
 // (alpha-sorted attributes, quote_if_required, TRUE/FALSE/NULL, the top-level
-// `: ` vs nested `:` asymmetry, lists/maps/empties) and the
-// `SELECT (table, cu, rcu, wcu)` consumed-capacity line (arch §9). The EXPLAIN
-// block and write/report refinements land with their outcome arms (W6).
+// `: ` vs nested `:` asymmetry, lists/maps/empties), the
+// `SELECT (table, cu, rcu, wcu)` consumed-capacity line (arch §9), and the
+// per-row INSERT/REPLACE status lines. The EXPLAIN block and remaining
+// write/report refinements land with their outcome arms (W6).
 
 #include "ddbsh/renderer.hpp"
 
@@ -163,6 +165,17 @@ std::string render_select(const SelectOutcome& s) {
     return out;
 }
 
+/// INSERT / REPLACE render one status token per row written, each on its own
+/// line (arch §7 — the original printf("%s\n", op) per PutItem).
+std::string render_write(const WriteOutcome& w) {
+    std::string out;
+    for (const auto& token : w.tokens) {
+        out += token;
+        out += '\n';
+    }
+    return out;
+}
+
 }  // namespace
 
 std::string Renderer::render(const ExecOutcome& outcome) const {
@@ -177,6 +190,8 @@ std::string Renderer::render(const ExecOutcome& outcome) const {
                 return {};
             } else if constexpr (std::is_same_v<T, SelectOutcome>) {
                 return render_select(payload);
+            } else if constexpr (std::is_same_v<T, WriteOutcome>) {
+                return render_write(payload);
             } else {
                 static_assert(sizeof(T) == 0, "unhandled ExecOutcome arm");
             }

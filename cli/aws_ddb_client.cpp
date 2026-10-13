@@ -11,7 +11,12 @@
 
 #include "aws_ddb_client.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
+
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
 
@@ -55,6 +60,19 @@ Result<ScanOut> AwsDDBClient::scan(const ScanIn&) {
 
 Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn&) {
     return fail(not_yet());
+}
+
+Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
+    Aws::DynamoDB::Model::DeleteTableRequest request;
+    request.SetTableName(in.table_name);
+    auto outcome = client_->DeleteTable(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return DeleteTableOut{};
 }
 
 Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
@@ -127,6 +145,35 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
             SecondaryIndexSchema{gsi.GetIndexName().c_str(), load_key_schema(gsi.GetKeySchema())});
     }
     return out;
+}
+
+Result<void> AwsDDBClient::wait_for_table_gone(const std::string& table_name) {
+    // Bounded exponential backoff: 100ms doubling to a 2s cap (arch §10). Poll
+    // DescribeTable until the table reports RESOURCE_NOT_FOUND (gone). A
+    // non-retryable error is terminal and returned; a retryable/transient error
+    // (throttling, InternalServerError) is treated like "still transitioning"
+    // and polled again, matching the original wait_for_table_gone.
+    std::chrono::milliseconds interval(100);
+    const std::chrono::milliseconds cap(2000);
+    while (true) {
+        Aws::DynamoDB::Model::DescribeTableRequest request;
+        request.SetTableName(table_name);
+        auto outcome = client_->DescribeTable(request);
+        if (!outcome.IsSuccess()) {
+            const auto& err = outcome.GetError();
+            if (err.GetErrorType() == Aws::DynamoDB::DynamoDBErrors::RESOURCE_NOT_FOUND) {
+                return {};  // gone
+            }
+            if (!err.ShouldRetry()) {
+                return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                                  std::string(err.GetExceptionName().c_str()),
+                                  std::string(err.GetRequestId().c_str())});
+            }
+            // transient: fall through and keep polling
+        }
+        std::this_thread::sleep_for(interval);
+        interval = std::min(interval * 2, cap);
+    }
 }
 
 }  // namespace ddbsh::cli

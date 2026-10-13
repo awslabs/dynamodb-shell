@@ -14,6 +14,8 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "execute/drop_table_executor.hpp"
+#include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
@@ -95,13 +97,34 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             const auto& select = std::get<engine::SelectCmd>(statement.ast()->command);
             return engine::execute_select(select, impl_->client, impl_->next_alias_prefix());
         }
+        case StatementKind::drop_table: {
+            // EXPLAIN of a DROP renders the serialized DeleteTable request and
+            // must not contact the service (W6); until then an explaining DROP
+            // reports not-implemented rather than executing.
+            if (statement.ast()->explain) {
+                return fail(Errc::not_implemented,
+                            "EXPLAIN DROP TABLE is not yet available in this build");
+            }
+            const auto& drop = std::get<engine::DropTableCmd>(statement.ast()->command);
+            return engine::execute_drop_table(drop, impl_->client);
+        }
+        case StatementKind::insert: {
+            // EXPLAIN of an INSERT/REPLACE renders the serialized PutItem
+            // request(s) and must not contact the service (W6).
+            if (statement.ast()->explain) {
+                return fail(Errc::not_implemented,
+                            "EXPLAIN INSERT/REPLACE is not yet available in this build");
+            }
+            const auto& insert = std::get<engine::InsertCmd>(statement.ast()->command);
+            return engine::execute_insert(insert, impl_->client,
+                                          [this] { return impl_->next_alias_prefix(); });
+        }
         case StatementKind::show_tables:
         case StatementKind::describe:
-        case StatementKind::drop_table:
         case StatementKind::create_table:
-        case StatementKind::insert:
-            // Parsed in W2/W3; execution (behind IDDBClient) lands in W5
-            // follow-on. Until then, report a clear not-implemented Error rather
+            // Parsed in W2/W3; execution (behind IDDBClient) lands in a W5
+            // follow-on round (CREATE TABLE translation, SHOW TABLES/DESCRIBE
+            // reports). Until then, report a clear not-implemented Error rather
             // than a parse error (D19), so the command surface is observable and
             // tested.
             return fail(Errc::not_implemented,

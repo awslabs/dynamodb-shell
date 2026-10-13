@@ -39,8 +39,10 @@ public:
     Result<QueryOut> query(const QueryIn&) override;
     Result<ScanOut> scan(const ScanIn&) override;
     Result<PutItemOut> put_item(const PutItemIn&) override;
+    Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
+    Result<void> wait_for_table_gone(const std::string& table_name) override;
 
 private:
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;

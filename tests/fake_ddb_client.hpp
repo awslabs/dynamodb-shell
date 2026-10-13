@@ -58,6 +58,22 @@ public:
     /// Record the number of query/scan calls so pagination can be asserted.
     int read_calls() const { return read_calls_; }
 
+    /// Make the next put_item(s) fail with this Error (e.g. a conditional-check
+    /// failure for INSERT-on-existing). nullopt => succeed.
+    void set_put_error(std::optional<Error> error) { put_error_ = std::move(error); }
+
+    /// Make delete_table fail with this Error. nullopt => succeed.
+    void set_delete_error(std::optional<Error> error) { delete_error_ = std::move(error); }
+
+    /// The PutItem requests issued, in order (for request-shape assertions).
+    const std::vector<PutItemIn>& put_requests() const { return put_requests_; }
+
+    /// Table names passed to delete_table, in order.
+    const std::vector<std::string>& deleted_tables() const { return deleted_tables_; }
+
+    /// Table names passed to wait_for_table_gone, in order.
+    const std::vector<std::string>& waited_gone() const { return waited_gone_; }
+
     Result<GetItemOut> get_item(const GetItemIn&) override {
         GetItemOut out;
         out.item = get_item_;
@@ -89,7 +105,27 @@ public:
         return out;
     }
 
-    Result<PutItemOut> put_item(const PutItemIn&) override { return PutItemOut{}; }
+    Result<PutItemOut> put_item(const PutItemIn& in) override {
+        put_requests_.push_back(in);
+        if (put_error_.has_value()) {
+            return fail(*put_error_);
+        }
+        return PutItemOut{};
+    }
+
+    Result<DeleteTableOut> delete_table(const DeleteTableIn& in) override {
+        deleted_tables_.push_back(in.table_name);
+        if (delete_error_.has_value()) {
+            return fail(*delete_error_);
+        }
+        return DeleteTableOut{};
+    }
+
+    Result<void> wait_for_table_gone(const std::string& table_name) override {
+        waited_gone_.push_back(table_name);
+        return {};
+    }
+
     Result<ListTablesOut> list_tables(const ListTablesIn&) override { return ListTablesOut{}; }
 
     Result<DescribeTableOut> describe_table(const DescribeTableIn& in) override {
@@ -129,6 +165,11 @@ private:
     std::vector<std::vector<ItemRow>> pages_;
     std::optional<ConsumedCapacity> consumed_capacity_;
     int read_calls_ = 0;
+    std::vector<PutItemIn> put_requests_;
+    std::optional<Error> put_error_;
+    std::optional<Error> delete_error_;
+    std::vector<std::string> deleted_tables_;
+    std::vector<std::string> waited_gone_;
 };
 
 }  // namespace ddbsh::test

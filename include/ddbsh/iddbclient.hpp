@@ -124,6 +124,15 @@ struct PutItemIn {
 };
 struct PutItemOut {};
 
+// ---- DeleteTable -----------------------------------------------------------
+// DROP TABLE issues DeleteTable then (unless NOWAIT) waits for the table to be
+// gone (arch §7/§10). The request carries only the table name; the SDK-free
+// struct keeps the public seam AWS-type-free (D11).
+struct DeleteTableIn {
+    std::string table_name;
+};
+struct DeleteTableOut {};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -170,10 +179,18 @@ public:
     virtual Result<QueryOut> query(const QueryIn&) = 0;
     virtual Result<ScanOut> scan(const ScanIn&) = 0;
     virtual Result<PutItemOut> put_item(const PutItemIn&) = 0;
+    virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;
-    // update/delete/transact/create/drop/backup/pitr + CancelToken:
-    // added per sub-phase (2b-2d).
+
+    /// Block (bounded exponential backoff, 100ms doubling to a 2s cap, arch
+    /// §10) until `table_name` no longer exists. Used by DROP TABLE unless
+    /// NOWAIT. Returns success when the table is gone, or an Error on a
+    /// terminal control-plane failure. The waiter lives behind the seam
+    /// because it owns the SDK's error-classification/polling semantics; the
+    /// FakeDDBClient returns immediately.
+    virtual Result<void> wait_for_table_gone(const std::string& table_name) = 0;
+    // update/transact/create + a CancelToken: added per sub-phase (2b-2d).
 };
 
 }  // namespace ddbsh
