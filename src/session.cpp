@@ -75,6 +75,7 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
         case StatementKind::describe:
         case StatementKind::drop_table:
         case StatementKind::create_table:
+        case StatementKind::insert:
             // Parsed in W2; execution (behind IDDBClient) lands in W4/W5. Until
             // then, report a clear not-implemented Error rather than a parse
             // error (D19), so the command surface is observable and tested.

@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "ddbsh/statement.hpp"
+#include "ddbsh/value.hpp"
 
 namespace ddbsh::engine {
 
@@ -50,6 +51,13 @@ inline std::string unquote(const std::string& s) {
 /// reachable for in-range values; out-of-range saturates rather than throwing.
 inline long long parse_ll(const std::string& s) {
     return std::strtoll(s.c_str(), nullptr, 10);
+}
+
+/// Parse a numeric lexeme to double WITHOUT throwing (mirrors the original's
+/// atof for ratelimit RCU/WCU literals). The lexer guarantees a numeric lexeme,
+/// so strtod's error path is not reachable for in-range values.
+inline double parse_double(const std::string& s) {
+    return std::strtod(s.c_str(), nullptr);
 }
 
 /// Blank / comment-only / bare-';' input: executes to nothing.
@@ -210,9 +218,38 @@ struct CreateTableCmd {
     std::vector<Tag> tags;
 };
 
+// ---- INSERT / REPLACE (W2 part 2) ------------------------------------------
+
+/// A write ratelimit (WITH RATELIMIT (...)). Captured for fidelity; execution
+/// of the token-bucket limiter is deferred to a later sub-phase (D19 defers
+/// rate-limiting), so the presence here just records the clause.
+struct RateLimit {
+    double rcu = 0;
+    double wcu = 0;
+};
+
+/// RETURN VALUES target (the original ReturnValue). INSERT forces `none`;
+/// REPLACE may request one. Non-`none` execution lands with return-values
+/// support in a later sub-phase.
+enum class ReturnValue { none, all_old, all_new, updated_old, updated_new };
+
+/// INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( row ) [, ( row ) ...]
+/// INSERT (insert=true) adds a conditional attribute_not_exists(pk); REPLACE
+/// (insert=false) is unconditional (arch §7). One CInsertCommand backs both in
+/// the original; one node backs both here. Each row is a positional list of
+/// Values matching `columns` by index.
+struct InsertCmd {
+    std::string table_name;
+    std::vector<std::string> columns;
+    std::vector<ValueList> rows;
+    bool insert = true;
+    std::optional<RateLimit> ratelimit;
+    ReturnValue return_value = ReturnValue::none;
+};
+
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
-                                 DescribeCmd, DropTableCmd, CreateTableCmd>;
+                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd>;
 
 /// Map a CommandNode to its public StatementKind. The variant alternative is
 /// the single source of truth; this keeps the public enum in lockstep.
@@ -236,6 +273,8 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::drop_table;
             } else if constexpr (std::is_same_v<T, CreateTableCmd>) {
                 return StatementKind::create_table;
+            } else if constexpr (std::is_same_v<T, InsertCmd>) {
+                return StatementKind::insert;
             } else {
                 static_assert(sizeof(T) == 0, "unhandled CommandNode alternative");
             }

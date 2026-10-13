@@ -43,6 +43,7 @@ enum class StatementKind {
     describe,      ///< DESCRIBE <table>
     drop_table,    ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
     create_table,  ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
+    insert,        ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
 };
 
 /// A self-contained parsed statement. Move-only: it owns the parsed AST via a

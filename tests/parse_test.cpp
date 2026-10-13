@@ -375,4 +375,118 @@ TEST(Parse, ExplainCreateTableSetsFlag) {
     EXPECT_TRUE(stmt.explain());
 }
 
+// ---- INSERT / REPLACE (W2 part 2) ------------------------------------------
+
+TEST(Parse, InsertSingleRow) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "insert into t ( id, name ) values ( 5, \"bob\" );");
+    ASSERT_EQ(stmt.kind(), StatementKind::insert);
+    const auto& ins = node_of<ddbsh::engine::InsertCmd>(stmt);
+    EXPECT_EQ(ins.table_name, "t");
+    EXPECT_TRUE(ins.insert);
+    EXPECT_FALSE(ins.ratelimit.has_value());
+    EXPECT_EQ(ins.return_value, ddbsh::engine::ReturnValue::none);
+    ASSERT_EQ(ins.columns.size(), 2u);
+    EXPECT_EQ(ins.columns[0], "id");
+    EXPECT_EQ(ins.columns[1], "name");
+    ASSERT_EQ(ins.rows.size(), 1u);
+    ASSERT_EQ(ins.rows[0].size(), 2u);
+    EXPECT_EQ(ins.rows[0][0].type, ddbsh::Value::Type::N);
+    EXPECT_EQ(ins.rows[0][0].s, "5");  // exact lexeme preserved
+    EXPECT_EQ(ins.rows[0][1].type, ddbsh::Value::Type::S);
+    EXPECT_EQ(ins.rows[0][1].s, "bob");  // outer quotes stripped
+}
+
+TEST(Parse, InsertMultiRow) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "insert into t ( id ) values ( 1 ), ( 2 ), ( 3 );");
+    const auto& ins = node_of<ddbsh::engine::InsertCmd>(stmt);
+    ASSERT_EQ(ins.rows.size(), 3u);
+    EXPECT_EQ(ins.rows[0][0].s, "1");
+    EXPECT_EQ(ins.rows[1][0].s, "2");
+    EXPECT_EQ(ins.rows[2][0].s, "3");
+}
+
+TEST(Parse, InsertScalarValueKinds) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(
+        session, "insert into t ( a, b, c, d, e ) values ( 1.5, \"s\", true, false, null );");
+    const auto& ins = node_of<ddbsh::engine::InsertCmd>(stmt);
+    ASSERT_EQ(ins.rows[0].size(), 5u);
+    EXPECT_EQ(ins.rows[0][0].type, ddbsh::Value::Type::N);
+    EXPECT_EQ(ins.rows[0][0].s, "1.5");
+    EXPECT_EQ(ins.rows[0][1].type, ddbsh::Value::Type::S);
+    EXPECT_EQ(ins.rows[0][2].type, ddbsh::Value::Type::BOOL);
+    EXPECT_TRUE(ins.rows[0][2].boolean);
+    EXPECT_EQ(ins.rows[0][3].type, ddbsh::Value::Type::BOOL);
+    EXPECT_FALSE(ins.rows[0][3].boolean);
+    EXPECT_EQ(ins.rows[0][4].type, ddbsh::Value::Type::NUL);
+}
+
+TEST(Parse, InsertNestedListAndMap) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt =
+        parse_ok(session, "insert into t ( l, m ) values ( [ 1, \"x\", [] ], { a : 1, b : {} } );");
+    const auto& ins = node_of<ddbsh::engine::InsertCmd>(stmt);
+    const auto& list = ins.rows[0][0];
+    ASSERT_EQ(list.type, ddbsh::Value::Type::L);
+    ASSERT_EQ(list.list.size(), 3u);
+    EXPECT_EQ(list.list[0].type, ddbsh::Value::Type::N);
+    EXPECT_EQ(list.list[1].type, ddbsh::Value::Type::S);
+    EXPECT_EQ(list.list[2].type, ddbsh::Value::Type::L);  // nested empty list
+    EXPECT_TRUE(list.list[2].list.empty());
+    const auto& map = ins.rows[0][1];
+    ASSERT_EQ(map.type, ddbsh::Value::Type::M);
+    ASSERT_EQ(map.map.size(), 2u);
+    EXPECT_EQ(map.map[0].first, "a");  // source order preserved
+    EXPECT_EQ(map.map[0].second.type, ddbsh::Value::Type::N);
+    EXPECT_EQ(map.map[1].first, "b");
+    EXPECT_EQ(map.map[1].second.type, ddbsh::Value::Type::M);  // nested empty map
+    EXPECT_TRUE(map.map[1].second.map.empty());
+}
+
+TEST(Parse, InsertEmptyTopLevelCollectionIsParseError) {
+    // Faithful to the original: insert_value has no top-level empty []/{} rule
+    // (only lee_rhs does), so VALUES ( [] ) is a syntax error.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto result = session.parse("insert into t ( a ) values ( [] );");
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ddbsh::Errc::parse_error);
+}
+
+TEST(Parse, InsertWithRatelimit) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt =
+        parse_ok(session, "insert into t ( id ) values ( 1 ) with ratelimit ( 10 rcu, 20 wcu );");
+    const auto& ins = node_of<ddbsh::engine::InsertCmd>(stmt);
+    ASSERT_TRUE(ins.ratelimit.has_value());
+    EXPECT_DOUBLE_EQ(ins.ratelimit->rcu, 10.0);
+    EXPECT_DOUBLE_EQ(ins.ratelimit->wcu, 20.0);
+}
+
+TEST(Parse, ReplaceIsUnconditionalWithReturnValue) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt =
+        parse_ok(session, "replace into t ( id, v ) values ( 1, \"a\" ) return values all old;");
+    ASSERT_EQ(stmt.kind(), StatementKind::insert);
+    const auto& ins = node_of<ddbsh::engine::InsertCmd>(stmt);
+    EXPECT_FALSE(ins.insert);  // REPLACE is unconditional
+    EXPECT_EQ(ins.return_value, ddbsh::engine::ReturnValue::all_old);
+}
+
+TEST(Parse, ExplainInsertSetsFlag) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "explain insert into t ( id ) values ( 1 );");
+    EXPECT_EQ(stmt.kind(), StatementKind::insert);
+    EXPECT_TRUE(stmt.explain());
+}
+
 }  // namespace

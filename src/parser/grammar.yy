@@ -205,6 +205,8 @@
 %type <ddbsh::engine::CommandNode> drop_table_command describe_command
 %type <ddbsh::engine::CommandNode> show_tables_command show_version_command
 %type <ddbsh::engine::CommandNode> create_table_command
+%type <ddbsh::engine::CommandNode> dml_command write_command
+%type <ddbsh::engine::CommandNode> insert_command replace_command
 
 %type <std::string> string region_name connect_endpoint like_clause
 %type <bool> brief_clause if_exists_clause nowait_clause
@@ -238,6 +240,20 @@
 %type <std::vector<ddbsh::engine::Tag>> table_tags table_tags_list optional_table_tags
 %type <ddbsh::engine::Tag> table_tag
 
+/* ---- INSERT / REPLACE + value literals (W2 part 2) -----------------------
+ * The original built Aws:: AttributeValue objects in the grammar; we build the
+ * SDK-free ddbsh::Value mirror (include/ddbsh/value.hpp). lee_rhs is the full
+ * value literal (incl. empty []/{}) reused by SELECT's RHS (W3); insert_value
+ * is the INSERT subset (no top-level empty collection), faithfully distinct as
+ * in the original. */
+%type <std::string> table_name insert_column
+%type <std::vector<std::string>> insert_column_list
+%type <ddbsh::Value> insert_value lee_rhs map_element_list
+%type <ddbsh::ValueList> insert_values lee_rhs_list
+%type <std::vector<ddbsh::ValueList>> value_list
+%type <std::optional<ddbsh::engine::RateLimit>> optional_ratelimit ratelimit
+%type <ddbsh::engine::ReturnValue> optional_return_value
+
 %%
 
 /* One `;`-terminated statement per parse (the engine parses one command at a
@@ -262,13 +278,16 @@ input:
 command:
       control_command    { $$ = std::move($1); }
     | ddl_command        { $$ = std::move($1); }
+    | dml_command        { $$ = std::move($1); }
     | show_command       { $$ = std::move($1); }
     ;
 
 /* EXPLAIN accepts ddl/dml commands only (as the original did); SHOW/CONNECT/
- * QUIT are not explainable. dml (SELECT/INSERT) joins this list when it lands. */
+ * QUIT are not explainable. dml here is INSERT/REPLACE (W2 part 2); SELECT
+ * joins when it lands (W3). */
 explainable:
       ddl_command        { $$ = std::move($1); }
+    | dml_command        { $$ = std::move($1); }
     ;
 
 control_command:
@@ -280,6 +299,17 @@ ddl_command:
       drop_table_command { $$ = std::move($1); }
     | describe_command   { $$ = std::move($1); }
     | create_table_command { $$ = std::move($1); }
+    ;
+
+/* dml for W2 part 2 is the write family (INSERT/REPLACE). SELECT (get_command)
+ * joins dml when it lands (W3). */
+dml_command:
+      write_command      { $$ = std::move($1); }
+    ;
+
+write_command:
+      insert_command     { $$ = std::move($1); }
+    | replace_command    { $$ = std::move($1); }
     ;
 
 show_command:
@@ -610,6 +640,181 @@ table_tags_list:
 table_tag:
       string ':' string
         { $$ = ddbsh::engine::Tag{std::move($1), std::move($3)}; }
+    ;
+
+/* ---- INSERT / REPLACE (W2 part 2) ----------------------------------------
+ * The trailing ';' is consumed by `input`, so each $N is one lower than the
+ * original. INSERT forces ReturnValue::none and is conditional at execution;
+ * REPLACE is unconditional and may carry a RETURN VALUES target. */
+insert_command:
+      K_INSERT K_INTO table_name '(' insert_column_list ')' K_VALUES value_list optional_ratelimit
+        {
+            ddbsh::engine::InsertCmd cmd;
+            cmd.table_name = std::move($3);
+            cmd.columns = std::move($5);
+            cmd.rows = std::move($8);
+            cmd.insert = true;
+            cmd.ratelimit = std::move($9);
+            cmd.return_value = ddbsh::engine::ReturnValue::none;
+            $$ = std::move(cmd);
+        }
+    ;
+
+replace_command:
+      K_REPLACE K_INTO table_name '(' insert_column_list ')' K_VALUES value_list optional_ratelimit optional_return_value
+        {
+            ddbsh::engine::InsertCmd cmd;
+            cmd.table_name = std::move($3);
+            cmd.columns = std::move($5);
+            cmd.rows = std::move($8);
+            cmd.insert = false;
+            cmd.ratelimit = std::move($9);
+            cmd.return_value = $10;
+            $$ = std::move(cmd);
+        }
+    ;
+
+table_name:
+      string  { $$ = std::move($1); }
+    ;
+
+insert_column_list:
+      insert_column
+        {
+            $$ = std::vector<std::string>{};
+            $$.push_back(std::move($1));
+        }
+    | insert_column_list ',' insert_column
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+insert_column:
+      string  { $$ = std::move($1); }
+    ;
+
+value_list:
+      '(' insert_values ')'
+        {
+            $$ = std::vector<ddbsh::ValueList>{};
+            $$.push_back(std::move($2));
+        }
+    | value_list ',' '(' insert_values ')'
+        { $1.push_back(std::move($4)); $$ = std::move($1); }
+    ;
+
+insert_values:
+      insert_value
+        {
+            $$ = ddbsh::ValueList{};
+            $$.push_back(std::move($1));
+        }
+    | insert_values ',' insert_value
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+/* insert_value is the INSERT value subset (no top-level empty []/{}); nested
+ * empty collections are still reachable via lee_rhs inside a list/map, exactly
+ * as the original. Numbers keep their EXACT lexeme (N), strings are unquoted. */
+insert_value:
+      T_WHOLE_NUMBER            { $$ = ddbsh::Value::number_value(std::move($1)); }
+    | T_FLOATING_POINT_NUMBER   { $$ = ddbsh::Value::number_value(std::move($1)); }
+    | T_DQUOTED_STRING          { $$ = ddbsh::Value::string_value(ddbsh::engine::unquote($1)); }
+    | '[' lee_rhs_list ']'
+        {
+            ddbsh::Value v;
+            v.type = ddbsh::Value::Type::L;
+            v.list = std::move($2);
+            $$ = std::move(v);
+        }
+    | K_TRUE                    { $$ = ddbsh::Value::bool_value(true); }
+    | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
+    | K_NULL                    { $$ = ddbsh::Value::null_value(); }
+    | '{' map_element_list '}'  { $$ = std::move($2); }
+    ;
+
+/* lee_rhs is the full value literal (adds top-level empty []/{} over
+ * insert_value); it is the RHS of WHERE comparisons and the element type of
+ * lists/map values (W3 reuses it for SELECT). */
+lee_rhs:
+      T_WHOLE_NUMBER            { $$ = ddbsh::Value::number_value(std::move($1)); }
+    | T_FLOATING_POINT_NUMBER   { $$ = ddbsh::Value::number_value(std::move($1)); }
+    | T_DQUOTED_STRING          { $$ = ddbsh::Value::string_value(ddbsh::engine::unquote($1)); }
+    | '[' lee_rhs_list ']'
+        {
+            ddbsh::Value v;
+            v.type = ddbsh::Value::Type::L;
+            v.list = std::move($2);
+            $$ = std::move(v);
+        }
+    | K_TRUE                    { $$ = ddbsh::Value::bool_value(true); }
+    | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
+    | '{' map_element_list '}'  { $$ = std::move($2); }
+    | K_NULL                    { $$ = ddbsh::Value::null_value(); }
+    | '[' ']'
+        {
+            ddbsh::Value v;
+            v.type = ddbsh::Value::Type::L;
+            $$ = std::move(v);
+        }
+    | '{' '}'
+        {
+            ddbsh::Value v;
+            v.type = ddbsh::Value::Type::M;
+            $$ = std::move(v);
+        }
+    ;
+
+lee_rhs_list:
+      lee_rhs
+        {
+            $$ = ddbsh::ValueList{};
+            $$.push_back(std::move($1));
+        }
+    | lee_rhs_list ',' lee_rhs
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+/* map_element_list builds a Value of type M, keys in source order (ValueMap is
+ * insertion-ordered; the Renderer sorts at format time, arch §9). */
+map_element_list:
+      string ':' lee_rhs
+        {
+            ddbsh::Value v;
+            v.type = ddbsh::Value::Type::M;
+            v.map.emplace_back(std::move($1), std::move($3));
+            $$ = std::move(v);
+        }
+    | map_element_list ',' string ':' lee_rhs
+        {
+            $1.map.emplace_back(std::move($3), std::move($5));
+            $$ = std::move($1);
+        }
+    ;
+
+ratelimit:
+      K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+        { $$ = ddbsh::engine::RateLimit{ddbsh::engine::parse_double($4),
+                                        ddbsh::engine::parse_double($7)}; }
+    | K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+        { $$ = ddbsh::engine::RateLimit{ddbsh::engine::parse_double($7),
+                                        ddbsh::engine::parse_double($4)}; }
+    | K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_RCU ')'
+        { $$ = ddbsh::engine::RateLimit{ddbsh::engine::parse_double($4), 0}; }
+    | K_WITH K_RATELIMIT '(' T_WHOLE_NUMBER K_WCU ')'
+        { $$ = ddbsh::engine::RateLimit{0, ddbsh::engine::parse_double($4)}; }
+    ;
+
+optional_ratelimit:
+      ratelimit  { $$ = std::move($1); }
+    | %empty     { $$ = std::nullopt; }
+    ;
+
+optional_return_value:
+      K_RETURN K_VALUES K_ALL K_OLD       { $$ = ddbsh::engine::ReturnValue::all_old; }
+    | K_RETURN K_VALUES K_ALL K_NEW       { $$ = ddbsh::engine::ReturnValue::all_new; }
+    | K_RETURN K_VALUES K_UPDATED K_OLD   { $$ = ddbsh::engine::ReturnValue::updated_old; }
+    | K_RETURN K_VALUES K_UPDATED K_NEW   { $$ = ddbsh::engine::ReturnValue::updated_new; }
+    | %empty                              { $$ = ddbsh::engine::ReturnValue::none; }
     ;
 
 /* A string literal source: double-quoted (unquoted here, outer quotes stripped
