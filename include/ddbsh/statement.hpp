@@ -4,32 +4,80 @@
 // statement.hpp — a parsed, self-contained command ready to execute.
 //
 // Session::parse(text) -> Result<Statement>; Session::execute(const
-// Statement&) -> Result<ExecOutcome>. A Statement holds NO pointer into
-// scanner/parser memory (P2a-02 §7.2): all grammar fragments are copied/moved
-// out of the parse, so a Statement outlives the per-parse flex/bison handles.
+// Statement&) -> Result<ExecOutcome>. A Statement OWNS its parsed AST and holds
+// NO pointer into scanner/parser memory (P2a-02 §7.2): all grammar fragments
+// are moved out of the parse into the AST, so a Statement outlives the
+// per-parse flex/bison handles.
 //
-// 2a scope: the walking-skeleton grammar recognizes SHOW VERSION, QUIT, and
-// empty input. The full command model (owning AST via unique_ptr, EXPLAIN
-// flag) lands in 2b/2c per P2a-02 §4.
+// Ownership model (P2a-02 §4.2): the Statement owns the command/AST by
+// std::unique_ptr inside a PIMPL (engine::ParsedStatement). This keeps the
+// public header SDK-free and free of flex/bison types (D11); the full AST node
+// types live in the engine-internal header src/parser/ast.hpp. The public
+// surface is just kind()/explain() plus a library-internal AST accessor the
+// executor uses. Statement is move-only (it owns a unique_ptr).
+//
+// 2b scope: the grammar builds the owning AST for the control/DDL/show command
+// families ported so far (empty, SHOW VERSION, QUIT, CONNECT, SHOW TABLES,
+// DESCRIBE, DROP TABLE). CREATE TABLE / INSERT / SELECT and their EXPLAIN land
+// in subsequent W2/W3 commits on this same model.
 
 #ifndef DDBSH_STATEMENT_HPP
 #define DDBSH_STATEMENT_HPP
 
+#include <memory>
+
 namespace ddbsh {
 
-/// The kind of statement parsed. Grows into the full command catalog in 2b+.
+namespace engine {
+struct ParsedStatement;  // defined in src/parser/ast.hpp (engine-internal)
+}
+
+/// The kind of statement parsed. Derived from the owned AST node; grows into
+/// the full command catalog as families port.
 enum class StatementKind {
-    empty,         ///< blank / comment-only input
+    empty,         ///< blank / comment-only / bare-';' input
     show_version,  ///< SHOW VERSION
-    quit,          ///< QUIT / EXIT
+    quit,          ///< QUIT
+    connect,       ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
+    show_tables,   ///< SHOW TABLES [BRIEF] [LIKE <template>]
+    describe,      ///< DESCRIBE <table>
+    drop_table,    ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
 };
 
-/// A self-contained parsed statement. Trivially copyable/movable in 2a; when
-/// the full AST lands (2b/2c) it gains an owning unique_ptr payload and this
-/// stays move-only.
-struct Statement {
-    StatementKind kind = StatementKind::empty;
-    bool explain = false;  ///< set when the EXPLAIN prefix is seen (2b+)
+/// A self-contained parsed statement. Move-only: it owns the parsed AST via a
+/// unique_ptr PIMPL. A default-constructed Statement is the empty statement.
+class Statement {
+public:
+    /// The empty statement (blank / comment-only input).
+    Statement();
+
+    /// Takes ownership of a parsed AST. Library-internal: the parser builds the
+    /// ParsedStatement and hands it here. A null `ast` yields the empty
+    /// statement.
+    explicit Statement(std::unique_ptr<engine::ParsedStatement> ast);
+
+    ~Statement();
+
+    Statement(Statement&&) noexcept;
+    Statement& operator=(Statement&&) noexcept;
+    Statement(const Statement&) = delete;
+    Statement& operator=(const Statement&) = delete;
+
+    /// The kind of command this statement carries (empty if default-built).
+    StatementKind kind() const;
+
+    /// True when the EXPLAIN prefix was present (arch §7); EXPLAIN prints the
+    /// serialized API request(s) instead of executing.
+    bool explain() const;
+
+    /// Library-internal accessor to the owned AST (nullptr for the empty
+    /// statement). Not part of the embedder-facing API surface; the engine's
+    /// executor uses it to read the parsed command. Returns a borrowed,
+    /// non-owning pointer valid for this Statement's lifetime.
+    const engine::ParsedStatement* ast() const noexcept { return ast_.get(); }
+
+private:
+    std::unique_ptr<engine::ParsedStatement> ast_;
 };
 
 }  // namespace ddbsh

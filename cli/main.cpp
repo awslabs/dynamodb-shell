@@ -52,7 +52,7 @@ bool run_statement(ddbsh::Session& session, const ddbsh::render::Renderer& rende
         return true;
     }
     std::fputs(renderer.render(*outcome).c_str(), stdout);
-    return stmt->kind != ddbsh::StatementKind::quit;
+    return stmt->kind() != ddbsh::StatementKind::quit;
 }
 
 }  // namespace

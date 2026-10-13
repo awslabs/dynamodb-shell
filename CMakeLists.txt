@@ -74,6 +74,7 @@ ADD_FLEX_BISON_DEPENDENCY(ddbsh_scanner ddbsh_parser)
 # --- engine library ----------------------------------------------------------
 add_library(ddbsh
             src/session.cpp
+            src/statement.cpp
             src/version.cpp
             src/render/renderer.cpp
             src/parser/driver.cpp
@@ -130,7 +131,8 @@ if(DDBSH_BUILD_TESTS)
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
                    tests/reentrancy_test.cpp
-                   tests/lexer_test.cpp)
+                   tests/lexer_test.cpp
+                   tests/parse_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src")

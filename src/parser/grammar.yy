@@ -3,20 +3,23 @@
  *
  * grammar.yy — the engine grammar (bison C++ lalr1.cc skeleton, D3).
  *
- * Phase 2b, W1 (lexer port): this file now declares the COMPLETE token set the
- * ported tokenizer produces (arch §4), matching the original parser.y token
- * list one-for-one. The grammar PRODUCTIONS, however, still recognize only the
- * walking-skeleton command set (SHOW VERSION, QUIT, empty) — the full command
- * productions and the owning AST land in W2. Declaring every token now lets the
- * reentrant scanner (lexer.l) and its keyword table be ported in full and
- * unit-tested directly (see src/parser/lex_debug.*), while the build stays
- * green and the existing parse tests keep passing. Unused-token warnings from
- * bison are expected for this intermediate state and are not -Werror.
+ * Phase 2b, W1 declared the COMPLETE token set the tokenizer produces (arch
+ * §4), matching the original parser.y token list one-for-one. W2 adds the
+ * owning AST and the in-scope command PRODUCTIONS. This commit ports the
+ * control/DDL/show families that need no WHERE expression tree or nested
+ * values: empty / bare-';', SHOW VERSION, QUIT, CONNECT [WITH ENDPOINT],
+ * SHOW TABLES [BRIEF][LIKE], DESCRIBE, DROP TABLE [IF EXISTS][NOWAIT], and the
+ * EXPLAIN prefix over ddl commands. CREATE TABLE / INSERT / SELECT (with the
+ * expression tree, W3) are added as subsequent alternatives on this same
+ * model. Tokens declared-but-unused in this intermediate state are expected
+ * and are not -Werror (the generated TU is compiled -Wno-error).
  *
  * The generated parser is a class (ddbsh::engine::Parser) with a reentrant
- * interface; its header stays private behind Session::Impl (D11). Token value
- * carriers use std::string (the original's char* strval + STRDUP), so there is
- * no manual free and ownership is clear (P2a-02).
+ * interface; its header stays private behind Session::Impl (D11). Each command
+ * reduces to an owning engine::CommandNode (a variant of value-type AST nodes,
+ * src/parser/ast.hpp), MOVED up the productions — no NEW/FREE, no raw owning
+ * pointer, and a parse error destroys the semantic-value stack with no leak
+ * (P2a-02 Domain C/D). The public Statement owns the resulting ParsedStatement.
  */
 
 %require "3.7"
@@ -32,6 +35,7 @@
 %code requires {
     #include <string>
     #include "ddbsh/statement.hpp"
+    #include "parser/ast.hpp"
     namespace ddbsh::engine { class Driver; }
 }
 
@@ -189,27 +193,144 @@
 %token <std::string> T_UNQUOTED_STRING
 %token <std::string> T_WHOLE_NUMBER
 
-%type <ddbsh::StatementKind> command
+/* ---- Nonterminal semantic value types ------------------------------------
+ * Commands reduce to an owning CommandNode (a variant of value-type AST nodes,
+ * src/parser/ast.hpp); the parser MOVES them up the productions (no raw owning
+ * pointers, no NEW/FREE — P2a-02 Domain C/D). Leaf fragments are std::string
+ * (identifiers/paths, unquoted) and bool (optional flag clauses).
+ */
+%type <ddbsh::engine::CommandNode> command explainable
+%type <ddbsh::engine::CommandNode> control_command ddl_command show_command
+%type <ddbsh::engine::CommandNode> connect_command quit_command
+%type <ddbsh::engine::CommandNode> drop_table_command describe_command
+%type <ddbsh::engine::CommandNode> show_tables_command show_version_command
+
+%type <std::string> string region_name connect_endpoint like_clause
+%type <bool> brief_clause if_exists_clause nowait_clause
 
 %%
 
+/* One `;`-terminated statement per parse (the engine parses one command at a
+ * time; the original's yyparse likewise YYACCEPTs after each command). The
+ * EXPLAIN prefix wraps a ddl/dml command (arch §7); it sets the AST's explain
+ * flag rather than mutating a shared command object (P2a-02 §4.2). On a syntax
+ * error, bison records the Error via error() and recovers to the next ';'; the
+ * Driver then reports failure. */
 input:
       %empty
-        { drv.set_result(ddbsh::Statement{ddbsh::StatementKind::empty, false}); }
+        { drv.set_empty_result(); }
+    | SEMICOLON
+        { drv.set_empty_result(); }
     | command SEMICOLON
-        { drv.set_result(ddbsh::Statement{$1, false}); }
+        { drv.set_result(std::move($1), false); }
+    | K_EXPLAIN explainable SEMICOLON
+        { drv.set_result(std::move($2), true); }
+    | error SEMICOLON
+        { /* error already recorded by error(); recover to ';' */ }
     ;
 
 command:
-      K_SHOW K_VERSION   { $$ = ddbsh::StatementKind::show_version; }
-    | K_QUIT             { $$ = ddbsh::StatementKind::quit; }
+      control_command    { $$ = std::move($1); }
+    | ddl_command        { $$ = std::move($1); }
+    | show_command       { $$ = std::move($1); }
+    ;
+
+/* EXPLAIN accepts ddl/dml commands only (as the original did); SHOW/CONNECT/
+ * QUIT are not explainable. dml (SELECT/INSERT) joins this list when it lands. */
+explainable:
+      ddl_command        { $$ = std::move($1); }
+    ;
+
+control_command:
+      connect_command    { $$ = std::move($1); }
+    | quit_command       { $$ = std::move($1); }
+    ;
+
+ddl_command:
+      drop_table_command { $$ = std::move($1); }
+    | describe_command   { $$ = std::move($1); }
+    ;
+
+show_command:
+      show_tables_command   { $$ = std::move($1); }
+    | show_version_command  { $$ = std::move($1); }
+    ;
+
+quit_command:
+      K_QUIT
+        { $$ = ddbsh::engine::QuitCmd{}; }
+    ;
+
+show_version_command:
+      K_SHOW K_VERSION
+        { $$ = ddbsh::engine::ShowVersionCmd{}; }
+    ;
+
+connect_command:
+      K_CONNECT region_name connect_endpoint
+        { $$ = ddbsh::engine::ConnectCmd{std::move($2), std::move($3)}; }
+    ;
+
+connect_endpoint:
+      %empty                       { $$ = std::string{}; }
+    | K_WITH K_ENDPOINT string     { $$ = std::move($3); }
+    ;
+
+drop_table_command:
+      K_DROP K_TABLE if_exists_clause nowait_clause string
+        { $$ = ddbsh::engine::DropTableCmd{std::move($5), $3, $4}; }
+    ;
+
+describe_command:
+      K_DESCRIBE string
+        { $$ = ddbsh::engine::DescribeCmd{std::move($2)}; }
+    ;
+
+show_tables_command:
+      K_SHOW K_TABLES brief_clause like_clause
+        { $$ = ddbsh::engine::ShowTablesCmd{$3, std::move($4)}; }
+    ;
+
+/* A string literal source: double-quoted (unquoted here, outer quotes stripped
+ * exactly as the original unquote() does — "" doubling is NOT collapsed, arch
+ * §4) or a bare unquoted identifier. */
+string:
+      T_DQUOTED_STRING   { $$ = ddbsh::engine::unquote($1); }
+    | T_UNQUOTED_STRING  { $$ = std::move($1); }
+    ;
+
+region_name:
+      string             { $$ = std::move($1); }
+    ;
+
+brief_clause:
+      %empty             { $$ = false; }
+    | K_BRIEF            { $$ = true; }
+    ;
+
+like_clause:
+      %empty             { $$ = std::string{}; }
+    | K_LIKE string      { $$ = std::move($2); }
+    ;
+
+if_exists_clause:
+      %empty             { $$ = false; }
+    | K_IF K_EXISTS      { $$ = true; }
+    ;
+
+nowait_clause:
+      %empty             { $$ = false; }
+    | K_NOWAIT           { $$ = true; }
     ;
 
 %%
 
 void ddbsh::engine::Parser::error(const std::string& msg) {
-    // Byte-exact style deferred to W2 (arch §9 "[line,col] msg at tok" /
-    // "syntax error at ;"); for now, record a parse_error carrying the bison
-    // message so the failure path is observable and tested.
-    drv.set_error(msg);
+    // Compose the byte-exact user string "[line, col] syntax error at <lexeme>"
+    // (arch §9, tenet 5). The bison message is kept verbose only so the parser
+    // generates symbol_name() (used by the token-stream debug seam); the
+    // user-facing base string the original emitted is simply "syntax error", so
+    // we discard the verbose text and pass the fidelity string.
+    (void)msg;
+    drv.set_error("syntax error");
 }

@@ -7,19 +7,22 @@
 // header and the reentrant flex scanner handle, which must never reach
 // include/ddbsh/ (D11). One Driver instance backs one Session::parse() call:
 // it owns the flex scanner handle (via RAII init/destroy), carries the
-// in-progress result and error state, and never outlives the parse (P2a-02
-// §7.2). No global scanner/parser state exists, so multiple Sessions parse
-// concurrently without interference.
+// in-progress result and error state, tracks scan position for byte-exact
+// error locations, and never outlives the parse (P2a-02 §7.2). No global
+// scanner/parser state exists, so multiple Sessions parse concurrently without
+// interference.
 
 #ifndef DDBSH_SRC_PARSER_DRIVER_HPP
 #define DDBSH_SRC_PARSER_DRIVER_HPP
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 
 #include "ddbsh/error.hpp"
 #include "ddbsh/statement.hpp"
+#include "parser/ast.hpp"
 
 namespace ddbsh::engine {
 
@@ -44,19 +47,29 @@ public:
     std::string_view input() const { return input_; }
     std::size_t& scan_offset() { return scan_offset_; }
 
-    /// Record the verbatim text of the most recently scanned lexeme (set by the
-    /// scanner's YY_USER_ACTION). Used by the token-stream debug helper and,
-    /// later, by location-aware error messages.
-    void set_last_lexeme(const char* text, int length) {
-        last_lexeme_.assign(text, static_cast<std::size_t>(length));
-    }
+    /// Record the verbatim text of the most recently scanned lexeme and advance
+    /// the line/column cursor over it (set by the scanner's YY_USER_ACTION).
+    /// Mirrors the original lexer's count() semantics (arch §4): the cursor
+    /// points just past the scanned token, so the error location matches the
+    /// original's `[line, col]`.
+    void on_token(const char* text, int length);
     const std::string& last_lexeme() const { return last_lexeme_; }
 
-    void set_result(Statement s) { result_ = s; }
+    // ---- result builders invoked by the grammar actions --------------------
+    /// The empty statement (blank / comment-only / bare-';' input).
+    void set_empty_result();
+    /// Build the parse result from a command node and the EXPLAIN flag.
+    void set_result(CommandNode command, bool explain);
     const std::optional<Statement>& result() const { return result_; }
 
-    /// Record a parse error with the byte-exact user message (tenet 5).
-    void set_error(std::string message);
+    /// Move the parsed Statement out of the driver (Statement is move-only).
+    /// Precondition: parse() returned true, so result_ holds a value.
+    Statement release_result() { return std::move(result_.value()); }
+
+    /// Record a parse error. `message` is the bison error text ("syntax
+    /// error"); this composes the byte-exact user string `[line, col] message
+    /// at <lexeme>` the original emitted (arch §9, tenet 5).
+    void set_error(const std::string& message);
     const std::optional<Error>& error() const { return error_; }
 
 private:
@@ -64,6 +77,8 @@ private:
     std::size_t scan_offset_ = 0;  ///< byte cursor for the reentrant YY_INPUT
     void* scanner_ = nullptr;      ///< yyscan_t (opaque here; flex type in .cpp)
     std::string last_lexeme_;      ///< verbatim text of the last scanned lexeme
+    int line_ = 1;                 ///< 1-based line of the scan cursor
+    int column_ = 1;               ///< 1-based column of the scan cursor
     std::optional<Statement> result_;
     std::optional<Error> error_;
 };

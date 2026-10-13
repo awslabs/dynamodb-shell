@@ -10,7 +10,9 @@
 
 #include "parser/driver.hpp"
 
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "parser/grammar.hpp"
 #include "parser/lexer.hpp"
@@ -39,8 +41,37 @@ bool Driver::parse() {
     return rc == 0 && !error_.has_value();
 }
 
-void Driver::set_error(std::string message) {
-    error_ = Error{Errc::parse_error, std::move(message), std::nullopt, std::nullopt};
+void Driver::on_token(const char* text, int length) {
+    last_lexeme_.assign(text, static_cast<std::size_t>(length));
+    // Advance the line/column cursor over the lexeme, matching the original
+    // lexer's count() (arch §4): newline (or carriage return) resets the column
+    // and bumps the line; any other char advances the column. After this the
+    // cursor sits just past the token.
+    for (int ix = 0; ix < length; ++ix) {
+        if (text[ix] == '\n' || text[ix] == '\r') {
+            ++line_;
+            column_ = 1;
+        } else {
+            ++column_;
+        }
+    }
+}
+
+void Driver::set_empty_result() {
+    result_ = Statement{};
+}
+
+void Driver::set_result(CommandNode command, bool explain) {
+    result_ =
+        Statement{std::make_unique<ParsedStatement>(ParsedStatement{std::move(command), explain})};
+}
+
+void Driver::set_error(const std::string& message) {
+    // Byte-exact user string: "[line, col] <message> at <lexeme>" — the format
+    // the original yyerror emitted (parser.y: logerror("[%d, %d] %s at %s")).
+    std::string composed = "[" + std::to_string(line_) + ", " + std::to_string(column_) + "] " +
+                           message + " at " + last_lexeme_;
+    error_ = Error{Errc::parse_error, std::move(composed), std::nullopt, std::nullopt};
 }
 
 }  // namespace ddbsh::engine

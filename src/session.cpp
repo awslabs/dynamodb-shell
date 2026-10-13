@@ -41,11 +41,11 @@ Result<Statement> Session::parse(std::string_view text) {
         return fail(Errc::parse_error, "parse error");
     }
     // On success the grammar always sets a result.
-    return *driver.result();
+    return driver.release_result();
 }
 
 Result<ExecOutcome> Session::execute(const Statement& statement) {
-    switch (statement.kind) {
+    switch (statement.kind()) {
         case StatementKind::empty:
             return ExecOutcome{EmptyOutcome{}};
         case StatementKind::show_version:
@@ -60,6 +60,25 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             return ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}};
         case StatementKind::quit:
             return ExecOutcome{StatusOutcome{"QUIT"}};
+        case StatementKind::connect: {
+            // CONNECT contacts no API (arch §7): it updates the session's
+            // region/endpoint (the original CConnectCommand calls
+            // setRegionAndEndpoint + reconnect; reconnection is the CLI's job
+            // via the injected client, W5/W8). Updating the per-session config
+            // keeps the prompt/region correct and emits the CONNECT token.
+            const auto& connect = std::get<engine::ConnectCmd>(statement.ast()->command);
+            impl_->config.region = connect.region;
+            impl_->config.endpoint = connect.endpoint;
+            return ExecOutcome{StatusOutcome{"CONNECT"}};
+        }
+        case StatementKind::show_tables:
+        case StatementKind::describe:
+        case StatementKind::drop_table:
+            // Parsed in W2; execution (behind IDDBClient) lands in W4/W5. Until
+            // then, report a clear not-implemented Error rather than a parse
+            // error (D19), so the command surface is observable and tested.
+            return fail(Errc::not_implemented,
+                        "command parsed but not yet executable in this build");
     }
     return fail(Errc::internal_error, "unhandled statement kind");
 }

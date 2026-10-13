@@ -47,11 +47,11 @@
 #define YY_INPUT(buf, result, max_size) \
     (result) = ddbsh_yy_read(yyextra, (buf), (max_size))
 
-// Record the verbatim lexeme of every matched rule on the Driver, so the
-// token-stream debug helper (lex_debug.cpp) and future location handling can
-// recover it. Runs before each rule's action; the last returning rule's
-// lexeme is the one in effect when yylex() returns.
-#define YY_USER_ACTION yyextra->set_last_lexeme(yytext, yyleng);
+// Record the verbatim lexeme of every matched rule on the Driver and advance
+// its line/column cursor, so the token-stream debug helper (lex_debug.cpp) and
+// byte-exact error locations can recover them. Runs before each rule's action;
+// the last returning rule's lexeme is the one in effect when yylex() returns.
+#define YY_USER_ACTION yyextra->on_token(yytext, yyleng);
 
 // The scanner returns bison symbol_types (api.token.constructor). Override the
 // generated lex signature so it yields Parser::symbol_type.
