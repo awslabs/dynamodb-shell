@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "execute/create_table_executor.hpp"
 #include "execute/drop_table_executor.hpp"
 #include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
@@ -119,14 +120,23 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             return engine::execute_insert(insert, impl_->client,
                                           [this] { return impl_->next_alias_prefix(); });
         }
+        case StatementKind::create_table: {
+            // EXPLAIN of a CREATE renders the serialized CreateTable request and
+            // must not contact the service (W6); until then an explaining CREATE
+            // reports not-implemented rather than executing.
+            if (statement.ast()->explain) {
+                return fail(Errc::not_implemented,
+                            "EXPLAIN CREATE TABLE is not yet available in this build");
+            }
+            const auto& create = std::get<engine::CreateTableCmd>(statement.ast()->command);
+            return engine::execute_create_table(create, impl_->client);
+        }
         case StatementKind::show_tables:
         case StatementKind::describe:
-        case StatementKind::create_table:
             // Parsed in W2/W3; execution (behind IDDBClient) lands in a W5
-            // follow-on round (CREATE TABLE translation, SHOW TABLES/DESCRIBE
-            // reports). Until then, report a clear not-implemented Error rather
-            // than a parse error (D19), so the command surface is observable and
-            // tested.
+            // follow-on round (SHOW TABLES/DESCRIBE reports). Until then, report
+            // a clear not-implemented Error rather than a parse error (D19), so
+            // the command surface is observable and tested.
             return fail(Errc::not_implemented,
                         "command parsed but not yet executable in this build");
     }

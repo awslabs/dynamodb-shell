@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "ddbsh/statement.hpp"
+#include "ddbsh/table_schema.hpp"
 #include "ddbsh/value.hpp"
 #include "expressions/where.hpp"
 
@@ -96,110 +97,31 @@ struct DropTableCmd {
 };
 
 // ---- CREATE TABLE supporting value types -----------------------------------
-// SDK-free mirrors of the DynamoDB table-definition shapes the original built
-// directly as Aws:: model objects (parser.y create_table_command). The W4/W6
-// executor/renderer translate these to the CreateTable request; keeping them
-// SDK-free holds the D11 boundary.
-
-/// A key attribute's scalar type (CREATE TABLE attribute definitions / the
-/// original ScalarAttributeType). N=number, S=string, B=binary.
-enum class ScalarType { n, s, b };
-
-/// One attribute definition: name + scalar type.
-struct AttributeDef {
-    std::string name;
-    ScalarType type = ScalarType::s;
-};
-
-/// A key schema: a required HASH attribute and an optional RANGE attribute.
-/// The original always emits [HASH, RANGE] order regardless of written order
-/// (parser.y key_schema reorders), which this shape reproduces.
-struct KeySchema {
-    std::string hash;
-    std::optional<std::string> range;
-};
-
-/// Table/GSI billing mode (the original BillingMode).
-enum class BillingMode { pay_per_request, provisioned };
-
-/// On-demand (PAY_PER_REQUEST) max request units. Both nullopt => a bare
-/// `BILLING MODE ON DEMAND` (empty OnDemandThroughput); both set => an explicit
-/// `THROUGHPUT (r,w)`; both -1 => `THROUGHPUT UNLIMITED` (matching the
-/// original's -1 sentinel, arch §8).
-struct OnDemandThroughput {
-    std::optional<long long> max_read_request_units;
-    std::optional<long long> max_write_request_units;
-};
-
-/// Billing mode plus the throughput that goes with it. For `provisioned`, rcu/
-/// wcu carry the ProvisionedThroughput; for `pay_per_request`, `od` carries the
-/// (optional) OnDemandThroughput.
-struct BillingModeAndThroughput {
-    BillingMode mode = BillingMode::pay_per_request;
-    long long rcu = 0;
-    long long wcu = 0;
-    OnDemandThroughput od;
-};
-
-/// WARM THROUGHPUT (r RCU, w WCU) — the original WarmThroughput.
-struct WarmThroughput {
-    long long read_units_per_second = 0;
-    long long write_units_per_second = 0;
-};
-
-/// Index projection type (the original ProjectionType).
-enum class ProjectionType { all, keys_only, include };
-
-/// An index projection: type plus the non-key attributes for INCLUDE.
-struct Projection {
-    ProjectionType type = ProjectionType::all;
-    std::vector<std::string> non_key_attributes;  ///< only for `include`
-};
-
-/// A global secondary index definition.
-struct Gsi {
-    std::string name;
-    KeySchema key_schema;
-    Projection projection;
-    std::optional<BillingModeAndThroughput> billing;
-    std::optional<WarmThroughput> warm;
-};
-
-/// A local secondary index definition.
-struct Lsi {
-    std::string name;
-    KeySchema key_schema;
-    Projection projection;
-};
-
-/// Stream view type (the original StreamViewType).
-enum class StreamViewType { keys_only, new_image, old_image, new_and_old_images };
-
-/// STREAM (...) | STREAM DISABLED. `view_type` is meaningful only when enabled.
-struct StreamSpec {
-    bool enabled = false;
-    StreamViewType view_type = StreamViewType::keys_only;
-};
-
-/// Server-side-encryption key type (the original SSEType).
-enum class SseType { kms, aes256 };
-
-/// SSE DISABLED | SSE (KEYID <id> KMS|AES256). `kms_master_key_id`/`sse_type`
-/// are set only when enabled.
-struct SseSpec {
-    bool enabled = false;
-    std::optional<std::string> kms_master_key_id;
-    std::optional<SseType> sse_type;
-};
-
-/// Table class (the original TableClass).
-enum class TableClass { standard, standard_infrequent_access };
-
-/// A table tag (key:value).
-struct Tag {
-    std::string key;
-    std::string value;
-};
+// The SDK-free table-definition value types (AttributeDef, KeySchema, billing/
+// throughput, Gsi/Lsi, stream/sse/class/tags, ...) live in the public header
+// ddbsh/table_schema.hpp so the parse result (CreateTableCmd below) and the
+// client seam (ddbsh::CreateTableIn) share ONE definition. They are introduced
+// into ddbsh::engine by the using-declarations below, so the grammar and the
+// AST refer to them unqualified (or as engine::X) exactly as before while the
+// single source of truth is the public header. (The W5 executor copies these
+// into a CreateTableIn; the W6 renderer serializes them for EXPLAIN.)
+using ddbsh::AttributeDef;
+using ddbsh::BillingMode;
+using ddbsh::BillingModeAndThroughput;
+using ddbsh::Gsi;
+using ddbsh::KeySchema;
+using ddbsh::Lsi;
+using ddbsh::OnDemandThroughput;
+using ddbsh::Projection;
+using ddbsh::ProjectionType;
+using ddbsh::ScalarType;
+using ddbsh::SseSpec;
+using ddbsh::SseType;
+using ddbsh::StreamSpec;
+using ddbsh::StreamViewType;
+using ddbsh::TableClass;
+using ddbsh::Tag;
+using ddbsh::WarmThroughput;
 
 /// CREATE TABLE [IF NOT EXISTS] [NOWAIT] <name> ( attr type, ... ) PRIMARY KEY
 /// ( ... ) [billing] [warm] [gsi] [lsi] [stream] [sse] [class] [deletion] [tags]

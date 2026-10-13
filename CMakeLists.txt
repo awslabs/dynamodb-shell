@@ -85,6 +85,7 @@ add_library(ddbsh
             src/planner/select_planner.cpp
             src/execute/select_executor.cpp
             src/execute/insert_executor.cpp
+            src/execute/create_table_executor.cpp
             src/execute/drop_table_executor.cpp
             ${BISON_ddbsh_parser_OUTPUTS}
             ${FLEX_ddbsh_scanner_OUTPUTS})
@@ -143,7 +144,8 @@ if(DDBSH_BUILD_TESTS)
                    tests/expression_test.cpp
                    tests/planner_test.cpp
                    tests/select_exec_test.cpp
-                   tests/write_exec_test.cpp)
+                   tests/write_exec_test.cpp
+                   tests/create_table_exec_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src")

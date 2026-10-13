@@ -65,6 +65,16 @@ public:
     /// Make delete_table fail with this Error. nullopt => succeed.
     void set_delete_error(std::optional<Error> error) { delete_error_ = std::move(error); }
 
+    /// Make create_table fail with this Error (e.g. a ResourceInUse "Table
+    /// already exists" on a plain CREATE). nullopt => succeed.
+    void set_create_error(std::optional<Error> error) { create_error_ = std::move(error); }
+
+    /// The CreateTable requests issued, in order (for request-shape assertions).
+    const std::vector<CreateTableIn>& create_requests() const { return create_requests_; }
+
+    /// Table names passed to wait_for_table_active, in order.
+    const std::vector<std::string>& waited_active() const { return waited_active_; }
+
     /// The PutItem requests issued, in order (for request-shape assertions).
     const std::vector<PutItemIn>& put_requests() const { return put_requests_; }
 
@@ -111,6 +121,19 @@ public:
             return fail(*put_error_);
         }
         return PutItemOut{};
+    }
+
+    Result<CreateTableOut> create_table(const CreateTableIn& in) override {
+        create_requests_.push_back(in);
+        if (create_error_.has_value()) {
+            return fail(*create_error_);
+        }
+        return CreateTableOut{};
+    }
+
+    Result<void> wait_for_table_active(const std::string& table_name) override {
+        waited_active_.push_back(table_name);
+        return {};
     }
 
     Result<DeleteTableOut> delete_table(const DeleteTableIn& in) override {
@@ -170,6 +193,9 @@ private:
     std::optional<Error> delete_error_;
     std::vector<std::string> deleted_tables_;
     std::vector<std::string> waited_gone_;
+    std::vector<CreateTableIn> create_requests_;
+    std::optional<Error> create_error_;
+    std::vector<std::string> waited_active_;
 };
 
 }  // namespace ddbsh::test

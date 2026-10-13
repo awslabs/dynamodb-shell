@@ -1,13 +1,16 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// aws_ddb_client.cpp — CLI-side IDDBClient adapter (2a subset).
+// aws_ddb_client.cpp — CLI-side IDDBClient adapter.
 //
 // Constructs a real DynamoDBClient with the standard credential resolution and
 // optional endpoint override (mirrors the original CDDBShDDBClientConfig, arch
-// §3/§10). The four seam ops are stubbed to a clear service_error for 2a: the
-// walking-skeleton statements (SHOW VERSION / QUIT) never call them; full
-// request/response translation lands in 2d.
+// §3/§10). The control-plane ops (create_table / delete_table / describe_table /
+// list_tables) and the ACTIVE/gone waiters are fully implemented here. The
+// data-plane ops (get_item / query / scan / put_item) still return a clear
+// service_error placeholder: their ddbsh::Value <-> Aws::AttributeValue
+// translation lands with the W5 data-plane round (so engine-driven goldens can
+// run); the engine contract for those ops is covered offline by FakeDDBClient.
 
 #include "aws_ddb_client.hpp"
 
@@ -16,6 +19,7 @@
 #include <thread>
 
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/dynamodb/model/CreateTableRequest.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
@@ -24,10 +28,12 @@ namespace ddbsh::cli {
 
 namespace {
 
-// The 2a skeleton has no request/response translation yet; the seam ops return
-// this clear error. The walking-skeleton statements never reach them.
+// The data-plane ops have no request/response translation yet; they return
+// this clear error until the W5 data-plane round. No in-scope command reaches
+// them through this adapter before then (engine-driven goldens are gated on
+// that round).
 Error not_yet() {
-    return Error{Errc::service_error, "IDDBClient operation not implemented in the 2a skeleton",
+    return Error{Errc::service_error, "IDDBClient data-plane operation not yet implemented",
                  std::nullopt, std::nullopt};
 }
 
@@ -60,6 +66,221 @@ Result<ScanOut> AwsDDBClient::scan(const ScanIn&) {
 
 Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn&) {
     return fail(not_yet());
+}
+
+namespace {
+
+// ---- CreateTable translation (ddbsh::CreateTableIn -> SDK request) ---------
+// Mirrors how the original built the Aws CreateTable request directly in the
+// grammar + create_table.cpp (arch §7/§8).
+
+Aws::DynamoDB::Model::ScalarAttributeType to_sdk(ScalarType t) {
+    switch (t) {
+        case ScalarType::n:
+            return Aws::DynamoDB::Model::ScalarAttributeType::N;
+        case ScalarType::b:
+            return Aws::DynamoDB::Model::ScalarAttributeType::B;
+        case ScalarType::s:
+            break;
+    }
+    return Aws::DynamoDB::Model::ScalarAttributeType::S;
+}
+
+// Build the [HASH, (RANGE)] KeySchemaElement list (the canonical order the
+// original always emitted).
+Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement> to_sdk_key_schema(const KeySchema& ks) {
+    Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement> out;
+    Aws::DynamoDB::Model::KeySchemaElement hash;
+    hash.SetAttributeName(ks.hash);
+    hash.SetKeyType(Aws::DynamoDB::Model::KeyType::HASH);
+    out.push_back(hash);
+    if (ks.range.has_value()) {
+        Aws::DynamoDB::Model::KeySchemaElement range;
+        range.SetAttributeName(*ks.range);
+        range.SetKeyType(Aws::DynamoDB::Model::KeyType::RANGE);
+        out.push_back(range);
+    }
+    return out;
+}
+
+Aws::DynamoDB::Model::Projection to_sdk_projection(const Projection& p) {
+    Aws::DynamoDB::Model::Projection out;
+    switch (p.type) {
+        case ProjectionType::all:
+            out.SetProjectionType(Aws::DynamoDB::Model::ProjectionType::ALL);
+            break;
+        case ProjectionType::keys_only:
+            out.SetProjectionType(Aws::DynamoDB::Model::ProjectionType::KEYS_ONLY);
+            break;
+        case ProjectionType::include:
+            out.SetProjectionType(Aws::DynamoDB::Model::ProjectionType::INCLUDE);
+            for (const auto& attr : p.non_key_attributes) {
+                out.AddNonKeyAttributes(attr);
+            }
+            break;
+    }
+    return out;
+}
+
+Aws::DynamoDB::Model::WarmThroughput to_sdk_warm(const WarmThroughput& w) {
+    Aws::DynamoDB::Model::WarmThroughput out;
+    out.SetReadUnitsPerSecond(w.read_units_per_second);
+    out.SetWriteUnitsPerSecond(w.write_units_per_second);
+    return out;
+}
+
+// Apply a billing spec to the CreateTableRequest. A nullopt billing defaults to
+// PAY_PER_REQUEST (the original's "no billing clause" default).
+void apply_billing(Aws::DynamoDB::Model::CreateTableRequest& request,
+                   const std::optional<BillingModeAndThroughput>& billing) {
+    if (!billing.has_value()) {
+        request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST);
+        return;
+    }
+    if (billing->mode == BillingMode::provisioned) {
+        request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PROVISIONED);
+        Aws::DynamoDB::Model::ProvisionedThroughput pt;
+        pt.SetReadCapacityUnits(billing->rcu);
+        pt.SetWriteCapacityUnits(billing->wcu);
+        request.SetProvisionedThroughput(pt);
+    } else {
+        request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST);
+        Aws::DynamoDB::Model::OnDemandThroughput od;
+        if (billing->od.max_read_request_units.has_value()) {
+            od.SetMaxReadRequestUnits(*billing->od.max_read_request_units);
+        }
+        if (billing->od.max_write_request_units.has_value()) {
+            od.SetMaxWriteRequestUnits(*billing->od.max_write_request_units);
+        }
+        request.SetOnDemandThroughput(od);
+    }
+}
+
+// A GSI has no billing MODE of its own (that is a table-level property); it
+// carries only the throughput that matches the table's mode. The original's
+// gsi production set ProvisionedThroughput / OnDemandThroughput directly.
+void apply_gsi_throughput(Aws::DynamoDB::Model::GlobalSecondaryIndex& gsi,
+                          const BillingModeAndThroughput& billing) {
+    if (billing.mode == BillingMode::provisioned) {
+        Aws::DynamoDB::Model::ProvisionedThroughput pt;
+        pt.SetReadCapacityUnits(billing.rcu);
+        pt.SetWriteCapacityUnits(billing.wcu);
+        gsi.SetProvisionedThroughput(pt);
+    } else {
+        Aws::DynamoDB::Model::OnDemandThroughput od;
+        if (billing.od.max_read_request_units.has_value()) {
+            od.SetMaxReadRequestUnits(*billing.od.max_read_request_units);
+        }
+        if (billing.od.max_write_request_units.has_value()) {
+            od.SetMaxWriteRequestUnits(*billing.od.max_write_request_units);
+        }
+        gsi.SetOnDemandThroughput(od);
+    }
+}
+
+}  // namespace
+
+Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
+    Aws::DynamoDB::Model::CreateTableRequest request;
+    request.SetTableName(in.table_name);
+
+    for (const auto& attr : in.attribute_definitions) {
+        Aws::DynamoDB::Model::AttributeDefinition def;
+        def.SetAttributeName(attr.name);
+        def.SetAttributeType(to_sdk(attr.type));
+        request.AddAttributeDefinitions(def);
+    }
+
+    request.SetKeySchema(to_sdk_key_schema(in.key_schema));
+
+    apply_billing(request, in.billing);
+
+    if (in.warm.has_value()) {
+        request.SetWarmThroughput(to_sdk_warm(*in.warm));
+    }
+
+    for (const auto& gsi : in.gsis) {
+        Aws::DynamoDB::Model::GlobalSecondaryIndex sdk_gsi;
+        sdk_gsi.SetIndexName(gsi.name);
+        sdk_gsi.SetKeySchema(to_sdk_key_schema(gsi.key_schema));
+        sdk_gsi.SetProjection(to_sdk_projection(gsi.projection));
+        if (gsi.billing.has_value()) {
+            apply_gsi_throughput(sdk_gsi, *gsi.billing);
+        }
+        if (gsi.warm.has_value()) {
+            sdk_gsi.SetWarmThroughput(to_sdk_warm(*gsi.warm));
+        }
+        request.AddGlobalSecondaryIndexes(sdk_gsi);
+    }
+
+    for (const auto& lsi : in.lsis) {
+        Aws::DynamoDB::Model::LocalSecondaryIndex sdk_lsi;
+        sdk_lsi.SetIndexName(lsi.name);
+        sdk_lsi.SetKeySchema(to_sdk_key_schema(lsi.key_schema));
+        sdk_lsi.SetProjection(to_sdk_projection(lsi.projection));
+        request.AddLocalSecondaryIndexes(sdk_lsi);
+    }
+
+    if (in.stream.has_value()) {
+        Aws::DynamoDB::Model::StreamSpecification stream;
+        stream.SetStreamEnabled(in.stream->enabled);
+        if (in.stream->enabled) {
+            switch (in.stream->view_type) {
+                case StreamViewType::keys_only:
+                    stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::KEYS_ONLY);
+                    break;
+                case StreamViewType::new_image:
+                    stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::NEW_IMAGE);
+                    break;
+                case StreamViewType::old_image:
+                    stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::OLD_IMAGE);
+                    break;
+                case StreamViewType::new_and_old_images:
+                    stream.SetStreamViewType(
+                        Aws::DynamoDB::Model::StreamViewType::NEW_AND_OLD_IMAGES);
+                    break;
+            }
+        }
+        request.SetStreamSpecification(stream);
+    }
+
+    if (in.sse.has_value()) {
+        Aws::DynamoDB::Model::SSESpecification sse;
+        sse.SetEnabled(in.sse->enabled);
+        if (in.sse->enabled) {
+            if (in.sse->sse_type == SseType::aes256) {
+                sse.SetSSEType(Aws::DynamoDB::Model::SSEType::AES256);
+            } else {
+                sse.SetSSEType(Aws::DynamoDB::Model::SSEType::KMS);
+            }
+            if (in.sse->kms_master_key_id.has_value()) {
+                sse.SetKMSMasterKeyId(*in.sse->kms_master_key_id);
+            }
+        }
+        request.SetSSESpecification(sse);
+    }
+
+    request.SetTableClass(in.table_class == TableClass::standard_infrequent_access
+                              ? Aws::DynamoDB::Model::TableClass::STANDARD_INFREQUENT_ACCESS
+                              : Aws::DynamoDB::Model::TableClass::STANDARD);
+
+    request.SetDeletionProtectionEnabled(in.deletion_protection);
+
+    for (const auto& tag : in.tags) {
+        Aws::DynamoDB::Model::Tag sdk_tag;
+        sdk_tag.SetKey(tag.key);
+        sdk_tag.SetValue(tag.value);
+        request.AddTags(sdk_tag);
+    }
+
+    auto outcome = client_->CreateTable(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return CreateTableOut{};
 }
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
@@ -170,6 +391,50 @@ Result<void> AwsDDBClient::wait_for_table_gone(const std::string& table_name) {
                                   std::string(err.GetRequestId().c_str())});
             }
             // transient: fall through and keep polling
+        }
+        std::this_thread::sleep_for(interval);
+        interval = std::min(interval * 2, cap);
+    }
+}
+
+Result<void> AwsDDBClient::wait_for_table_active(const std::string& table_name) {
+    // Bounded exponential backoff: 100ms doubling to a 2s cap (arch §10). Poll
+    // DescribeTable until the table reports ACTIVE. CREATING/UPDATING keep
+    // polling; any other status cannot progress to ACTIVE and is terminal.
+    // RESOURCE_NOT_FOUND right after CreateTable is eventual-consistency and is
+    // polled again; a non-retryable error is terminal; a transient error keeps
+    // polling (port of the original wait_for_table_active).
+    using Status = Aws::DynamoDB::Model::TableStatus;
+    std::chrono::milliseconds interval(100);
+    const std::chrono::milliseconds cap(2000);
+    while (true) {
+        Aws::DynamoDB::Model::DescribeTableRequest request;
+        request.SetTableName(table_name);
+        auto outcome = client_->DescribeTable(request);
+        if (outcome.IsSuccess()) {
+            const Status status = outcome.GetResult().GetTable().GetTableStatus();
+            if (status == Status::ACTIVE) {
+                return {};
+            }
+            if (status != Status::CREATING && status != Status::UPDATING) {
+                return fail(
+                    Error{Errc::service_error,
+                          "Table " + table_name + " is in state " +
+                              Aws::DynamoDB::Model::TableStatusMapper::GetNameForTableStatus(status)
+                                  .c_str() +
+                              " and will not become ACTIVE.",
+                          std::nullopt, std::nullopt});
+            }
+            // CREATING/UPDATING: keep polling.
+        } else {
+            const auto& err = outcome.GetError();
+            if (err.GetErrorType() != Aws::DynamoDB::DynamoDBErrors::RESOURCE_NOT_FOUND &&
+                !err.ShouldRetry()) {
+                return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                                  std::string(err.GetExceptionName().c_str()),
+                                  std::string(err.GetRequestId().c_str())});
+            }
+            // not-found (eventual consistency) or transient: keep polling.
         }
         std::this_thread::sleep_for(interval);
         interval = std::min(interval * 2, cap);

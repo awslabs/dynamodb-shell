@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "ddbsh/result.hpp"
+#include "ddbsh/table_schema.hpp"
 #include "ddbsh/value.hpp"
 
 namespace ddbsh {
@@ -133,6 +134,35 @@ struct DeleteTableIn {
 };
 struct DeleteTableOut {};
 
+// ---- CreateTable -----------------------------------------------------------
+// CREATE TABLE issues CreateTable then (unless NOWAIT) waits for the table to
+// become ACTIVE (arch §7/§10). The request carries the full SDK-free table
+// definition (ddbsh/table_schema.hpp) — the same value types the parse result
+// builds — so the public seam stays AWS-type-free (D11); the CLI-side adapter
+// translates it to Aws::DynamoDB::Model::CreateTableRequest.
+//
+// `billing == nullopt` means "no billing clause": the service defaults to
+// on-demand (PAY_PER_REQUEST), which the adapter applies — matching the
+// original create_table.cpp, which set PAY_PER_REQUEST when no billing clause
+// was given (arch §8). A present `billing` with mode pay_per_request and an
+// empty `od` is a bare `BILLING MODE ON DEMAND`; both `od` units == -1 is
+// `THROUGHPUT UNLIMITED` (arch §8).
+struct CreateTableIn {
+    std::string table_name;
+    std::vector<AttributeDef> attribute_definitions;
+    KeySchema key_schema;
+    std::optional<BillingModeAndThroughput> billing;  ///< nullopt => default on-demand
+    std::optional<WarmThroughput> warm;
+    std::vector<Gsi> gsis;
+    std::vector<Lsi> lsis;
+    std::optional<StreamSpec> stream;
+    std::optional<SseSpec> sse;
+    TableClass table_class = TableClass::standard;
+    bool deletion_protection = false;
+    std::vector<Tag> tags;
+};
+struct CreateTableOut {};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -179,9 +209,19 @@ public:
     virtual Result<QueryOut> query(const QueryIn&) = 0;
     virtual Result<ScanOut> scan(const ScanIn&) = 0;
     virtual Result<PutItemOut> put_item(const PutItemIn&) = 0;
+    virtual Result<CreateTableOut> create_table(const CreateTableIn&) = 0;
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;
+
+    /// Block (bounded exponential backoff, 100ms doubling to a 2s cap, arch
+    /// §10) until `table_name` reaches ACTIVE. Used by CREATE TABLE unless
+    /// NOWAIT. Returns success when the table is ACTIVE, or an Error on a
+    /// terminal control-plane failure (a non-retryable error, or a state that
+    /// cannot progress to ACTIVE). The waiter lives behind the seam because it
+    /// owns the SDK's error-classification/polling semantics; the
+    /// FakeDDBClient returns immediately.
+    virtual Result<void> wait_for_table_active(const std::string& table_name) = 0;
 
     /// Block (bounded exponential backoff, 100ms doubling to a 2s cap, arch
     /// §10) until `table_name` no longer exists. Used by DROP TABLE unless
@@ -190,7 +230,7 @@ public:
     /// because it owns the SDK's error-classification/polling semantics; the
     /// FakeDDBClient returns immediately.
     virtual Result<void> wait_for_table_gone(const std::string& table_name) = 0;
-    // update/transact/create + a CancelToken: added per sub-phase (2b-2d).
+    // update/transact + a CancelToken: added per sub-phase (2b-2d).
 };
 
 }  // namespace ddbsh
