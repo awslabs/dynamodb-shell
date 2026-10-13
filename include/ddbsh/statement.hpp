@@ -42,6 +42,7 @@ enum class StatementKind {
     show_tables,   ///< SHOW TABLES [BRIEF] [LIKE <template>]
     describe,      ///< DESCRIBE <table>
     drop_table,    ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
+    create_table,  ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
 };
 
 /// A self-contained parsed statement. Move-only: it owns the parsed AST via a

@@ -204,9 +204,39 @@
 %type <ddbsh::engine::CommandNode> connect_command quit_command
 %type <ddbsh::engine::CommandNode> drop_table_command describe_command
 %type <ddbsh::engine::CommandNode> show_tables_command show_version_command
+%type <ddbsh::engine::CommandNode> create_table_command
 
 %type <std::string> string region_name connect_endpoint like_clause
 %type <bool> brief_clause if_exists_clause nowait_clause
+
+/* ---- CREATE TABLE nonterminal value types (W2 part 2) --------------------
+ * The original built these directly as Aws:: model objects in the grammar
+ * actions; we build the SDK-free engine::* mirrors (src/parser/ast.hpp) and
+ * MOVE them up the productions (no raw owning pointers — P2a-02 Domain C/D).
+ */
+%type <ddbsh::engine::ScalarType> attribute_type
+%type <ddbsh::engine::AttributeDef> attribute_name_type
+%type <std::vector<ddbsh::engine::AttributeDef>> attribute_name_type_list
+%type <ddbsh::engine::KeySchema> key_schema primary_key
+%type <ddbsh::engine::BillingModeAndThroughput> billing_mode_and_throughput
+%type <std::optional<ddbsh::engine::BillingModeAndThroughput>> optional_billing_mode_and_throughput
+%type <ddbsh::engine::WarmThroughput> warm_throughput
+%type <std::optional<ddbsh::engine::WarmThroughput>> optional_warm_throughput
+%type <std::vector<ddbsh::engine::Gsi>> gsi_list gsi_specification
+%type <ddbsh::engine::Gsi> gsi
+%type <std::vector<ddbsh::engine::Lsi>> lsi_list lsi_specification
+%type <ddbsh::engine::Lsi> lsi
+%type <ddbsh::engine::Projection> index_projection
+%type <std::vector<std::string>> index_projection_list
+%type <ddbsh::engine::StreamSpec> stream_specification
+%type <std::optional<ddbsh::engine::StreamSpec>> optional_stream_specification
+%type <ddbsh::engine::StreamViewType> stream_view_type
+%type <ddbsh::engine::SseSpec> sse_specification
+%type <std::optional<ddbsh::engine::SseSpec>> optional_sse_specification
+%type <ddbsh::engine::TableClass> table_class optional_table_class
+%type <bool> deletion_protection optional_deletion_protection if_not_exists_clause
+%type <std::vector<ddbsh::engine::Tag>> table_tags table_tags_list optional_table_tags
+%type <ddbsh::engine::Tag> table_tag
 
 %%
 
@@ -249,6 +279,7 @@ control_command:
 ddl_command:
       drop_table_command { $$ = std::move($1); }
     | describe_command   { $$ = std::move($1); }
+    | create_table_command { $$ = std::move($1); }
     ;
 
 show_command:
@@ -291,6 +322,296 @@ show_tables_command:
         { $$ = ddbsh::engine::ShowTablesCmd{$3, std::move($4)}; }
     ;
 
+/* ---- CREATE TABLE (W2 part 2) --------------------------------------------
+ * A faithful port of the original create_table_command and its clause
+ * productions (parser.y). The trailing ';' is consumed by `input` (not here),
+ * so every $N is one lower than the original. Each clause builds the SDK-free
+ * engine::* mirror; optionals carry std::nullopt when the clause is absent,
+ * which the W4/W6 executor/renderer translate to the CreateTable request. The
+ * on-demand default (no billing clause) is applied at execution, exactly as the
+ * original did (create_table.cpp), not here. */
+create_table_command:
+      K_CREATE K_TABLE if_not_exists_clause nowait_clause string
+      '(' attribute_name_type_list ')'
+      primary_key optional_billing_mode_and_throughput optional_warm_throughput
+      gsi_list lsi_list optional_stream_specification optional_sse_specification
+      optional_table_class optional_deletion_protection optional_table_tags
+        {
+            ddbsh::engine::CreateTableCmd cmd;
+            cmd.if_not_exists = $3;
+            cmd.nowait = $4;
+            cmd.table_name = std::move($5);
+            cmd.attribute_definitions = std::move($7);
+            cmd.key_schema = std::move($9);
+            cmd.billing = std::move($10);
+            cmd.warm = std::move($11);
+            cmd.gsis = std::move($12);
+            cmd.lsis = std::move($13);
+            cmd.stream = std::move($14);
+            cmd.sse = std::move($15);
+            cmd.table_class = $16;
+            cmd.deletion_protection = $17;
+            cmd.tags = std::move($18);
+            $$ = std::move(cmd);
+        }
+    ;
+
+attribute_name_type_list:
+      attribute_name_type
+        {
+            $$ = std::vector<ddbsh::engine::AttributeDef>{};
+            $$.push_back(std::move($1));
+        }
+    | attribute_name_type_list ',' attribute_name_type
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+attribute_name_type:
+      string attribute_type
+        { $$ = ddbsh::engine::AttributeDef{std::move($1), $2}; }
+    ;
+
+attribute_type:
+      K_ATTRIBUTE_TYPE_NUMBER  { $$ = ddbsh::engine::ScalarType::n; }
+    | K_ATTRIBUTE_TYPE_STRING  { $$ = ddbsh::engine::ScalarType::s; }
+    | K_ATTRIBUTE_TYPE_BINARY  { $$ = ddbsh::engine::ScalarType::b; }
+    ;
+
+primary_key:
+      K_PRIMARY K_KEY key_schema  { $$ = std::move($3); }
+    ;
+
+/* The original always emits [HASH, RANGE] order regardless of the written
+ * order; KeySchema{hash, optional range} captures that canonically. */
+key_schema:
+      '(' string K_HASH ')'
+        { $$ = ddbsh::engine::KeySchema{std::move($2), std::nullopt}; }
+    | '(' string K_HASH ',' string K_RANGE ')'
+        { $$ = ddbsh::engine::KeySchema{std::move($2), std::move($5)}; }
+    | '(' string K_RANGE ',' string K_HASH ')'
+        { $$ = ddbsh::engine::KeySchema{std::move($5), std::move($2)}; }
+    ;
+
+billing_mode_and_throughput:
+      K_BILLING K_MODE K_ON K_DEMAND
+        {
+            ddbsh::engine::BillingModeAndThroughput b;
+            b.mode = ddbsh::engine::BillingMode::pay_per_request;
+            $$ = std::move(b);
+        }
+    | K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+        {
+            ddbsh::engine::BillingModeAndThroughput b;
+            b.mode = ddbsh::engine::BillingMode::pay_per_request;
+            b.od.max_read_request_units = ddbsh::engine::parse_ll($7);
+            b.od.max_write_request_units = ddbsh::engine::parse_ll($10);
+            $$ = std::move(b);
+        }
+    | K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+        {
+            ddbsh::engine::BillingModeAndThroughput b;
+            b.mode = ddbsh::engine::BillingMode::pay_per_request;
+            b.od.max_write_request_units = ddbsh::engine::parse_ll($7);
+            b.od.max_read_request_units = ddbsh::engine::parse_ll($10);
+            $$ = std::move(b);
+        }
+    | K_BILLING K_MODE K_ON K_DEMAND K_THROUGHPUT K_UNLIMITED
+        {
+            ddbsh::engine::BillingModeAndThroughput b;
+            b.mode = ddbsh::engine::BillingMode::pay_per_request;
+            b.od.max_read_request_units = -1;
+            b.od.max_write_request_units = -1;
+            $$ = std::move(b);
+        }
+    | K_BILLING K_MODE K_PROVISIONED '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+        {
+            ddbsh::engine::BillingModeAndThroughput b;
+            b.mode = ddbsh::engine::BillingMode::provisioned;
+            b.rcu = ddbsh::engine::parse_ll($5);
+            b.wcu = ddbsh::engine::parse_ll($8);
+            $$ = std::move(b);
+        }
+    | K_BILLING K_MODE K_PROVISIONED '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+        {
+            ddbsh::engine::BillingModeAndThroughput b;
+            b.mode = ddbsh::engine::BillingMode::provisioned;
+            b.wcu = ddbsh::engine::parse_ll($5);
+            b.rcu = ddbsh::engine::parse_ll($8);
+            $$ = std::move(b);
+        }
+    ;
+
+optional_billing_mode_and_throughput:
+      billing_mode_and_throughput  { $$ = std::move($1); }
+    | %empty                       { $$ = std::nullopt; }
+    ;
+
+warm_throughput:
+      K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_RCU ',' T_WHOLE_NUMBER K_WCU ')'
+        { $$ = ddbsh::engine::WarmThroughput{ddbsh::engine::parse_ll($4),
+                                             ddbsh::engine::parse_ll($7)}; }
+    | K_WARM K_THROUGHPUT '(' T_WHOLE_NUMBER K_WCU ',' T_WHOLE_NUMBER K_RCU ')'
+        { $$ = ddbsh::engine::WarmThroughput{ddbsh::engine::parse_ll($7),
+                                             ddbsh::engine::parse_ll($4)}; }
+    ;
+
+optional_warm_throughput:
+      warm_throughput  { $$ = std::move($1); }
+    | %empty           { $$ = std::nullopt; }
+    ;
+
+gsi_list:
+      K_GSI '(' gsi_specification ')'  { $$ = std::move($3); }
+    | %empty                           { $$ = std::vector<ddbsh::engine::Gsi>{}; }
+    ;
+
+gsi_specification:
+      gsi
+        {
+            $$ = std::vector<ddbsh::engine::Gsi>{};
+            $$.push_back(std::move($1));
+        }
+    | gsi_specification ',' gsi
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+gsi:
+      string K_ON key_schema index_projection optional_billing_mode_and_throughput optional_warm_throughput
+        {
+            ddbsh::engine::Gsi g;
+            g.name = std::move($1);
+            g.key_schema = std::move($3);
+            g.projection = std::move($4);
+            g.billing = std::move($5);
+            g.warm = std::move($6);
+            $$ = std::move(g);
+        }
+    ;
+
+lsi_list:
+      K_LSI '(' lsi_specification ')'  { $$ = std::move($3); }
+    | %empty                           { $$ = std::vector<ddbsh::engine::Lsi>{}; }
+    ;
+
+lsi_specification:
+      lsi
+        {
+            $$ = std::vector<ddbsh::engine::Lsi>{};
+            $$.push_back(std::move($1));
+        }
+    | lsi_specification ',' lsi
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+lsi:
+      string K_ON key_schema index_projection
+        {
+            ddbsh::engine::Lsi l;
+            l.name = std::move($1);
+            l.key_schema = std::move($3);
+            l.projection = std::move($4);
+            $$ = std::move(l);
+        }
+    ;
+
+index_projection:
+      K_PROJECTING K_ALL
+        { $$ = ddbsh::engine::Projection{ddbsh::engine::ProjectionType::all, {}}; }
+    | K_PROJECTING K_KEYS K_ONLY
+        { $$ = ddbsh::engine::Projection{ddbsh::engine::ProjectionType::keys_only, {}}; }
+    | K_PROJECTING K_INCLUDE '(' index_projection_list ')'
+        { $$ = ddbsh::engine::Projection{ddbsh::engine::ProjectionType::include, std::move($4)}; }
+    ;
+
+index_projection_list:
+      string
+        {
+            $$ = std::vector<std::string>{};
+            $$.push_back(std::move($1));
+        }
+    | index_projection_list ',' string
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+stream_specification:
+      K_STREAM '(' stream_view_type ')'
+        { $$ = ddbsh::engine::StreamSpec{true, $3}; }
+    | K_STREAM K_DISABLED
+        { $$ = ddbsh::engine::StreamSpec{false, ddbsh::engine::StreamViewType::keys_only}; }
+    ;
+
+optional_stream_specification:
+      stream_specification  { $$ = std::move($1); }
+    | %empty                { $$ = std::nullopt; }
+    ;
+
+stream_view_type:
+      K_KEYS K_ONLY    { $$ = ddbsh::engine::StreamViewType::keys_only; }
+    | K_NEW K_IMAGE    { $$ = ddbsh::engine::StreamViewType::new_image; }
+    | K_OLD K_IMAGE    { $$ = ddbsh::engine::StreamViewType::old_image; }
+    | K_BOTH K_IMAGES  { $$ = ddbsh::engine::StreamViewType::new_and_old_images; }
+    ;
+
+optional_sse_specification:
+      sse_specification  { $$ = std::move($1); }
+    | %empty             { $$ = std::nullopt; }
+    ;
+
+sse_specification:
+      K_SSE K_DISABLED
+        { $$ = ddbsh::engine::SseSpec{false, std::nullopt, std::nullopt}; }
+    | K_SSE '(' K_KEYID string K_KMS ')'
+        { $$ = ddbsh::engine::SseSpec{true, std::move($4), ddbsh::engine::SseType::kms}; }
+    | K_SSE '(' K_KEYID string K_AES256 ')'
+        { $$ = ddbsh::engine::SseSpec{true, std::move($4), ddbsh::engine::SseType::aes256}; }
+    ;
+
+table_class:
+      K_TABLE K_CLASS K_STANDARD
+        { $$ = ddbsh::engine::TableClass::standard; }
+    | K_TABLE K_CLASS K_STANDARD K_INFREQUENT K_ACCESS
+        { $$ = ddbsh::engine::TableClass::standard_infrequent_access; }
+    ;
+
+optional_table_class:
+      table_class  { $$ = $1; }
+    | %empty       { $$ = ddbsh::engine::TableClass::standard; }
+    ;
+
+deletion_protection:
+      K_DELETION K_PROTECTION K_ENABLED   { $$ = true; }
+    | K_DELETION K_PROTECTION K_DISABLED  { $$ = false; }
+    ;
+
+optional_deletion_protection:
+      deletion_protection  { $$ = $1; }
+    | %empty               { $$ = false; }
+    ;
+
+table_tags:
+      K_TAGS '(' table_tags_list ')'  { $$ = std::move($3); }
+    ;
+
+optional_table_tags:
+      table_tags  { $$ = std::move($1); }
+    | %empty      { $$ = std::vector<ddbsh::engine::Tag>{}; }
+    ;
+
+table_tags_list:
+      table_tag
+        {
+            $$ = std::vector<ddbsh::engine::Tag>{};
+            $$.push_back(std::move($1));
+        }
+    | table_tags_list ',' table_tag
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+table_tag:
+      string ':' string
+        { $$ = ddbsh::engine::Tag{std::move($1), std::move($3)}; }
+    ;
+
 /* A string literal source: double-quoted (unquoted here, outer quotes stripped
  * exactly as the original unquote() does — "" doubling is NOT collapsed, arch
  * §4) or a bare unquoted identifier. */
@@ -316,6 +637,11 @@ like_clause:
 if_exists_clause:
       %empty             { $$ = false; }
     | K_IF K_EXISTS      { $$ = true; }
+    ;
+
+if_not_exists_clause:
+      %empty             { $$ = false; }
+    | K_IF K_NOT K_EXISTS { $$ = true; }
     ;
 
 nowait_clause:

@@ -193,4 +193,186 @@ TEST(Parse, ExplainIsNotAllowedOnShow) {
     EXPECT_EQ(result.error().code, ddbsh::Errc::parse_error);
 }
 
+// ---- CREATE TABLE (W2 part 2) ----------------------------------------------
+
+TEST(Parse, CreateTableMinimalHashOnly) {
+    // No billing clause: the AST carries nullopt (on-demand default is applied
+    // at execution, not parse — matching the original create_table.cpp).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "create table t ( id number ) primary key ( id hash );");
+    ASSERT_EQ(stmt.kind(), StatementKind::create_table);
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    EXPECT_EQ(ct.table_name, "t");
+    EXPECT_FALSE(ct.if_not_exists);
+    EXPECT_FALSE(ct.nowait);
+    ASSERT_EQ(ct.attribute_definitions.size(), 1u);
+    EXPECT_EQ(ct.attribute_definitions[0].name, "id");
+    EXPECT_EQ(ct.attribute_definitions[0].type, ddbsh::engine::ScalarType::n);
+    EXPECT_EQ(ct.key_schema.hash, "id");
+    EXPECT_FALSE(ct.key_schema.range.has_value());
+    EXPECT_FALSE(ct.billing.has_value());
+    EXPECT_FALSE(ct.warm.has_value());
+    EXPECT_TRUE(ct.gsis.empty());
+    EXPECT_TRUE(ct.lsis.empty());
+    EXPECT_FALSE(ct.stream.has_value());
+    EXPECT_FALSE(ct.sse.has_value());
+    EXPECT_EQ(ct.table_class, ddbsh::engine::TableClass::standard);
+    EXPECT_FALSE(ct.deletion_protection);
+    EXPECT_TRUE(ct.tags.empty());
+}
+
+TEST(Parse, CreateTableIfNotExistsNowaitHashRange) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table if not exists nowait t ( pk string, sk number ) "
+                         "primary key ( pk hash, sk range );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    EXPECT_TRUE(ct.if_not_exists);
+    EXPECT_TRUE(ct.nowait);
+    ASSERT_EQ(ct.attribute_definitions.size(), 2u);
+    EXPECT_EQ(ct.attribute_definitions[0].type, ddbsh::engine::ScalarType::s);
+    EXPECT_EQ(ct.attribute_definitions[1].type, ddbsh::engine::ScalarType::n);
+    EXPECT_EQ(ct.key_schema.hash, "pk");
+    ASSERT_TRUE(ct.key_schema.range.has_value());
+    EXPECT_EQ(*ct.key_schema.range, "sk");
+}
+
+TEST(Parse, CreateTableRangeHashReordersToHashFirst) {
+    // Written RANGE, HASH; the AST normalizes to [HASH, RANGE] as the original.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt =
+        parse_ok(session, "create table t ( a string, b string ) primary key ( a range, b hash );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    EXPECT_EQ(ct.key_schema.hash, "b");
+    ASSERT_TRUE(ct.key_schema.range.has_value());
+    EXPECT_EQ(*ct.key_schema.range, "a");
+}
+
+TEST(Parse, CreateTableProvisionedThroughput) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table t ( id number ) primary key ( id hash ) "
+                         "billing mode provisioned ( 5 rcu, 7 wcu );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_TRUE(ct.billing.has_value());
+    EXPECT_EQ(ct.billing->mode, ddbsh::engine::BillingMode::provisioned);
+    EXPECT_EQ(ct.billing->rcu, 5);
+    EXPECT_EQ(ct.billing->wcu, 7);
+}
+
+TEST(Parse, CreateTableProvisionedThroughputWcuFirst) {
+    // The RCU/WCU clause is order-independent (arch §8): WCU first still maps
+    // correctly.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table t ( id number ) primary key ( id hash ) "
+                         "billing mode provisioned ( 7 wcu, 5 rcu );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_TRUE(ct.billing.has_value());
+    EXPECT_EQ(ct.billing->rcu, 5);
+    EXPECT_EQ(ct.billing->wcu, 7);
+}
+
+TEST(Parse, CreateTableOnDemandBareHasNoThroughputUnits) {
+    // `BILLING MODE ON DEMAND` with no THROUGHPUT clause: present billing, but
+    // on-demand max units unset (distinct from the no-billing default — the
+    // original emits an empty OnDemandThroughput here, nothing there).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table t ( id number ) primary key ( id hash ) "
+                         "billing mode on demand;");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_TRUE(ct.billing.has_value());
+    EXPECT_EQ(ct.billing->mode, ddbsh::engine::BillingMode::pay_per_request);
+    EXPECT_FALSE(ct.billing->od.max_read_request_units.has_value());
+    EXPECT_FALSE(ct.billing->od.max_write_request_units.has_value());
+}
+
+TEST(Parse, CreateTableOnDemandThroughputUnlimited) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table t ( id number ) primary key ( id hash ) "
+                         "billing mode on demand throughput unlimited;");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_TRUE(ct.billing.has_value());
+    ASSERT_TRUE(ct.billing->od.max_read_request_units.has_value());
+    EXPECT_EQ(*ct.billing->od.max_read_request_units, -1);
+    EXPECT_EQ(*ct.billing->od.max_write_request_units, -1);
+}
+
+TEST(Parse, CreateTableWarmThroughput) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table t ( id number ) primary key ( id hash ) "
+                         "warm throughput ( 100 rcu, 200 wcu );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_TRUE(ct.warm.has_value());
+    EXPECT_EQ(ct.warm->read_units_per_second, 100);
+    EXPECT_EQ(ct.warm->write_units_per_second, 200);
+}
+
+TEST(Parse, CreateTableGsiAndLsi) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(
+        session,
+        "create table t ( pk string, sk string, g string ) primary key ( pk hash, sk range ) "
+        "gsi ( gsi1 on ( g hash ) projecting all ) "
+        "lsi ( lsi1 on ( pk hash, g range ) projecting include ( sk ) );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_EQ(ct.gsis.size(), 1u);
+    EXPECT_EQ(ct.gsis[0].name, "gsi1");
+    EXPECT_EQ(ct.gsis[0].key_schema.hash, "g");
+    EXPECT_EQ(ct.gsis[0].projection.type, ddbsh::engine::ProjectionType::all);
+    ASSERT_EQ(ct.lsis.size(), 1u);
+    EXPECT_EQ(ct.lsis[0].name, "lsi1");
+    EXPECT_EQ(ct.lsis[0].projection.type, ddbsh::engine::ProjectionType::include);
+    ASSERT_EQ(ct.lsis[0].projection.non_key_attributes.size(), 1u);
+    EXPECT_EQ(ct.lsis[0].projection.non_key_attributes[0], "sk");
+}
+
+TEST(Parse, CreateTableStreamSseClassDeletionTags) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "create table t ( id number ) primary key ( id hash ) "
+                         "stream ( both images ) "
+                         "sse ( keyid \"abc\" kms ) "
+                         "table class standard infrequent access "
+                         "deletion protection enabled "
+                         "tags ( env : prod, team : db );");
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_TRUE(ct.stream.has_value());
+    EXPECT_TRUE(ct.stream->enabled);
+    EXPECT_EQ(ct.stream->view_type, ddbsh::engine::StreamViewType::new_and_old_images);
+    ASSERT_TRUE(ct.sse.has_value());
+    EXPECT_TRUE(ct.sse->enabled);
+    ASSERT_TRUE(ct.sse->kms_master_key_id.has_value());
+    EXPECT_EQ(*ct.sse->kms_master_key_id, "abc");
+    EXPECT_EQ(ct.sse->sse_type, ddbsh::engine::SseType::kms);
+    EXPECT_EQ(ct.table_class, ddbsh::engine::TableClass::standard_infrequent_access);
+    EXPECT_TRUE(ct.deletion_protection);
+    ASSERT_EQ(ct.tags.size(), 2u);
+    EXPECT_EQ(ct.tags[0].key, "env");
+    EXPECT_EQ(ct.tags[0].value, "prod");
+    EXPECT_EQ(ct.tags[1].key, "team");
+    EXPECT_EQ(ct.tags[1].value, "db");
+}
+
+TEST(Parse, ExplainCreateTableSetsFlag) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "explain create table t ( id number ) primary key ( id hash );");
+    EXPECT_EQ(stmt.kind(), StatementKind::create_table);
+    EXPECT_TRUE(stmt.explain());
+}
+
 }  // namespace
