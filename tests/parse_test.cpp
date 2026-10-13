@@ -18,6 +18,7 @@
 #include "ddbsh/session.hpp"
 #include "ddbsh/statement.hpp"
 
+#include "expressions/symbol_table.hpp"
 #include "fake_ddb_client.hpp"
 #include "parser/ast.hpp"
 
@@ -486,6 +487,173 @@ TEST(Parse, ExplainInsertSetsFlag) {
     ddbsh::Session session = make_session(client);
     auto stmt = parse_ok(session, "explain insert into t ( id ) values ( 1 );");
     EXPECT_EQ(stmt.kind(), StatementKind::insert);
+    EXPECT_TRUE(stmt.explain());
+}
+
+// ---- SELECT (W3 part 2) ----------------------------------------------------
+
+// Serialize a parsed WHERE tree as a scan filter with a fixed-prefix symbol
+// table, so a test can assert the whole expression tree parsed into the right
+// structure (arch §6 alias scheme). Precondition: the SelectCmd has a WHERE.
+std::string scan_filter_of(const ddbsh::engine::SelectCmd& select) {
+    ddbsh::engine::SymbolTable st("aaa");
+    return select.where->scan_filter_expression(&st);
+}
+
+TEST(Parse, SelectStarNoWhere) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select * from t;");
+    ASSERT_EQ(stmt.kind(), StatementKind::select_statement);
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    EXPECT_FALSE(sel.consistent);
+    EXPECT_TRUE(sel.projection.empty());  // `*` => project all
+    EXPECT_EQ(sel.table, "t");
+    EXPECT_FALSE(sel.index.has_value());
+    EXPECT_EQ(sel.where, nullptr);  // no WHERE clause
+    EXPECT_EQ(sel.rcc, ddbsh::engine::ReturnConsumedCapacity::none);
+    EXPECT_FALSE(sel.ratelimit.has_value());
+}
+
+TEST(Parse, SelectProjectionPaths) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    // Dotted and subscripted attribute paths are preserved verbatim in the
+    // projection list (the symbol table tokenizes them later).
+    auto stmt = parse_ok(session, "select a, b.c, d[0] from t;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    ASSERT_EQ(sel.projection.size(), 3u);
+    EXPECT_EQ(sel.projection[0], "a");
+    EXPECT_EQ(sel.projection[1], "b.c");
+    EXPECT_EQ(sel.projection[2], "d[0]");
+}
+
+TEST(Parse, SelectConsistent) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select consistent * from t;");
+    EXPECT_TRUE(node_of<ddbsh::engine::SelectCmd>(stmt).consistent);
+}
+
+TEST(Parse, SelectTableDotIndex) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select * from t.idx;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    EXPECT_EQ(sel.table, "t");
+    ASSERT_TRUE(sel.index.has_value());
+    EXPECT_EQ(*sel.index, "idx");
+}
+
+TEST(Parse, SelectWhereEquality) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select * from t where id = 5;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    ASSERT_NE(sel.where, nullptr);
+    // Full key equality on a hash-only table is a GetItem (arch §8).
+    EXPECT_TRUE(sel.where->can_getitem("id", ""));
+    EXPECT_EQ(scan_filter_of(sel), "#aaaa1 = :vaaa1");
+}
+
+TEST(Parse, SelectWhereNotEqualDesugars) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select * from t where id != 5;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    EXPECT_EQ(scan_filter_of(sel), "NOT (#aaaa1 = :vaaa1)");  // arch §14 item 4
+}
+
+TEST(Parse, SelectWhereAndOr) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select * from t where a = 1 and b = 2;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    EXPECT_EQ(scan_filter_of(sel), "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2");
+}
+
+TEST(Parse, SelectWhereIsNotNullDesugars) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    // IS NOT NULL => NOT (a = <null>) AND attribute_exists(a)  (arch §6).
+    auto stmt = parse_ok(session, "select * from t where a is not null;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    EXPECT_EQ(scan_filter_of(sel), "NOT (#aaaa1 = :vaaa1) AND attribute_exists(#aaaa1)");
+}
+
+TEST(Parse, SelectWhereBetweenInBeginsWithContains) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "select * from t where a between 1 and 9 and b in ( 1, 2 ) and "
+                         "begins_with(c, \"pre\") and contains(d, \"x\");");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    EXPECT_EQ(scan_filter_of(sel),
+              "#aaaa1 BETWEEN :vaaa1 AND :vaaa2 AND #aaaa2 IN (:vaaa3, :vaaa4) AND "
+              "begins_with(#aaaa3, :vaaa5) AND contains(#aaaa4, :vaaa6)");
+}
+
+TEST(Parse, SelectWhereAttributeExistsTypeAndSize) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "select * from t where attribute_exists(a) and "
+                         "attribute_not_exists(b) and attribute_type(c, number) and size(d) > 3;");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    // attribute_not_exists renders as NOT (attribute_exists(...)). size(d)
+    // becomes the literal lhs "size(d)" which the symbol table aliases AS A
+    // WHOLE (one attribute name) — faithfully reproducing the original's
+    // behavior (CLogicalComparison stores "size(" + attr + ")" verbatim and
+    // passes it through new_attribute, which only splits on '.'/'['). This is
+    // a latent oracle quirk (the DynamoDB-correct form would alias only the
+    // inner attribute); no golden exercises size(), and we preserve the
+    // original behavior rather than diverge silently (tenet 2).
+    EXPECT_EQ(scan_filter_of(sel),
+              "attribute_exists(#aaaa1) AND NOT (attribute_exists(#aaaa2)) AND "
+              "attribute_type(#aaaa3, :vaaa1) AND #aaaa4 > :vaaa2");
+}
+
+TEST(Parse, SelectReturnConsumedCapacity) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    EXPECT_EQ(node_of<ddbsh::engine::SelectCmd>(
+                  parse_ok(session, "select * from t return consumed capacity total;"))
+                  .rcc,
+              ddbsh::engine::ReturnConsumedCapacity::total);
+    EXPECT_EQ(node_of<ddbsh::engine::SelectCmd>(
+                  parse_ok(session, "select * from t return consumed capacity indexes;"))
+                  .rcc,
+              ddbsh::engine::ReturnConsumedCapacity::indexes);
+}
+
+TEST(Parse, SelectRatelimitAndRccIsSemanticError) {
+    // The original rejected combining a ratelimit with RETURN CONSUMED CAPACITY
+    // with a verbatim message (arch §9); reproduced byte-for-byte.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto result =
+        session.parse("select * from t return consumed capacity total with ratelimit ( 10 rcu );");
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ddbsh::Errc::invalid_argument);
+    EXPECT_EQ(result.error().message,
+              "You cannot specify both a ratelimit and a return_consumed_capacity.");
+}
+
+TEST(Parse, SelectWithRatelimitAlone) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "select * from t with ratelimit ( 10 rcu, 20 wcu );");
+    const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+    ASSERT_TRUE(sel.ratelimit.has_value());
+    EXPECT_DOUBLE_EQ(sel.ratelimit->rcu, 10.0);
+    EXPECT_DOUBLE_EQ(sel.ratelimit->wcu, 20.0);
+}
+
+TEST(Parse, ExplainSelectSetsFlag) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "explain select * from t where id = 5;");
+    EXPECT_EQ(stmt.kind(), StatementKind::select_statement);
     EXPECT_TRUE(stmt.explain());
 }
 

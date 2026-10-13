@@ -70,6 +70,14 @@ public:
     /// error"); this composes the byte-exact user string `[line, col] message
     /// at <lexeme>` the original emitted (arch §9, tenet 5).
     void set_error(const std::string& message);
+
+    /// Record a SEMANTIC error from a grammar action with a VERBATIM message
+    /// (no `[line, col] ... at <lexeme>` framing). Used where the original
+    /// emitted a plain logerror from inside a reduction — e.g. SELECT's
+    /// "You cannot specify both a ratelimit and a return_consumed_capacity."
+    /// The message is reproduced byte-for-byte (tenet 5); the recorded error
+    /// makes parse() fail so the statement is rejected.
+    void set_semantic_error(std::string message);
     const std::optional<Error>& error() const { return error_; }
 
 private:

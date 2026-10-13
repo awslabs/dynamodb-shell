@@ -20,6 +20,7 @@
 #define DDBSH_SRC_PARSER_AST_HPP
 
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -28,6 +29,7 @@
 
 #include "ddbsh/statement.hpp"
 #include "ddbsh/value.hpp"
+#include "expressions/where.hpp"
 
 namespace ddbsh::engine {
 
@@ -247,9 +249,40 @@ struct InsertCmd {
     ReturnValue return_value = ReturnValue::none;
 };
 
+// ---- SELECT (W3 part 2) ----------------------------------------------------
+
+/// A SELECT target: a base table, optionally qualified by `.index` (arch §7,
+/// §8). The original carried this as a 1-or-2 element Aws::Vector<Aws::String>;
+/// a named struct makes the index-vs-no-index distinction explicit.
+struct TableReference {
+    std::string table;
+    std::optional<std::string> index;  ///< `table.index` form; nullopt for base table
+};
+
+/// RETURN CONSUMED CAPACITY target (the original ReturnConsumedCapacity). The
+/// default is `none`; a ratelimit forces `total` at execution (arch §8). Mixing
+/// an explicit RETURN CONSUMED CAPACITY with a ratelimit is a parse-time error
+/// (the original's "You cannot specify both ..." message).
+enum class ReturnConsumedCapacity { none, total, indexes };
+
+/// SELECT [CONSISTENT] <projection|*> FROM <table>[.<index>] [WHERE ...]
+/// [RETURN CONSUMED CAPACITY ...] [WITH RATELIMIT ...]. An empty `projection`
+/// means `*` (project all attributes), exactly as the original treated a
+/// missing projection list. `where` is null when there is no WHERE clause.
+/// Move-only: it owns the WHERE expression tree via unique_ptr<Where>.
+struct SelectCmd {
+    bool consistent = false;
+    std::vector<std::string> projection;  ///< empty => `*` (all attributes)
+    std::string table;
+    std::optional<std::string> index;
+    std::unique_ptr<Where> where;  ///< null => no WHERE clause
+    ReturnConsumedCapacity rcc = ReturnConsumedCapacity::none;
+    std::optional<RateLimit> ratelimit;
+};
+
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
-                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd>;
+                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd>;
 
 /// Map a CommandNode to its public StatementKind. The variant alternative is
 /// the single source of truth; this keeps the public enum in lockstep.
@@ -275,6 +308,8 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::create_table;
             } else if constexpr (std::is_same_v<T, InsertCmd>) {
                 return StatementKind::insert;
+            } else if constexpr (std::is_same_v<T, SelectCmd>) {
+                return StatementKind::select_statement;
             } else {
                 static_assert(sizeof(T) == 0, "unhandled CommandNode alternative");
             }

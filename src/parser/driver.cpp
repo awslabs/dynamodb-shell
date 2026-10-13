@@ -74,4 +74,14 @@ void Driver::set_error(const std::string& message) {
     error_ = Error{Errc::parse_error, std::move(composed), std::nullopt, std::nullopt};
 }
 
+void Driver::set_semantic_error(std::string message) {
+    // A verbatim semantic error from a grammar reduction (no [line, col]
+    // framing): the original printed these via a bare logerror(). Only record
+    // the FIRST such error so an earlier diagnostic is not overwritten during
+    // error recovery.
+    if (!error_.has_value()) {
+        error_ = Error{Errc::invalid_argument, std::move(message), std::nullopt, std::nullopt};
+    }
+}
+
 }  // namespace ddbsh::engine

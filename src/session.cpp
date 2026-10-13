@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
 
 namespace ddbsh {
@@ -21,6 +22,16 @@ namespace ddbsh {
 struct Session::Impl {
     SessionConfig config;
     IDDBClient& client;  // borrowed; the embedder guarantees it outlives us
+
+    // Per-session statement counter backing the deterministic expression-alias
+    // prefix (arch §14 item 1). The original kept this in the CDDBSh singleton
+    // (a process global, T1); the Phase-2b rules move it onto the Session so
+    // concurrent sessions never share alias state. next_alias_prefix() mints
+    // the next prefix (0 -> "aaa", 1 -> "baa", ...); the planner consumes it
+    // when it builds a SymbolTable (wired in W4, when SELECT executes).
+    unsigned long alias_prefix_counter = 0;
+
+    std::string next_alias_prefix() { return engine::unique_prefix(alias_prefix_counter++); }
 
     Impl(SessionConfig cfg, IDDBClient& c) : config(std::move(cfg)), client(c) {}
 };
@@ -76,9 +87,11 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
         case StatementKind::drop_table:
         case StatementKind::create_table:
         case StatementKind::insert:
-            // Parsed in W2; execution (behind IDDBClient) lands in W4/W5. Until
-            // then, report a clear not-implemented Error rather than a parse
-            // error (D19), so the command surface is observable and tested.
+        case StatementKind::select_statement:
+            // Parsed in W2/W3; execution (behind IDDBClient) lands in W4/W5.
+            // Until then, report a clear not-implemented Error rather than a
+            // parse error (D19), so the command surface is observable and
+            // tested.
             return fail(Errc::not_implemented,
                         "command parsed but not yet executable in this build");
     }

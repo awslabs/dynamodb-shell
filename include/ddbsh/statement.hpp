@@ -35,15 +35,16 @@ struct ParsedStatement;  // defined in src/parser/ast.hpp (engine-internal)
 /// The kind of statement parsed. Derived from the owned AST node; grows into
 /// the full command catalog as families port.
 enum class StatementKind {
-    empty,         ///< blank / comment-only / bare-';' input
-    show_version,  ///< SHOW VERSION
-    quit,          ///< QUIT
-    connect,       ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
-    show_tables,   ///< SHOW TABLES [BRIEF] [LIKE <template>]
-    describe,      ///< DESCRIBE <table>
-    drop_table,    ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
-    create_table,  ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
-    insert,        ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
+    empty,             ///< blank / comment-only / bare-';' input
+    show_version,      ///< SHOW VERSION
+    quit,              ///< QUIT
+    connect,           ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
+    show_tables,       ///< SHOW TABLES [BRIEF] [LIKE <template>]
+    describe,          ///< DESCRIBE <table>
+    drop_table,        ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
+    create_table,      ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
+    insert,            ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
+    select_statement,  ///< SELECT [CONSISTENT] <proj|*> FROM <table>[.<index>] [WHERE ...]
 };
 
 /// A self-contained parsed statement. Move-only: it owns the parsed AST via a

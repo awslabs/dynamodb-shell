@@ -43,6 +43,14 @@
 
 %code {
     #include "parser/driver.hpp"
+    // Concrete WHERE-tree node types the SELECT reductions construct (W3).
+    // ast.hpp (via %code requires) already pulls the LogicalExpression base and
+    // Where; these headers add the leaf/compound nodes used only in actions.
+    #include "expressions/logical_and.hpp"
+    #include "expressions/logical_comparison.hpp"
+    #include "expressions/logical_filter_predicates.hpp"
+    #include "expressions/logical_or.hpp"
+    #include "expressions/logical_range_predicates.hpp"
     // The reentrant flex scanner entry (defined in the generated lexer). The
     // bridge ddbsh_lex(Driver&) forwards to it with the Driver's scanner
     // handle; bison's yylex is mapped to that bridge.
@@ -254,6 +262,33 @@
 %type <std::optional<ddbsh::engine::RateLimit>> optional_ratelimit ratelimit
 %type <ddbsh::engine::ReturnValue> optional_return_value
 
+/* ---- SELECT + WHERE expression tree (W3 part 2) --------------------------
+ * The original built a CSelectCommand plus a CWhere/CLogicalExpression tree in
+ * the grammar; we build the SDK-free engine::SelectCmd carrying a
+ * unique_ptr<Where> (which owns the unique_ptr<LogicalExpression> tree). The
+ * expression nodes are MOVED up the productions (RAII ownership, no NEW/FREE,
+ * no raw owning pointers — P2a-02 Domain C/D); a parse error unwinds the
+ * semantic-value stack and frees the partially-built tree with no leak. */
+%type <ddbsh::engine::CommandNode> get_command select_command
+%type <bool> optional_consistent
+%type <std::vector<std::string>> select_projection select_attribute_list
+%type <std::string> select_attribute lee_lhs comparison_op
+%type <ddbsh::engine::TableReference> table_optional_index_name
+%type <std::unique_ptr<ddbsh::engine::LogicalExpression>> logical_expression
+%type <std::unique_ptr<ddbsh::engine::LogicalExpression>> logical_expression_element
+%type <std::unique_ptr<ddbsh::engine::Where>> optional_where_clause where_clause
+%type <ddbsh::engine::ReturnConsumedCapacity> optional_return_consumed_capacity
+
+/* Precedence/associativity for the WHERE expression grammar, matching the
+ * original parser.y (low -> high): OR < AND < NOT < BETWEEN < . [ ]. Required
+ * to resolve the ambiguous logical_expression recursion the same way the
+ * original did. */
+%left K_OR
+%left K_AND
+%left K_NOT
+%left K_BETWEEN
+%left '.' '[' ']'
+
 %%
 
 /* One `;`-terminated statement per parse (the engine parses one command at a
@@ -283,8 +318,8 @@ command:
     ;
 
 /* EXPLAIN accepts ddl/dml commands only (as the original did); SHOW/CONNECT/
- * QUIT are not explainable. dml here is INSERT/REPLACE (W2 part 2); SELECT
- * joins when it lands (W3). */
+ * QUIT are not explainable. dml is the write family (INSERT/REPLACE) and the
+ * read family (SELECT via get_command, W3). */
 explainable:
       ddl_command        { $$ = std::move($1); }
     | dml_command        { $$ = std::move($1); }
@@ -301,10 +336,15 @@ ddl_command:
     | create_table_command { $$ = std::move($1); }
     ;
 
-/* dml for W2 part 2 is the write family (INSERT/REPLACE). SELECT (get_command)
- * joins dml when it lands (W3). */
+/* dml for the write family (INSERT/REPLACE) and the read family (SELECT via
+ * get_command, W3). Both join `explainable` so EXPLAIN works over them. */
 dml_command:
-      write_command      { $$ = std::move($1); }
+      get_command        { $$ = std::move($1); }
+    | write_command      { $$ = std::move($1); }
+    ;
+
+get_command:
+      select_command     { $$ = std::move($1); }
     ;
 
 write_command:
@@ -815,6 +855,193 @@ optional_return_value:
     | K_RETURN K_VALUES K_UPDATED K_OLD   { $$ = ddbsh::engine::ReturnValue::updated_old; }
     | K_RETURN K_VALUES K_UPDATED K_NEW   { $$ = ddbsh::engine::ReturnValue::updated_new; }
     | %empty                              { $$ = ddbsh::engine::ReturnValue::none; }
+    ;
+
+/* ---- SELECT (W3 part 2) --------------------------------------------------
+ * The trailing ';' is consumed by `input`, so each $N is one lower than the
+ * original select_command. The original rejected combining an explicit RETURN
+ * CONSUMED CAPACITY with a ratelimit (both force ReturnConsumedCapacity on the
+ * request); we reproduce that byte-exact error via a semantic error on the
+ * Driver, which makes the parse fail (the statement is not executed). */
+select_command:
+      K_SELECT optional_consistent select_projection K_FROM table_optional_index_name
+      optional_where_clause optional_return_consumed_capacity optional_ratelimit
+        {
+            if ($8.has_value() &&
+                $7 != ddbsh::engine::ReturnConsumedCapacity::none) {
+                drv.set_semantic_error(
+                    "You cannot specify both a ratelimit and a return_consumed_capacity.");
+                // A placeholder result; the recorded error makes parse() fail
+                // regardless, so this node is never executed.
+                $$ = ddbsh::engine::EmptyCmd{};
+            } else {
+                ddbsh::engine::SelectCmd cmd;
+                cmd.consistent = $2;
+                cmd.projection = std::move($3);
+                cmd.table = std::move($5.table);
+                cmd.index = std::move($5.index);
+                cmd.where = std::move($6);
+                cmd.rcc = $7;
+                cmd.ratelimit = std::move($8);
+                $$ = std::move(cmd);
+            }
+        }
+    ;
+
+optional_consistent:
+      %empty         { $$ = false; }
+    | K_CONSISTENT   { $$ = true; }
+    ;
+
+/* `*` is an empty projection (project all attributes), exactly as the original
+ * treated a missing list. */
+select_projection:
+      '*'                     { $$ = std::vector<std::string>{}; }
+    | select_attribute_list   { $$ = std::move($1); }
+    ;
+
+select_attribute_list:
+      select_attribute
+        {
+            $$ = std::vector<std::string>{};
+            $$.push_back(std::move($1));
+        }
+    | select_attribute_list ',' select_attribute
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+select_attribute:
+      lee_lhs  { $$ = std::move($1); }
+    ;
+
+table_optional_index_name:
+      table_name '.' table_name
+        { $$ = ddbsh::engine::TableReference{std::move($1), std::move($3)}; }
+    | table_name
+        { $$ = ddbsh::engine::TableReference{std::move($1), std::nullopt}; }
+    ;
+
+optional_where_clause:
+      %empty         { $$ = nullptr; }
+    | where_clause   { $$ = std::move($1); }
+    ;
+
+where_clause:
+      K_WHERE logical_expression
+        { $$ = std::make_unique<ddbsh::engine::Where>(std::move($2)); }
+    ;
+
+/* The WHERE expression tree. NOT toggles the child's negate flag; parentheses
+ * mark a paren group (which blocks the AND/OR flatten factories); AND/OR use
+ * the flatten factories (make_and/make_or). */
+logical_expression:
+      logical_expression_element
+        { $$ = std::move($1); }
+    | K_NOT logical_expression
+        { $2->negate(); $$ = std::move($2); }
+    | '(' logical_expression ')'
+        { $2->set_paren_group(); $$ = std::move($2); }
+    | logical_expression K_AND logical_expression
+        { $$ = ddbsh::engine::LogicalAnd::make_and(std::move($1), std::move($3)); }
+    | logical_expression K_OR logical_expression
+        { $$ = ddbsh::engine::LogicalOr::make_or(std::move($1), std::move($3)); }
+    ;
+
+logical_expression_element:
+      lee_lhs comparison_op lee_rhs
+        {
+            $$ = std::make_unique<ddbsh::engine::LogicalComparison>(
+                std::move($1), $2, std::move($3));
+        }
+    | lee_lhs K_IS K_NULL
+        {
+            // IS NULL desugars to `= <null>` (arch §6).
+            $$ = std::make_unique<ddbsh::engine::LogicalComparison>(
+                std::move($1), "=", ddbsh::Value::null_value());
+        }
+    | lee_lhs K_IS K_NOT K_NULL
+        {
+            // IS NOT NULL desugars to `NOT (= <null>) AND attribute_exists(a)`
+            // (arch §6, §14 item 4). The lhs path is used by both leaves.
+            auto cmp = std::make_unique<ddbsh::engine::LogicalComparison>(
+                $1, "=", ddbsh::Value::null_value());
+            cmp->negate();
+            auto exists = std::make_unique<ddbsh::engine::LogicalAttributeExists>(
+                std::move($1), true);
+            $$ = ddbsh::engine::LogicalAnd::make_and(std::move(cmp), std::move(exists));
+        }
+    | lee_lhs K_BETWEEN lee_rhs K_AND lee_rhs
+        {
+            $$ = std::make_unique<ddbsh::engine::LogicalBetween>(
+                std::move($1), std::move($3), std::move($5));
+        }
+    | lee_lhs K_IN '(' lee_rhs_list ')'
+        {
+            $$ = std::make_unique<ddbsh::engine::LogicalIn>(std::move($1), std::move($4));
+        }
+    | K_ATTRIBUTE_EXISTS '(' lee_lhs ')'
+        {
+            $$ = std::make_unique<ddbsh::engine::LogicalAttributeExists>(std::move($3), true);
+        }
+    | K_ATTRIBUTE_NOT_EXISTS '(' lee_lhs ')'
+        {
+            // attribute_not_exists = negated attribute_exists (arch §14 item 4).
+            $$ = std::make_unique<ddbsh::engine::LogicalAttributeExists>(std::move($3), false);
+        }
+    | K_ATTRIBUTE_TYPE '(' lee_lhs ',' attribute_type ')'
+        {
+            // Carry the scalar-type token ("N"/"S"/"B") as a string, decoupling
+            // the expression tree from the AST scalar-type enum.
+            std::string type_token = $5 == ddbsh::engine::ScalarType::n   ? "N"
+                                     : $5 == ddbsh::engine::ScalarType::s ? "S"
+                                                                          : "B";
+            $$ = std::make_unique<ddbsh::engine::LogicalAttributeType>(
+                std::move($3), std::move(type_token));
+        }
+    | K_BEGINS_WITH '(' lee_lhs ',' string ')'
+        {
+            $$ = std::make_unique<ddbsh::engine::LogicalBeginsWith>(
+                std::move($3), ddbsh::Value::string_value(std::move($5)));
+        }
+    | K_CONTAINS '(' lee_lhs ',' string ')'
+        {
+            $$ = std::make_unique<ddbsh::engine::LogicalContains>(
+                std::move($3), ddbsh::Value::string_value(std::move($5)));
+        }
+    | K_SIZE '(' lee_lhs ')' comparison_op lee_rhs
+        {
+            // The lhs becomes the literal path `size(<attr>)` (arch §6, §14).
+            std::string lhs = "size(" + $3 + ")";
+            $$ = std::make_unique<ddbsh::engine::LogicalComparison>(
+                std::move(lhs), $5, std::move($6));
+        }
+    ;
+
+/* lee_lhs is an attribute path: a bare name, a `[subscript]` index, or a dotted
+ * sub-path. Built as a plain string (the symbol table tokenizes it per segment
+ * at serialization time, arch §6). */
+lee_lhs:
+      string                           { $$ = std::move($1); }
+    | lee_lhs '[' T_WHOLE_NUMBER ']'   { $$ = $1 + "[" + $3 + "]"; }
+    | lee_lhs '.' lee_lhs              { $$ = $1 + "." + $3; }
+    ;
+
+comparison_op:
+      T_EQUAL                   { $$ = std::move($1); }
+    | T_GREATER_THAN            { $$ = std::move($1); }
+    | T_GREATER_THAN_OR_EQUAL   { $$ = std::move($1); }
+    | T_LESS_THAN               { $$ = std::move($1); }
+    | T_LESS_THAN_OR_EQUAL      { $$ = std::move($1); }
+    | T_NOT_EQUAL               { $$ = std::move($1); }
+    ;
+
+optional_return_consumed_capacity:
+      %empty
+        { $$ = ddbsh::engine::ReturnConsumedCapacity::none; }
+    | K_RETURN K_CONSUMED K_CAPACITY K_INDEXES
+        { $$ = ddbsh::engine::ReturnConsumedCapacity::indexes; }
+    | K_RETURN K_CONSUMED K_CAPACITY K_TOTAL
+        { $$ = ddbsh::engine::ReturnConsumedCapacity::total; }
     ;
 
 /* A string literal source: double-quoted (unquoted here, outer quotes stripped
