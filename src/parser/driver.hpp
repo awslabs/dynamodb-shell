@@ -44,6 +44,14 @@ public:
     std::string_view input() const { return input_; }
     std::size_t& scan_offset() { return scan_offset_; }
 
+    /// Record the verbatim text of the most recently scanned lexeme (set by the
+    /// scanner's YY_USER_ACTION). Used by the token-stream debug helper and,
+    /// later, by location-aware error messages.
+    void set_last_lexeme(const char* text, int length) {
+        last_lexeme_.assign(text, static_cast<std::size_t>(length));
+    }
+    const std::string& last_lexeme() const { return last_lexeme_; }
+
     void set_result(Statement s) { result_ = s; }
     const std::optional<Statement>& result() const { return result_; }
 
@@ -55,6 +63,7 @@ private:
     std::string_view input_;
     std::size_t scan_offset_ = 0;  ///< byte cursor for the reentrant YY_INPUT
     void* scanner_ = nullptr;      ///< yyscan_t (opaque here; flex type in .cpp)
+    std::string last_lexeme_;      ///< verbatim text of the last scanned lexeme
     std::optional<Statement> result_;
     std::optional<Error> error_;
 };

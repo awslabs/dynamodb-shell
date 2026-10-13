@@ -77,6 +77,7 @@ add_library(ddbsh
             src/version.cpp
             src/render/renderer.cpp
             src/parser/driver.cpp
+            src/parser/lex_debug.cpp
             ${BISON_ddbsh_parser_OUTPUTS}
             ${FLEX_ddbsh_scanner_OUTPUTS})
 add_library(ddbsh::ddbsh ALIAS ddbsh)
@@ -128,8 +129,11 @@ if(DDBSH_BUILD_TESTS)
     enable_testing()
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
-                   tests/reentrancy_test.cpp)
-    target_include_directories(ddbsh-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+                   tests/reentrancy_test.cpp
+                   tests/lexer_test.cpp)
+    target_include_directories(ddbsh-tests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(ddbsh-tests
         PRIVATE ddbsh::ddbsh ddbsh_warnings GTest::gtest_main)
 
