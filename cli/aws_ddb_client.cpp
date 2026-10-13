@@ -21,6 +21,8 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
+#include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
+#include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/DescribeTimeToLiveRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
@@ -341,6 +343,75 @@ TableKeySchema load_key_schema(
     return out;
 }
 
+// ---- SDK -> library DESCRIBE-detail translation ----------------------------
+
+ScalarType from_sdk_scalar(Aws::DynamoDB::Model::ScalarAttributeType t) {
+    switch (t) {
+        case Aws::DynamoDB::Model::ScalarAttributeType::N:
+            return ScalarType::n;
+        case Aws::DynamoDB::Model::ScalarAttributeType::B:
+            return ScalarType::b;
+        default:
+            return ScalarType::s;
+    }
+}
+
+Projection from_sdk_projection(const Aws::DynamoDB::Model::Projection& p) {
+    Projection out;
+    switch (p.GetProjectionType()) {
+        case Aws::DynamoDB::Model::ProjectionType::KEYS_ONLY:
+            out.type = ProjectionType::keys_only;
+            break;
+        case Aws::DynamoDB::Model::ProjectionType::INCLUDE:
+            out.type = ProjectionType::include;
+            for (const auto& a : p.GetNonKeyAttributes()) {
+                out.non_key_attributes.emplace_back(a.c_str());
+            }
+            break;
+        default:
+            out.type = ProjectionType::all;
+            break;
+    }
+    return out;
+}
+
+// Load the full DESCRIBE detail for one GSI (key schema + projection, status,
+// backfilling, both throughput shapes, warm throughput). The DESCRIBE executor
+// chooses provisioned-vs-on-demand display from the table's billing mode, so
+// both throughput shapes are loaded (matching describe.cpp __show_gsi).
+SecondaryIndexSchema load_gsi_detail(
+    const Aws::DynamoDB::Model::GlobalSecondaryIndexDescription& gsi) {
+    SecondaryIndexSchema out;
+    out.index_name = gsi.GetIndexName().c_str();
+    out.key_schema = load_key_schema(gsi.GetKeySchema());
+    if (gsi.ProjectionHasBeenSet()) {
+        out.projection = from_sdk_projection(gsi.GetProjection());
+        out.projection_set = true;
+    }
+    out.index_status =
+        Aws::DynamoDB::Model::IndexStatusMapper::GetNameForIndexStatus(gsi.GetIndexStatus())
+            .c_str();
+    out.backfilling = gsi.GetBackfilling();
+    const auto& pt = gsi.GetProvisionedThroughput();
+    out.provisioned_read_capacity_units = pt.GetReadCapacityUnits();
+    out.provisioned_write_capacity_units = pt.GetWriteCapacityUnits();
+    if (gsi.OnDemandThroughputHasBeenSet()) {
+        out.on_demand_throughput_set = true;
+        const auto& od = gsi.GetOnDemandThroughput();
+        out.on_demand_max_read_request_units =
+            od.MaxReadRequestUnitsHasBeenSet() ? od.GetMaxReadRequestUnits() : -1;
+        out.on_demand_max_write_request_units =
+            od.MaxWriteRequestUnitsHasBeenSet() ? od.GetMaxWriteRequestUnits() : -1;
+    }
+    if (gsi.WarmThroughputHasBeenSet()) {
+        const auto& w = gsi.GetWarmThroughput();
+        out.warm_throughput = WarmThroughputDescription{
+            w.GetReadUnitsPerSecond(), w.GetWriteUnitsPerSecond(),
+            Aws::DynamoDB::Model::IndexStatusMapper::GetNameForIndexStatus(w.GetStatus()).c_str()};
+    }
+    return out;
+}
+
 }  // namespace
 
 Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in) {
@@ -360,11 +431,11 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
     out.key_schema = load_key_schema(table.GetKeySchema());
     for (const auto& lsi : table.GetLocalSecondaryIndexes()) {
         out.local_secondary_indexes.push_back(
-            SecondaryIndexSchema{lsi.GetIndexName().c_str(), load_key_schema(lsi.GetKeySchema())});
+            SecondaryIndexSchema{.index_name = lsi.GetIndexName().c_str(),
+                                 .key_schema = load_key_schema(lsi.GetKeySchema())});
     }
     for (const auto& gsi : table.GetGlobalSecondaryIndexes()) {
-        out.global_secondary_indexes.push_back(
-            SecondaryIndexSchema{gsi.GetIndexName().c_str(), load_key_schema(gsi.GetKeySchema())});
+        out.global_secondary_indexes.push_back(load_gsi_detail(gsi));
     }
 
     // Report fields (SHOW TABLES / DESCRIBE). Enum values are stored as the SDK
@@ -386,6 +457,47 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
                                       table.GetTableClassSummary().GetTableClass())
                                       .c_str();
     }
+
+    // Full DESCRIBE report fields (describe.cpp). SHOW TABLES ignores these.
+    for (const auto& attr : table.GetAttributeDefinitions()) {
+        out.attribute_definitions.push_back(AttributeDef{attr.GetAttributeName().c_str(),
+                                                         from_sdk_scalar(attr.GetAttributeType())});
+    }
+    out.creation_date_time =
+        table.GetCreationDateTime().ToGmtString(Aws::Utils::DateFormat::ISO_8601).c_str();
+    out.table_size_bytes = table.GetTableSizeBytes();
+    out.item_count = table.GetItemCount();
+    out.deletion_protection_enabled = table.GetDeletionProtectionEnabled();
+    {
+        const auto& pt = table.GetProvisionedThroughput();
+        out.provisioned_read_capacity_units = pt.GetReadCapacityUnits();
+        out.provisioned_write_capacity_units = pt.GetWriteCapacityUnits();
+    }
+    if (table.OnDemandThroughputHasBeenSet()) {
+        out.on_demand_throughput_set = true;
+        const auto& od = table.GetOnDemandThroughput();
+        out.on_demand_max_read_request_units =
+            od.MaxReadRequestUnitsHasBeenSet() ? od.GetMaxReadRequestUnits() : -1;
+        out.on_demand_max_write_request_units =
+            od.MaxWriteRequestUnitsHasBeenSet() ? od.GetMaxWriteRequestUnits() : -1;
+    }
+    if (table.WarmThroughputHasBeenSet()) {
+        const auto& w = table.GetWarmThroughput();
+        out.warm_throughput = WarmThroughputDescription{
+            w.GetReadUnitsPerSecond(), w.GetWriteUnitsPerSecond(),
+            Aws::DynamoDB::Model::TableStatusMapper::GetNameForTableStatus(w.GetStatus()).c_str()};
+    }
+    if (table.StreamSpecificationHasBeenSet() &&
+        table.GetStreamSpecification().GetStreamEnabled()) {
+        out.stream_view_type = Aws::DynamoDB::Model::StreamViewTypeMapper::GetNameForStreamViewType(
+                                   table.GetStreamSpecification().GetStreamViewType())
+                                   .c_str();
+    }
+    if (table.SSEDescriptionHasBeenSet()) {
+        out.sse_status = Aws::DynamoDB::Model::SSEStatusMapper::GetNameForSSEStatus(
+                             table.GetSSEDescription().GetStatus())
+                             .c_str();
+    }
     return out;
 }
 
@@ -405,6 +517,59 @@ Result<TimeToLiveOut> AwsDDBClient::describe_time_to_live(const DescribeTimeToLi
                      desc.GetTimeToLiveStatus())
                      .c_str();
     out.attribute_name = desc.GetAttributeName().c_str();
+    return out;
+}
+
+Result<ContinuousBackupsOut> AwsDDBClient::describe_continuous_backups(
+    const DescribeContinuousBackupsIn& in) {
+    Aws::DynamoDB::Model::DescribeContinuousBackupsRequest request;
+    request.SetTableName(in.table_name);
+    auto outcome = client_->DescribeContinuousBackups(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& pitr =
+        outcome.GetResult().GetContinuousBackupsDescription().GetPointInTimeRecoveryDescription();
+    ContinuousBackupsOut out;
+    out.pitr_status =
+        Aws::DynamoDB::Model::PointInTimeRecoveryStatusMapper::GetNameForPointInTimeRecoveryStatus(
+            pitr.GetPointInTimeRecoveryStatus())
+            .c_str();
+    if (pitr.GetPointInTimeRecoveryStatus() ==
+        Aws::DynamoDB::Model::PointInTimeRecoveryStatus::ENABLED) {
+        out.earliest_restorable_date_time = pitr.GetEarliestRestorableDateTime()
+                                                .ToGmtString(Aws::Utils::DateFormat::ISO_8601)
+                                                .c_str();
+        out.latest_restorable_date_time = pitr.GetLatestRestorableDateTime()
+                                              .ToGmtString(Aws::Utils::DateFormat::ISO_8601)
+                                              .c_str();
+    }
+    return out;
+}
+
+Result<TableReplicaAutoScalingOut> AwsDDBClient::describe_table_replica_auto_scaling(
+    const DescribeTableReplicaAutoScalingIn& in) {
+    Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingRequest request;
+    request.SetTableName(in.table_name);
+    auto outcome = client_->DescribeTableReplicaAutoScaling(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    TableReplicaAutoScalingOut out;
+    const auto& asd = outcome.GetResult().GetTableAutoScalingDescription();
+    for (const auto& repl : asd.GetReplicas()) {
+        out.replicas.push_back(ReplicaAutoScalingDescription{
+            repl.GetRegionName().c_str(),
+            Aws::DynamoDB::Model::ReplicaStatusMapper::GetNameForReplicaStatus(
+                repl.GetReplicaStatus())
+                .c_str()});
+    }
     return out;
 }
 

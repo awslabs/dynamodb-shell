@@ -193,9 +193,36 @@ struct TableKeySchema {
     std::string hash_key;   ///< partition (HASH) key attribute name
     std::string range_key;  ///< sort (RANGE) key attribute name ("" if none)
 };
+
+/// Warm-throughput description for the DESCRIBE report (table-level and
+/// per-GSI). Set only when the SDK reported warm throughput. `status` is the
+/// mapped status name ("ACTIVE"/"UPDATING"/...) — the table level maps it via
+/// TableStatusMapper, a GSI via IndexStatusMapper, both yielding the same
+/// strings (arch §7, describe.cpp __show_table_warm_throughput / __show_gsi).
+struct WarmThroughputDescription {
+    long long read_units_per_second = 0;
+    long long write_units_per_second = 0;
+    std::string status;
+};
+
 struct SecondaryIndexSchema {
     std::string index_name;
     TableKeySchema key_schema;
+
+    // ---- DESCRIBE report detail -------------------------------------------
+    // The planner and SHOW TABLES set only index_name + key_schema; the DESCRIBE
+    // adapter fills the rest for a GSI. LSIs leave the GSI-only fields default:
+    // the original __show_lsi prints only name + key schema (describe.cpp).
+    Projection projection{};  ///< GSI projection (type + non-key attrs)
+    bool projection_set = false;
+    std::string index_status{};  ///< mapped IndexStatus name ("ACTIVE"/...)
+    bool backfilling = false;
+    long long provisioned_read_capacity_units = 0;
+    long long provisioned_write_capacity_units = 0;
+    bool on_demand_throughput_set = false;
+    long long on_demand_max_read_request_units = -1;
+    long long on_demand_max_write_request_units = -1;
+    std::optional<WarmThroughputDescription> warm_throughput{};
 };
 struct DescribeTableIn {
     std::string table_name;
@@ -218,6 +245,35 @@ struct DescribeTableOut {
     /// Mapped TableClass name, set iff the SDK TableClassSummary was present
     /// (absent => the report shows "STANDARD*").
     std::optional<std::string> table_class_summary;
+
+    // ---- Full DESCRIBE report fields (arch §7, describe.cpp) --------------
+    // Populated by the adapter for DESCRIBE; SHOW TABLES and the planner ignore
+    // them. These carry the detail the one-line SHOW TABLES row does not need:
+    // attribute definitions, timestamps/sizes, throughput numbers, warm
+    // throughput, stream and SSE state (per-index detail lives on the
+    // SecondaryIndexSchema entries above).
+    std::vector<AttributeDef> attribute_definitions;
+    std::string creation_date_time;  ///< ISO 8601 (formatted by the adapter)
+    long long table_size_bytes = 0;
+    long long item_count = 0;
+    bool deletion_protection_enabled = false;
+    /// Provisioned throughput numbers (used when billing is PROVISIONED — the
+    /// SHOW TABLES fields above carry only the mode name, DESCRIBE needs these).
+    long long provisioned_read_capacity_units = 0;
+    long long provisioned_write_capacity_units = 0;
+    /// On-demand max request units, set iff the SDK OnDemandThroughput was
+    /// present (each unset dimension reports -1, as the original did).
+    bool on_demand_throughput_set = false;
+    long long on_demand_max_read_request_units = -1;
+    long long on_demand_max_write_request_units = -1;
+    std::optional<WarmThroughputDescription> warm_throughput;
+    /// Stream: nullopt => "Stream: Disabled" (spec absent or disabled); a value
+    /// => the mapped StreamViewType name (stream enabled), describe.cpp
+    /// __show_stream.
+    std::optional<std::string> stream_view_type;
+    /// SSE: nullopt => "SSE: Not set"; a value => the mapped SSEStatus name
+    /// ("ENABLED"/...), describe.cpp __show_table_sse.
+    std::optional<std::string> sse_status;
 };
 
 // ---- DescribeTimeToLive ----------------------------------------------------
@@ -233,6 +289,38 @@ struct DescribeTimeToLiveIn {
 struct TimeToLiveOut {
     std::string status;
     std::string attribute_name;
+};
+
+// ---- DescribeContinuousBackups (PITR; DESCRIBE) ----------------------------
+// DESCRIBE calls DescribeContinuousBackups to report PITR state (arch §7,
+// describe.cpp). The original prints a line only when the status is ENABLED or
+// DISABLED, and silently skips the section when the call fails — so the DESCRIBE
+// executor tolerates an Error here (it skips the section rather than failing).
+struct DescribeContinuousBackupsIn {
+    std::string table_name;
+};
+struct ContinuousBackupsOut {
+    /// Mapped PointInTimeRecoveryStatus name ("ENABLED"/"DISABLED"); any other
+    /// value => no PITR line (the original printed only on ENABLED/DISABLED).
+    std::string pitr_status;
+    std::string earliest_restorable_date_time;  ///< ISO 8601, set when ENABLED
+    std::string latest_restorable_date_time;    ///< ISO 8601, set when ENABLED
+};
+
+// ---- DescribeTableReplicaAutoScaling (DESCRIBE) ----------------------------
+// DESCRIBE calls DescribeTableReplicaAutoScaling and prints one line per replica
+// region (arch §7, describe.cpp __show_autoscaling). As with PITR, the original
+// silently skips the section when the call fails, so the executor tolerates an
+// Error here.
+struct ReplicaAutoScalingDescription {
+    std::string region_name;
+    std::string replica_status;  ///< mapped ReplicaStatus name
+};
+struct DescribeTableReplicaAutoScalingIn {
+    std::string table_name;
+};
+struct TableReplicaAutoScalingOut {
+    std::vector<ReplicaAutoScalingDescription> replicas;
 };
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
@@ -254,6 +342,19 @@ public:
     /// it with describe_table; a failure here makes a non-brief SHOW TABLES row
     /// collapse to just the table name (the original's has_ttl() == false path).
     virtual Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) = 0;
+
+    /// DescribeContinuousBackups for a table (PITR state; arch §7). Used only by
+    /// DESCRIBE. The DESCRIBE executor skips the PITR line when this fails, so a
+    /// returned Error is non-fatal to the command (matching the original's
+    /// IsSuccess() guard).
+    virtual Result<ContinuousBackupsOut> describe_continuous_backups(
+        const DescribeContinuousBackupsIn&) = 0;
+
+    /// DescribeTableReplicaAutoScaling for a table (arch §7). Used only by
+    /// DESCRIBE. As with PITR, the DESCRIBE executor skips the replica section
+    /// when this fails, so a returned Error is non-fatal to the command.
+    virtual Result<TableReplicaAutoScalingOut> describe_table_replica_auto_scaling(
+        const DescribeTableReplicaAutoScalingIn&) = 0;
 
     /// Block (bounded exponential backoff, 100ms doubling to a 2s cap, arch
     /// §10) until `table_name` reaches ACTIVE. Used by CREATE TABLE unless

@@ -276,7 +276,8 @@ TEST(Planner, HashInequalityIsScan) {
 TEST(Planner, IndexHashEqualityIsQueryWithIndexName) {
     ddbsh::test::FakeDDBClient client;
     DescribeTableOut t = table_a_b("t");
-    t.global_secondary_indexes.push_back(SecondaryIndexSchema{"myindex", TableKeySchema{"g", ""}});
+    t.global_secondary_indexes.push_back(
+        SecondaryIndexSchema{.index_name = "myindex", .key_schema = TableKeySchema{"g", ""}});
     client.set_table(t);
     ddbsh::Session session = make_session(client);
 
@@ -292,7 +293,8 @@ TEST(Planner, IndexHashEqualityIsQueryWithIndexName) {
 TEST(Planner, IndexNonKeyPredicateIsScanWithIndexName) {
     ddbsh::test::FakeDDBClient client;
     DescribeTableOut t = table_a_b("t");
-    t.local_secondary_indexes.push_back(SecondaryIndexSchema{"myidx", TableKeySchema{"a", "l"}});
+    t.local_secondary_indexes.push_back(
+        SecondaryIndexSchema{.index_name = "myidx", .key_schema = TableKeySchema{"a", "l"}});
     client.set_table(t);
     ddbsh::Session session = make_session(client);
 

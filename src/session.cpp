@@ -15,6 +15,7 @@
 
 #include "ddbsh/version.hpp"
 #include "execute/create_table_executor.hpp"
+#include "execute/describe_executor.hpp"
 #include "execute/drop_table_executor.hpp"
 #include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
@@ -140,12 +141,17 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             return engine::execute_show_tables(show, impl_->client);
         }
         case StatementKind::describe:
-            // Parsed in W2; execution (the full multi-API DESCRIBE report) lands
-            // in the next W5 follow-on round. Until then, report a clear
-            // not-implemented Error rather than a parse error (D19), so the
-            // command surface is observable and tested.
-            return fail(Errc::not_implemented,
-                        "command parsed but not yet executable in this build");
+            // DESCRIBE is not explainable here yet: the EXPLAIN block renders
+            // the four serialized requests (DescribeTable, DescribeTimeToLive,
+            // DescribeContinuousBackups, DescribeTableReplicaAutoScaling) and
+            // must not contact the service (W6). Until then an explaining
+            // DESCRIBE reports not-implemented.
+            if (statement.ast()->explain) {
+                return fail(Errc::not_implemented,
+                            "EXPLAIN DESCRIBE is not yet available in this build");
+            }
+            return engine::execute_describe(std::get<engine::DescribeCmd>(statement.ast()->command),
+                                            impl_->client);
     }
     return fail(Errc::internal_error, "unhandled statement kind");
 }

@@ -53,9 +53,11 @@ DescribeTableOut provisioned_table(const std::string& name) {
     t.billing_mode_summary = "PROVISIONED";
     t.provisioned_throughput_set = true;
     t.table_class_summary = "STANDARD";
-    t.global_secondary_indexes = {SecondaryIndexSchema{"g1", TableKeySchema{"a", ""}},
-                                  SecondaryIndexSchema{"g2", TableKeySchema{"b", ""}}};
-    t.local_secondary_indexes = {SecondaryIndexSchema{"l1", TableKeySchema{"pk", "c"}}};
+    t.global_secondary_indexes = {
+        SecondaryIndexSchema{.index_name = "g1", .key_schema = TableKeySchema{"a", ""}},
+        SecondaryIndexSchema{.index_name = "g2", .key_schema = TableKeySchema{"b", ""}}};
+    t.local_secondary_indexes = {
+        SecondaryIndexSchema{.index_name = "l1", .key_schema = TableKeySchema{"pk", "c"}}};
     return t;
 }
 

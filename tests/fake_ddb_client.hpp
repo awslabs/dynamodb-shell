@@ -55,6 +55,28 @@ public:
         ttl_errors_.insert_or_assign(table, std::move(error));
     }
 
+    /// Register a table's continuous-backups (PITR) description (DESCRIBE).
+    void set_continuous_backups(const std::string& table, ContinuousBackupsOut cb) {
+        continuous_backups_.insert_or_assign(table, std::move(cb));
+    }
+
+    /// Make describe_continuous_backups() fail for `table` (the DESCRIBE PITR
+    /// section is then skipped — the original's IsSuccess() guard).
+    void set_continuous_backups_error(const std::string& table, Error error) {
+        continuous_backups_errors_.insert_or_assign(table, std::move(error));
+    }
+
+    /// Register a table's replica auto-scaling description (DESCRIBE).
+    void set_auto_scaling(const std::string& table, TableReplicaAutoScalingOut as) {
+        auto_scaling_.insert_or_assign(table, std::move(as));
+    }
+
+    /// Make describe_table_replica_auto_scaling() fail for `table` (the DESCRIBE
+    /// replica section is then skipped — the original's IsSuccess() guard).
+    void set_auto_scaling_error(const std::string& table, Error error) {
+        auto_scaling_errors_.insert_or_assign(table, std::move(error));
+    }
+
     /// Canned item for the next get_item (nullopt => item-not-found).
     void set_get_item(std::optional<ItemRow> item) { get_item_ = std::move(item); }
 
@@ -196,6 +218,34 @@ public:
         return TimeToLiveOut{"DISABLED", ""};
     }
 
+    Result<ContinuousBackupsOut> describe_continuous_backups(
+        const DescribeContinuousBackupsIn& in) override {
+        auto err = continuous_backups_errors_.find(in.table_name);
+        if (err != continuous_backups_errors_.end()) {
+            return fail(err->second);
+        }
+        auto it = continuous_backups_.find(in.table_name);
+        if (it != continuous_backups_.end()) {
+            return it->second;
+        }
+        // Default: PITR disabled.
+        return ContinuousBackupsOut{"DISABLED", "", ""};
+    }
+
+    Result<TableReplicaAutoScalingOut> describe_table_replica_auto_scaling(
+        const DescribeTableReplicaAutoScalingIn& in) override {
+        auto err = auto_scaling_errors_.find(in.table_name);
+        if (err != auto_scaling_errors_.end()) {
+            return fail(err->second);
+        }
+        auto it = auto_scaling_.find(in.table_name);
+        if (it != auto_scaling_.end()) {
+            return it->second;
+        }
+        // Default: no replicas.
+        return TableReplicaAutoScalingOut{};
+    }
+
 private:
     // The synthetic pagination cursor encodes the NEXT page index as a single
     // attribute `__page` (number). page 0 has no cursor on entry.
@@ -225,6 +275,10 @@ private:
     std::optional<Error> list_error_;
     std::map<std::string, TimeToLiveOut> ttls_;
     std::map<std::string, Error> ttl_errors_;
+    std::map<std::string, ContinuousBackupsOut> continuous_backups_;
+    std::map<std::string, Error> continuous_backups_errors_;
+    std::map<std::string, TableReplicaAutoScalingOut> auto_scaling_;
+    std::map<std::string, Error> auto_scaling_errors_;
     std::optional<ItemRow> get_item_;
     std::vector<std::vector<ItemRow>> pages_;
     std::optional<ConsumedCapacity> consumed_capacity_;

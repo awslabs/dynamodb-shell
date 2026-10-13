@@ -45,6 +45,10 @@ public:
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
     Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) override;
+    Result<ContinuousBackupsOut> describe_continuous_backups(
+        const DescribeContinuousBackupsIn&) override;
+    Result<TableReplicaAutoScalingOut> describe_table_replica_auto_scaling(
+        const DescribeTableReplicaAutoScalingIn&) override;
     Result<void> wait_for_table_gone(const std::string& table_name) override;
     Result<void> wait_for_table_active(const std::string& table_name) override;
 
