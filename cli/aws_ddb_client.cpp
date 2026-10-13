@@ -22,6 +22,7 @@
 #include <aws/dynamodb/model/CreateTableRequest.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
+#include <aws/dynamodb/model/DescribeTimeToLiveRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
 
 namespace ddbsh::cli {
@@ -365,6 +366,45 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
         out.global_secondary_indexes.push_back(
             SecondaryIndexSchema{gsi.GetIndexName().c_str(), load_key_schema(gsi.GetKeySchema())});
     }
+
+    // Report fields (SHOW TABLES / DESCRIBE). Enum values are stored as the SDK
+    // mapper's name string; the `has`-style optionals mirror the SDK's
+    // *HasBeenSet() so the report reproduces the original's defaulting markers.
+    out.table_status =
+        Aws::DynamoDB::Model::TableStatusMapper::GetNameForTableStatus(table.GetTableStatus())
+            .c_str();
+    out.table_id = table.GetTableId().c_str();
+    out.table_arn = table.GetTableArn().c_str();
+    if (table.BillingModeSummaryHasBeenSet()) {
+        out.billing_mode_summary = Aws::DynamoDB::Model::BillingModeMapper::GetNameForBillingMode(
+                                       table.GetBillingModeSummary().GetBillingMode())
+                                       .c_str();
+    }
+    out.provisioned_throughput_set = table.ProvisionedThroughputHasBeenSet();
+    if (table.TableClassSummaryHasBeenSet()) {
+        out.table_class_summary = Aws::DynamoDB::Model::TableClassMapper::GetNameForTableClass(
+                                      table.GetTableClassSummary().GetTableClass())
+                                      .c_str();
+    }
+    return out;
+}
+
+Result<TimeToLiveOut> AwsDDBClient::describe_time_to_live(const DescribeTimeToLiveIn& in) {
+    Aws::DynamoDB::Model::DescribeTimeToLiveRequest request;
+    request.SetTableName(in.table_name);
+    auto outcome = client_->DescribeTimeToLive(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& desc = outcome.GetResult().GetTimeToLiveDescription();
+    TimeToLiveOut out;
+    out.status = Aws::DynamoDB::Model::TimeToLiveStatusMapper::GetNameForTimeToLiveStatus(
+                     desc.GetTimeToLiveStatus())
+                     .c_str();
+    out.attribute_name = desc.GetAttributeName().c_str();
     return out;
 }
 

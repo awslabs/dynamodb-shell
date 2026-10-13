@@ -174,13 +174,21 @@ struct ListTablesOut {
     std::vector<std::string> table_names;
 };
 
-// ---- DescribeTable (key-schema resolution) ---------------------------------
-// The planner resolves a table's (or secondary index's) key schema to decide
-// GetItem/Query/Scan (arch §8); the original did this via DescribeTable in
-// get_key_schema (arch §10). This SDK-free view carries only what the planner
-// needs now — the full DESCRIBE / SHOW TABLES report fields (status, throughput,
-// item count, TTL, PITR, ...) are added when those commands port (2b follow-on).
-// LSIs are searched before GSIs when resolving a `.index` (arch §10).
+// ---- DescribeTable ---------------------------------------------------------
+// Two consumers share this one DescribeTable view:
+//   * the planner, which needs only the key schema to decide GetItem/Query/Scan
+//     (arch §8; the original did this via DescribeTable in get_key_schema,
+//     arch §10); LSIs are searched before GSIs when resolving a `.index`; and
+//   * the SHOW TABLES / DESCRIBE report, which needs the table's status,
+//     billing/throughput, table class, identifiers and index counts (arch §7).
+// The report fields are populated by the adapter from the SDK TableDescription;
+// the planner ignores them. Enum-valued fields are stored as the SDK mapper's
+// NAME string (e.g. "ACTIVE", "PROVISIONED") so the engine needs no enum<->name
+// tables and the FakeDDBClient can set them directly. `has`-style optionals
+// mirror the SDK's *HasBeenSet() so the report reproduces the original's
+// defaulting (e.g. the PAY_PER_REQUEST "*" / STANDARD "*" markers, show_tables
+// .cpp). Fields the full DESCRIBE report also needs (PITR, autoscaling, the
+// per-index detail/stream/sse) land when DESCRIBE ports (next 2b follow-on).
 struct TableKeySchema {
     std::string hash_key;   ///< partition (HASH) key attribute name
     std::string range_key;  ///< sort (RANGE) key attribute name ("" if none)
@@ -197,6 +205,34 @@ struct DescribeTableOut {
     TableKeySchema key_schema;
     std::vector<SecondaryIndexSchema> local_secondary_indexes;
     std::vector<SecondaryIndexSchema> global_secondary_indexes;
+
+    // ---- Report fields (SHOW TABLES; shared with the coming DESCRIBE) ------
+    std::string table_status;  ///< mapped TableStatus name ("ACTIVE", ...)
+    std::string table_id;
+    std::string table_arn;
+    /// Mapped BillingMode name, set iff the SDK BillingModeSummary was present.
+    std::optional<std::string> billing_mode_summary;
+    /// Whether the SDK ProvisionedThroughput was present (used only when no
+    /// BillingModeSummary — the original's fallback to "PROVISIONED").
+    bool provisioned_throughput_set = false;
+    /// Mapped TableClass name, set iff the SDK TableClassSummary was present
+    /// (absent => the report shows "STANDARD*").
+    std::optional<std::string> table_class_summary;
+};
+
+// ---- DescribeTimeToLive ----------------------------------------------------
+// SHOW TABLES and DESCRIBE pair DescribeTable with DescribeTimeToLive (the
+// original CDescribeHelper issues both; a non-brief SHOW TABLES row needs BOTH
+// to succeed, else it prints just the table name — show_tables.cpp). `status`
+// is the mapped TimeToLiveStatus name ("ENABLED"/"ENABLING"/"DISABLING"/
+// "DISABLED"); `attribute_name` is the TTL attribute, shown only when the
+// status is ENABLED or ENABLING (arch §7).
+struct DescribeTimeToLiveIn {
+    std::string table_name;
+};
+struct TimeToLiveOut {
+    std::string status;
+    std::string attribute_name;
 };
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
@@ -213,6 +249,11 @@ public:
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;
+
+    /// DescribeTimeToLive for a table (arch §7/§10). SHOW TABLES / DESCRIBE pair
+    /// it with describe_table; a failure here makes a non-brief SHOW TABLES row
+    /// collapse to just the table name (the original's has_ttl() == false path).
+    virtual Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) = 0;
 
     /// Block (bounded exponential backoff, 100ms doubling to a 2s cap, arch
     /// §10) until `table_name` reaches ACTIVE. Used by CREATE TABLE unless

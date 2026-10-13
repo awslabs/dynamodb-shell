@@ -8,12 +8,13 @@
 // each engine request into an SDK request and each SDK response back into the
 // library's SDK-free structs.
 //
-// 2a scope: constructs the client and implements the four seam ops the walking
-// skeleton / near-term ports declare. Full request shaping and Value
-// translation land per sub-phase (2d); those 2a implementations return a
-// service_error placeholder until then (the walking statements do not call
-// them). list_tables() is the exception: it is fully implemented here so the
-// 2a readiness-gate smoke program can prove real backend reachability.
+// The control-plane ops (create_table / delete_table / describe_table /
+// describe_time_to_live / list_tables) and the ACTIVE/gone waiters are fully
+// implemented here. The data-plane ops (get_item / query / scan / put_item)
+// still return a clear service_error placeholder: their ddbsh::Value <->
+// Aws::AttributeValue translation lands with the W5 data-plane round (so
+// engine-driven goldens can run); the engine contract for those ops is covered
+// offline by FakeDDBClient.
 
 #ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
 #define DDBSH_CLI_AWS_DDB_CLIENT_HPP
@@ -43,6 +44,7 @@ public:
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
+    Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) override;
     Result<void> wait_for_table_gone(const std::string& table_name) override;
     Result<void> wait_for_table_active(const std::string& table_name) override;
 

@@ -38,6 +38,23 @@ public:
         tables_.insert_or_assign(schema.table_name, std::move(schema));
     }
 
+    /// The table names list_tables() returns, in order (SHOW TABLES input).
+    void set_table_names(std::vector<std::string> names) { table_names_ = std::move(names); }
+
+    /// Make list_tables() fail with this Error. nullopt => succeed.
+    void set_list_tables_error(std::optional<Error> error) { list_error_ = std::move(error); }
+
+    /// Register a table's TimeToLive description (SHOW TABLES / DESCRIBE).
+    void set_ttl(const std::string& table, TimeToLiveOut ttl) {
+        ttls_.insert_or_assign(table, std::move(ttl));
+    }
+
+    /// Make describe_time_to_live() fail for `table` (the has_ttl()==false path
+    /// that collapses a SHOW TABLES row to just the name).
+    void set_ttl_error(const std::string& table, Error error) {
+        ttl_errors_.insert_or_assign(table, std::move(error));
+    }
+
     /// Canned item for the next get_item (nullopt => item-not-found).
     void set_get_item(std::optional<ItemRow> item) { get_item_ = std::move(item); }
 
@@ -149,7 +166,14 @@ public:
         return {};
     }
 
-    Result<ListTablesOut> list_tables(const ListTablesIn&) override { return ListTablesOut{}; }
+    Result<ListTablesOut> list_tables(const ListTablesIn&) override {
+        if (list_error_.has_value()) {
+            return fail(*list_error_);
+        }
+        ListTablesOut out;
+        out.table_names = table_names_;
+        return out;
+    }
 
     Result<DescribeTableOut> describe_table(const DescribeTableIn& in) override {
         auto it = tables_.find(in.table_name);
@@ -157,6 +181,19 @@ public:
             return fail(Errc::no_such_table, "Table: " + in.table_name + " not found");
         }
         return it->second;
+    }
+
+    Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn& in) override {
+        auto err = ttl_errors_.find(in.table_name);
+        if (err != ttl_errors_.end()) {
+            return fail(err->second);
+        }
+        auto it = ttls_.find(in.table_name);
+        if (it != ttls_.end()) {
+            return it->second;
+        }
+        // Default: TTL disabled (the common real-world case).
+        return TimeToLiveOut{"DISABLED", ""};
     }
 
 private:
@@ -184,6 +221,10 @@ private:
     }
 
     std::map<std::string, DescribeTableOut> tables_;
+    std::vector<std::string> table_names_;
+    std::optional<Error> list_error_;
+    std::map<std::string, TimeToLiveOut> ttls_;
+    std::map<std::string, Error> ttl_errors_;
     std::optional<ItemRow> get_item_;
     std::vector<std::vector<ItemRow>> pages_;
     std::optional<ConsumedCapacity> consumed_capacity_;

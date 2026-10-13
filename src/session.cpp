@@ -18,6 +18,7 @@
 #include "execute/drop_table_executor.hpp"
 #include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
+#include "execute/show_tables_executor.hpp"
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
 
@@ -131,12 +132,18 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             const auto& create = std::get<engine::CreateTableCmd>(statement.ast()->command);
             return engine::execute_create_table(create, impl_->client);
         }
-        case StatementKind::show_tables:
+        case StatementKind::show_tables: {
+            // SHOW TABLES is not explainable (it is a show_command, not in the
+            // grammar's `explainable` set — SHOW/CONNECT/QUIT never carry the
+            // EXPLAIN flag), so there is no explain path to guard here.
+            const auto& show = std::get<engine::ShowTablesCmd>(statement.ast()->command);
+            return engine::execute_show_tables(show, impl_->client);
+        }
         case StatementKind::describe:
-            // Parsed in W2/W3; execution (behind IDDBClient) lands in a W5
-            // follow-on round (SHOW TABLES/DESCRIBE reports). Until then, report
-            // a clear not-implemented Error rather than a parse error (D19), so
-            // the command surface is observable and tested.
+            // Parsed in W2; execution (the full multi-API DESCRIBE report) lands
+            // in the next W5 follow-on round. Until then, report a clear
+            // not-implemented Error rather than a parse error (D19), so the
+            // command surface is observable and tested.
             return fail(Errc::not_implemented,
                         "command parsed but not yet executable in this build");
     }
