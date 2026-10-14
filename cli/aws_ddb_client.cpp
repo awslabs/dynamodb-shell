@@ -5,12 +5,13 @@
 //
 // Constructs a real DynamoDBClient with the standard credential resolution and
 // optional endpoint override (mirrors the original CDDBShDDBClientConfig, arch
-// §3/§10). The control-plane ops (create_table / delete_table / describe_table /
-// list_tables) and the ACTIVE/gone waiters are fully implemented here. The
-// data-plane ops (get_item / query / scan / put_item) still return a clear
-// service_error placeholder: their ddbsh::Value <-> Aws::AttributeValue
-// translation lands with the W5 data-plane round (so engine-driven goldens can
-// run); the engine contract for those ops is covered offline by FakeDDBClient.
+// §3/§10). All in-scope ops are now implemented here: the control-plane ops
+// (create_table / delete_table / describe_table / describe_time_to_live /
+// describe_continuous_backups / describe_table_replica_auto_scaling /
+// list_tables), the ACTIVE/gone waiters, and the data-plane ops (get_item /
+// query / scan / put_item) with full ddbsh::Value <-> Aws::AttributeValue
+// translation. This is the sole place the SDK meets the library's SDK-free
+// structs (D11).
 
 #include "aws_ddb_client.hpp"
 
@@ -19,25 +20,241 @@
 #include <thread>
 
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/core/utils/HashingUtils.h>
+#include <aws/dynamodb/model/AttributeValue.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/DescribeTimeToLiveRequest.h>
+#include <aws/dynamodb/model/GetItemRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
+#include <aws/dynamodb/model/PutItemRequest.h>
+#include <aws/dynamodb/model/QueryRequest.h>
+#include <aws/dynamodb/model/ScanRequest.h>
 
 namespace ddbsh::cli {
 
 namespace {
 
-// The data-plane ops have no request/response translation yet; they return
-// this clear error until the W5 data-plane round. No in-scope command reaches
-// them through this adapter before then (engine-driven goldens are gated on
-// that round).
-Error not_yet() {
-    return Error{Errc::service_error, "IDDBClient data-plane operation not yet implemented",
-                 std::nullopt, std::nullopt};
+using SdkAttributeValue = Aws::DynamoDB::Model::AttributeValue;
+using SdkValueType = Aws::DynamoDB::Model::ValueType;
+
+// Turn a service error into the library Error (byte-exact message carried
+// through to the Renderer; a ConditionalCheckFailedException's message is the
+// service's own "The conditional request failed", arch §9).
+Error from_sdk_error(const Aws::Client::AWSError<Aws::DynamoDB::DynamoDBErrors>& err) {
+    return Error{Errc::service_error, err.GetMessage().c_str(),
+                 std::string(err.GetExceptionName().c_str()),
+                 std::string(err.GetRequestId().c_str())};
+}
+
+// ---- ddbsh::Value <-> Aws::DynamoDB::Model::AttributeValue (D11 seam) ------
+// This is the SOLE place the library's SDK-free Value meets the SDK's recursive
+// AttributeValue. The parser only ever builds S/N/BOOL/NUL/L/M literals (arch
+// §4 — no binary/set input), but responses can carry any type, so both
+// directions handle all ten. Empty L/M are marked explicitly (SetL/SetM with an
+// empty collection) so an empty `[]`/`{}` round-trips as a list/map, not an
+// unset value (arch §9 supports empty collections).
+
+SdkAttributeValue to_sdk_value(const Value& v);
+
+Aws::Map<Aws::String, SdkAttributeValue> to_sdk_item(const ValueMap& item) {
+    Aws::Map<Aws::String, SdkAttributeValue> out;
+    for (const auto& [name, value] : item) {
+        out.emplace(Aws::String(name.c_str()), to_sdk_value(value));
+    }
+    return out;
+}
+
+SdkAttributeValue to_sdk_value(const Value& v) {
+    SdkAttributeValue out;
+    switch (v.type) {
+        case Value::Type::S:
+            out.SetS(Aws::String(v.s.c_str()));
+            break;
+        case Value::Type::N:
+            out.SetN(Aws::String(v.s.c_str()));
+            break;
+        case Value::Type::B:
+            out.SetB(Aws::Utils::HashingUtils::Base64Decode(Aws::String(v.s.c_str())));
+            break;
+        case Value::Type::BOOL:
+            out.SetBool(v.boolean);
+            break;
+        case Value::Type::NUL:
+            out.SetNull(true);
+            break;
+        case Value::Type::L: {
+            Aws::Vector<std::shared_ptr<SdkAttributeValue>> items;
+            items.reserve(v.list.size());
+            for (const auto& e : v.list) {
+                items.push_back(std::make_shared<SdkAttributeValue>(to_sdk_value(e)));
+            }
+            out.SetL(items);
+            break;
+        }
+        case Value::Type::M: {
+            Aws::Map<Aws::String, const std::shared_ptr<SdkAttributeValue>> m;
+            for (const auto& [k, val] : v.map) {
+                m.emplace(Aws::String(k.c_str()),
+                          std::make_shared<SdkAttributeValue>(to_sdk_value(val)));
+            }
+            out.SetM(m);
+            break;
+        }
+        case Value::Type::SS: {
+            Aws::Vector<Aws::String> ss;
+            ss.reserve(v.set.size());
+            for (const auto& s : v.set) {
+                ss.emplace_back(s.c_str());
+            }
+            out.SetSS(ss);
+            break;
+        }
+        case Value::Type::NS: {
+            Aws::Vector<Aws::String> ns;
+            ns.reserve(v.set.size());
+            for (const auto& s : v.set) {
+                ns.emplace_back(s.c_str());
+            }
+            out.SetNS(ns);
+            break;
+        }
+        case Value::Type::BS: {
+            Aws::Vector<Aws::Utils::ByteBuffer> bs;
+            bs.reserve(v.set.size());
+            for (const auto& s : v.set) {
+                bs.push_back(Aws::Utils::HashingUtils::Base64Decode(Aws::String(s.c_str())));
+            }
+            out.SetBS(bs);
+            break;
+        }
+    }
+    return out;
+}
+
+Value from_sdk_value(const SdkAttributeValue& v);
+
+ValueMap from_sdk_item(const Aws::Map<Aws::String, SdkAttributeValue>& item) {
+    ValueMap out;
+    out.reserve(item.size());
+    for (const auto& [name, value] : item) {
+        out.emplace_back(std::string(name.c_str()), from_sdk_value(value));
+    }
+    return out;
+}
+
+Value from_sdk_value(const SdkAttributeValue& v) {
+    switch (v.GetType()) {
+        case SdkValueType::STRING:
+            return Value::string_value(v.GetS().c_str());
+        case SdkValueType::NUMBER:
+            return Value::number_value(v.GetN().c_str());
+        case SdkValueType::BOOL:
+            return Value::bool_value(v.GetBool());
+        case SdkValueType::NULLVALUE:
+            return Value::null_value();
+        case SdkValueType::BYTEBUFFER: {
+            Value out;
+            out.type = Value::Type::B;
+            out.s = Aws::Utils::HashingUtils::Base64Encode(v.GetB()).c_str();
+            return out;
+        }
+        case SdkValueType::ATTRIBUTE_LIST: {
+            Value out;
+            out.type = Value::Type::L;
+            for (const auto& e : v.GetL()) {
+                out.list.push_back(from_sdk_value(*e));
+            }
+            return out;
+        }
+        case SdkValueType::ATTRIBUTE_MAP: {
+            Value out;
+            out.type = Value::Type::M;
+            for (const auto& [k, val] : v.GetM()) {
+                out.map.emplace_back(std::string(k.c_str()), from_sdk_value(*val));
+            }
+            return out;
+        }
+        case SdkValueType::STRING_SET: {
+            Value out;
+            out.type = Value::Type::SS;
+            for (const auto& s : v.GetSS()) {
+                out.set.emplace_back(s.c_str());
+            }
+            return out;
+        }
+        case SdkValueType::NUMBER_SET: {
+            Value out;
+            out.type = Value::Type::NS;
+            for (const auto& s : v.GetNS()) {
+                out.set.emplace_back(s.c_str());
+            }
+            return out;
+        }
+        case SdkValueType::BYTEBUFFER_SET: {
+            Value out;
+            out.type = Value::Type::BS;
+            for (const auto& b : v.GetBS()) {
+                out.set.emplace_back(Aws::Utils::HashingUtils::Base64Encode(b).c_str());
+            }
+            return out;
+        }
+    }
+    return Value::null_value();  // unreachable; keeps the compiler happy
+}
+
+// ExpressionAttributeNames: library ordered pairs -> SDK string map.
+Aws::Map<Aws::String, Aws::String> to_sdk_names(
+    const std::vector<std::pair<std::string, std::string>>& names) {
+    Aws::Map<Aws::String, Aws::String> out;
+    for (const auto& [token, name] : names) {
+        out.emplace(Aws::String(token.c_str()), Aws::String(name.c_str()));
+    }
+    return out;
+}
+
+Aws::DynamoDB::Model::ReturnConsumedCapacity to_sdk_rcc(ReturnConsumedCapacity rcc) {
+    switch (rcc) {
+        case ReturnConsumedCapacity::total:
+            return Aws::DynamoDB::Model::ReturnConsumedCapacity::TOTAL;
+        case ReturnConsumedCapacity::indexes:
+            return Aws::DynamoDB::Model::ReturnConsumedCapacity::INDEXES;
+        case ReturnConsumedCapacity::none:
+            break;
+    }
+    return Aws::DynamoDB::Model::ReturnConsumedCapacity::NONE;
+}
+
+// Translate the SDK ConsumedCapacity into the library's optional view. The
+// service only populates it when ReturnConsumedCapacity != NONE, so when no
+// sub-field has been set we return nullopt (nothing to totalize/display).
+std::optional<ConsumedCapacity> from_sdk_consumed_capacity(
+    const Aws::DynamoDB::Model::ConsumedCapacity& cc) {
+    ConsumedCapacity out;
+    bool any = false;
+    if (cc.TableNameHasBeenSet()) {
+        out.table_name = cc.GetTableName().c_str();
+        any = true;
+    }
+    if (cc.CapacityUnitsHasBeenSet()) {
+        out.capacity_units = cc.GetCapacityUnits();
+        any = true;
+    }
+    if (cc.ReadCapacityUnitsHasBeenSet()) {
+        out.read_capacity_units = cc.GetReadCapacityUnits();
+        any = true;
+    }
+    if (cc.WriteCapacityUnitsHasBeenSet()) {
+        out.write_capacity_units = cc.GetWriteCapacityUnits();
+        any = true;
+    }
+    if (!any) {
+        return std::nullopt;
+    }
+    return out;
 }
 
 }  // namespace
@@ -55,20 +272,135 @@ AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoin
 
 AwsDDBClient::~AwsDDBClient() = default;
 
-Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn&) {
-    return fail(not_yet());
+Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
+    Aws::DynamoDB::Model::GetItemRequest request;
+    request.SetTableName(in.table_name);
+    request.SetKey(to_sdk_item(in.key));
+    if (in.projection_expression.has_value()) {
+        request.SetProjectionExpression(Aws::String(in.projection_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    request.SetConsistentRead(in.consistent_read);
+    request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+
+    auto outcome = client_->GetItem(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    GetItemOut out;
+    const auto& item = result.GetItem();
+    if (!item.empty()) {
+        out.item = ItemRow{from_sdk_item(item)};
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
 }
 
-Result<QueryOut> AwsDDBClient::query(const QueryIn&) {
-    return fail(not_yet());
+Result<QueryOut> AwsDDBClient::query(const QueryIn& in) {
+    Aws::DynamoDB::Model::QueryRequest request;
+    request.SetTableName(in.table_name);
+    if (in.index_name.has_value()) {
+        request.SetIndexName(Aws::String(in.index_name->c_str()));
+    }
+    request.SetKeyConditionExpression(Aws::String(in.key_condition_expression.c_str()));
+    if (in.filter_expression.has_value()) {
+        request.SetFilterExpression(Aws::String(in.filter_expression->c_str()));
+    }
+    if (in.projection_expression.has_value()) {
+        request.SetProjectionExpression(Aws::String(in.projection_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    request.SetConsistentRead(in.consistent_read);
+    request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+    if (in.exclusive_start_key.has_value()) {
+        request.SetExclusiveStartKey(to_sdk_item(*in.exclusive_start_key));
+    }
+
+    auto outcome = client_->Query(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    QueryOut out;
+    for (const auto& item : result.GetItems()) {
+        out.items.push_back(ItemRow{from_sdk_item(item)});
+    }
+    const auto& lek = result.GetLastEvaluatedKey();
+    if (!lek.empty()) {
+        out.last_evaluated_key = from_sdk_item(lek);
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
 }
 
-Result<ScanOut> AwsDDBClient::scan(const ScanIn&) {
-    return fail(not_yet());
+Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
+    Aws::DynamoDB::Model::ScanRequest request;
+    request.SetTableName(in.table_name);
+    if (in.index_name.has_value()) {
+        request.SetIndexName(Aws::String(in.index_name->c_str()));
+    }
+    if (in.filter_expression.has_value()) {
+        request.SetFilterExpression(Aws::String(in.filter_expression->c_str()));
+    }
+    if (in.projection_expression.has_value()) {
+        request.SetProjectionExpression(Aws::String(in.projection_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    request.SetConsistentRead(in.consistent_read);
+    request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+    if (in.exclusive_start_key.has_value()) {
+        request.SetExclusiveStartKey(to_sdk_item(*in.exclusive_start_key));
+    }
+
+    auto outcome = client_->Scan(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    ScanOut out;
+    for (const auto& item : result.GetItems()) {
+        out.items.push_back(ItemRow{from_sdk_item(item)});
+    }
+    const auto& lek = result.GetLastEvaluatedKey();
+    if (!lek.empty()) {
+        out.last_evaluated_key = from_sdk_item(lek);
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
 }
 
-Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn&) {
-    return fail(not_yet());
+Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn& in) {
+    Aws::DynamoDB::Model::PutItemRequest request;
+    request.SetTableName(in.table_name);
+    request.SetItem(to_sdk_item(in.item));
+    if (in.condition_expression.has_value()) {
+        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+
+    auto outcome = client_->PutItem(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    return PutItemOut{};
 }
 
 namespace {

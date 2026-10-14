@@ -6,15 +6,12 @@
 // This is the SOLE place ddbsh::Value/request structs meet
 // Aws::DynamoDB::Model::* (D11). It owns the real DynamoDBClient and translates
 // each engine request into an SDK request and each SDK response back into the
-// library's SDK-free structs.
-//
-// The control-plane ops (create_table / delete_table / describe_table /
-// describe_time_to_live / list_tables) and the ACTIVE/gone waiters are fully
-// implemented here. The data-plane ops (get_item / query / scan / put_item)
-// still return a clear service_error placeholder: their ddbsh::Value <->
-// Aws::AttributeValue translation lands with the W5 data-plane round (so
-// engine-driven goldens can run); the engine contract for those ops is covered
-// offline by FakeDDBClient.
+// library's SDK-free structs. All in-scope ops are implemented: the
+// control-plane ops (create_table / delete_table / describe_table /
+// describe_time_to_live / describe_continuous_backups /
+// describe_table_replica_auto_scaling / list_tables), the ACTIVE/gone waiters,
+// and the data-plane ops (get_item / query / scan / put_item) with full
+// ddbsh::Value <-> Aws::AttributeValue translation.
 
 #ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
 #define DDBSH_CLI_AWS_DDB_CLIENT_HPP
