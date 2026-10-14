@@ -1,7 +1,7 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// main.cpp — the dynamodb-shell CLI (thin line-reader wrapper, tenet 3 / D6).
+// main.cpp — the ddbsh CLI (thin line-reader wrapper, tenet 3 / D6).
 //
 // This wrapper owns ONLY: argument parsing, the prompt, line editing + history
 // (GNU readline), isql-style input assembly (buffer lines until a terminator,
@@ -401,9 +401,8 @@ int main(int argc, char** argv) {
                 }
                 break;
             default:
-                std::fputs(
-                    "Usage: dynamodb-shell [-q] [-e] [-d] [-t[TERM]] [-c \"<cmds>\" | -f <file>]\n",
-                    stderr);
+                std::fputs("Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c \"<cmds>\" | -f <file>]\n",
+                           stderr);
                 return 1;
         }
     }

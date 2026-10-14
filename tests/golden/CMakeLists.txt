@@ -6,7 +6,7 @@
 #
 # This is a configure-only CMake project (no compilation). It reuses the
 # original golden family files (oracle/tests/*.txt) and golden results
-# (oracle/tests/results/*.exp) VERBATIM, driving the shipping `dynamodb-shell`
+# (oracle/tests/results/*.exp) VERBATIM, driving the shipping `ddbsh`
 # binary through the external golden harness (golden-runner.sh) instead of the
 # original `ddbshtest`. It is intentionally standalone (built separately from
 # the engine/CLI/unit-test build via devtools/run-tests) and never links any
@@ -15,7 +15,7 @@
 # How the verbatim reuse works: the original `add_test(... COMMAND ddbshtest ...)`
 # lines name `ddbshtest`. Here `ddbshtest` is an IMPORTED executable whose
 # location is the configured golden-runner.sh, so every `COMMAND ddbshtest`
-# resolves to the harness, which drives `dynamodb-shell`. `${RD}` (the golden
+# resolves to the harness, which drives `ddbsh`. `${RD}` (the golden
 # results dir) is set below exactly as the original tests/ddbsh-tests.txt sets
 # it. The original `set_property(TEST ... PASS/FAIL_REGULAR_EXPRESSION ...)`
 # lines keep working because CTest applies them to the harness's stdout, which
@@ -34,7 +34,7 @@
 # families from the oracle run so the combined suite stays 583/583.
 #
 # Configuration inputs (set by devtools/run-tests or on the command line):
-#   -DDDBSH_SHELL_BIN=<path>   the shipping dynamodb-shell binary (required)
+#   -DDDBSH_SHELL_BIN=<path>   the shipping ddbsh binary (required)
 #   -DDDBSH_SDK_LIB=<path>     AWS SDK shared-library dir (prepended to
 #                              LD_LIBRARY_PATH by the harness; optional)
 #   -DORACLE_TESTS_DIR=<path>  the original tests/ dir holding the family .txt
@@ -45,7 +45,7 @@ project(ddbsh-golden NONE)
 
 enable_testing()
 
-set(DDBSH_SHELL_BIN "" CACHE FILEPATH "Path to the shipping dynamodb-shell binary")
+set(DDBSH_SHELL_BIN "" CACHE FILEPATH "Path to the shipping ddbsh binary")
 set(DDBSH_SDK_LIB "" CACHE PATH "AWS SDK shared-library directory (LD_LIBRARY_PATH)")
 set(ORACLE_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../oracle/tests"
     CACHE PATH "Directory holding the original golden family .txt files and results/")

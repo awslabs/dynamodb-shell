@@ -7,7 +7,7 @@
       "displayName": "Linux Debug (gcc14)",
       "description": "Debug build with the gcc14 toolchain and the gcc14-built AWS SDK.",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/linux-debug",
+      "binaryDir": "${sourceDir}/build-preset/linux-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_C_COMPILER": "gcc14-gcc",
@@ -19,7 +19,7 @@
       "name": "linux-release",
       "displayName": "Linux Release (gcc14)",
       "inherits": "linux-debug",
-      "binaryDir": "${sourceDir}/build/linux-release",
+      "binaryDir": "${sourceDir}/build-preset/linux-release",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
     {
@@ -27,7 +27,7 @@
       "displayName": "Linux ASan+UBSan+LSan (gcc14)",
       "description": "Sanitizer build replacing the retired TEST_HARNESS leak tracker (D13).",
       "inherits": "linux-debug",
-      "binaryDir": "${sourceDir}/build/linux-sanitize",
+      "binaryDir": "${sourceDir}/build-preset/linux-sanitize",
       "cacheVariables": {
         "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
