@@ -29,6 +29,7 @@ enum class Errc {
     invalid_argument,
     cancelled,
     not_reducible_to_getitem,
+    not_implemented,
     internal_error,
 };
 

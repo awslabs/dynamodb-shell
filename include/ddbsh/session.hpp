@@ -20,7 +20,9 @@
 #define DDBSH_SESSION_HPP
 
 #include <memory>
+#include <optional>
 #include <string_view>
+#include <vector>
 
 #include "ddbsh/config.hpp"
 #include "ddbsh/exec_outcome.hpp"
@@ -29,6 +31,20 @@
 #include "ddbsh/statement.hpp"
 
 namespace ddbsh {
+
+/// The result of parsing a whole batch of `;`-separated statements from one
+/// string (Session::parse_batch). `statements` holds every statement that
+/// parsed successfully, in order; a bare `;` yields an empty statement, and a
+/// final statement may omit its `;` (the original string source appended one —
+/// arch §4). `error`, when present, is a parse/semantic failure on the
+/// statement that follows the ones in `statements`: the already-parsed
+/// statements are still returned so the embedder can "execute what it can"
+/// before surfacing the error (human-ratified isql-batch model, 2026-10-14).
+/// Statement is move-only, so ParsedBatch is move-only.
+struct ParsedBatch {
+    std::vector<Statement> statements;
+    std::optional<Error> error;
+};
 
 /// The engine session: parse text into a Statement, execute a Statement
 /// against the injected IDDBClient. One Session is NOT thread-safe for
@@ -48,8 +64,19 @@ public:
 
     /// Parse one whole command (the EXPLAIN prefix, if present, is recorded on
     /// the Statement). Scanner/parser state is constructed and destroyed within
-    /// this call.
+    /// this call. If `text` holds several `;`-separated statements, only the
+    /// first is returned (use parse_batch for the whole batch); a missing
+    /// trailing `;` is tolerated (arch §4).
     Result<Statement> parse(std::string_view text);
+
+    /// Parse a whole batch of `;`-separated statements from one string into a
+    /// ParsedBatch (statements in order, plus an optional trailing parse
+    /// error). This is the engine's one-shot batch entry point: it parses the
+    /// complete string handed in, never pulls more input, and carries nothing
+    /// across calls (human-ratified isql-batch model, 2026-10-14). The embedder
+    /// (the CLI / golden harness) executes each returned Statement in order and
+    /// applies its own stop-on-quit / abort-on-error policy.
+    ParsedBatch parse_batch(std::string_view text);
 
     /// Execute a parsed Statement, driving the IDDBClient as needed. Returns
     /// structured data; the engine writes nothing.

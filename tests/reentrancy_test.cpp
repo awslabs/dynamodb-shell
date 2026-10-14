@@ -42,7 +42,7 @@ TEST(Reentrancy, ManySessionsAcrossThreads) {
                 ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, shared_client);
                 auto outcome = session.run("show version;");
                 if (!outcome.has_value() ||
-                    renderer.render(*outcome) != "ddbsh - version 0.9.2\n") {
+                    renderer.render(*outcome) != "ddbsh - version 0.9.3\n") {
                     ++failures[t];
                 }
             }

@@ -23,7 +23,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.2
+        VERSION 0.9.3
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -74,9 +74,21 @@ ADD_FLEX_BISON_DEPENDENCY(ddbsh_scanner ddbsh_parser)
 # --- engine library ----------------------------------------------------------
 add_library(ddbsh
             src/session.cpp
+            src/statement.cpp
             src/version.cpp
             src/render/renderer.cpp
             src/parser/driver.cpp
+            src/parser/lex_debug.cpp
+            src/expressions/symbol_table.cpp
+            src/expressions/attribute_serialize.cpp
+            src/planner/get_key_schema.cpp
+            src/planner/select_planner.cpp
+            src/execute/select_executor.cpp
+            src/execute/insert_executor.cpp
+            src/execute/create_table_executor.cpp
+            src/execute/drop_table_executor.cpp
+            src/execute/describe_executor.cpp
+            src/execute/show_tables_executor.cpp
             ${BISON_ddbsh_parser_OUTPUTS}
             ${FLEX_ddbsh_scanner_OUTPUTS})
 add_library(ddbsh::ddbsh ALIAS ddbsh)
@@ -128,8 +140,21 @@ if(DDBSH_BUILD_TESTS)
     enable_testing()
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
-                   tests/reentrancy_test.cpp)
-    target_include_directories(ddbsh-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+                   tests/reentrancy_test.cpp
+                   tests/lexer_test.cpp
+                   tests/parse_test.cpp
+                   tests/batch_test.cpp
+                   tests/expression_test.cpp
+                   tests/planner_test.cpp
+                   tests/select_exec_test.cpp
+                   tests/write_exec_test.cpp
+                   tests/create_table_exec_test.cpp
+                   tests/show_tables_exec_test.cpp
+                   tests/describe_exec_test.cpp
+                   tests/explain_exec_test.cpp)
+    target_include_directories(ddbsh-tests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(ddbsh-tests
         PRIVATE ddbsh::ddbsh ddbsh_warnings GTest::gtest_main)
 

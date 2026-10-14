@@ -6,14 +6,14 @@
 // This is the SOLE place ddbsh::Value/request structs meet
 // Aws::DynamoDB::Model::* (D11). It owns the real DynamoDBClient and translates
 // each engine request into an SDK request and each SDK response back into the
-// library's SDK-free structs.
-//
-// 2a scope: constructs the client and implements the four seam ops the walking
-// skeleton / near-term ports declare. Full request shaping and Value
-// translation land per sub-phase (2d); those 2a implementations return a
-// service_error placeholder until then (the walking statements do not call
-// them). list_tables() is the exception: it is fully implemented here so the
-// 2a readiness-gate smoke program can prove real backend reachability.
+// library's SDK-free structs. All in-scope ops are implemented: the
+// control-plane ops (create_table / delete_table / describe_table /
+// describe_time_to_live / describe_continuous_backups /
+// describe_table_replica_auto_scaling / list_tables), the ACTIVE/gone waiters,
+// and the data-plane ops (get_item / query / scan / put_item) with full
+// ddbsh::Value <-> Aws::AttributeValue translation. It also serves EXPLAIN via
+// explain_request(), which serializes the exact SDK request each op would send
+// (SerializePayload) without issuing it (P2a-03 §4.3).
 
 #ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
 #define DDBSH_CLI_AWS_DDB_CLIENT_HPP
@@ -39,7 +39,18 @@ public:
     Result<QueryOut> query(const QueryIn&) override;
     Result<ScanOut> scan(const ScanIn&) override;
     Result<PutItemOut> put_item(const PutItemIn&) override;
+    Result<CreateTableOut> create_table(const CreateTableIn&) override;
+    Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
+    Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
+    Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) override;
+    Result<ContinuousBackupsOut> describe_continuous_backups(
+        const DescribeContinuousBackupsIn&) override;
+    Result<TableReplicaAutoScalingOut> describe_table_replica_auto_scaling(
+        const DescribeTableReplicaAutoScalingIn&) override;
+    Result<void> wait_for_table_gone(const std::string& table_name) override;
+    Result<void> wait_for_table_active(const std::string& table_name) override;
+    Result<std::string> explain_request(const ExplainRequest&) override;
 
 private:
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;

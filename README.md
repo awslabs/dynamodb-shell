@@ -16,6 +16,151 @@ It is strongly advised that you understand what ddbsh is doing, and experiment w
 
 ---
 
+# Reimplementation (C++23 library + shell)
+
+This repository is being reimplemented as a **consumable engine library**
+(`libddbsh`) with the `dynamodb-shell` command as a thin line-reader wrapper
+around it. The engine — lexer, parser, command model, expression engine, SQL→API
+planner, execution behind an injected client, and output/EXPLAIN formatting — is
+a library with an SDK-free, terminal-free public API (headers under
+`include/ddbsh/`). The CLI owns only argument parsing, the prompt, line editing
+and history, config-file loading, signal handling, and wiring a concrete AWS SDK
+client into the library.
+
+Current version: **0.9.2**. The reimplementation is delivered in phases; the
+command surface below is what the new engine drives today. The full command
+reference further down this document describes the complete `ddbsh` behavior
+that the reimplementation targets.
+
+> The "Building the software" section below describes the **original** upstream
+> source layout (`cmake ../dynamodb-shell/ddbsh`). For the reimplementation, use
+> the top-level build in this section instead.
+
+## Building the library and shell
+
+Prerequisites: a C++23 compiler (GCC ≥ 12 / Clang ≥ 16 / MSVC 19.3x), CMake
+≥ 3.21, flex and bison (reentrant scanner + `lalr1.cc` parser), GNU readline,
+zlib, and the AWS SDK for C++ (`dynamodb`, `iam`, `sts` components).
+
+```sh
+cmake -S . -B build
+cmake --build build
+```
+
+This produces three targets from one build: the engine library (`ddbsh`), the
+CLI (`dynamodb-shell`), and the native unit tests (`ddbsh-tests`). If the AWS
+SDK is installed to a non-default prefix, point CMake at it:
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/aws-sdk-cpp
+```
+
+Install the library (headers + lib) and CLI to a prefix:
+
+```sh
+cmake --install build --prefix /path/to/prefix
+```
+
+## Supported commands (this phase)
+
+The new engine currently drives this command set end to end against real
+DynamoDB:
+
+- `CONNECT`, `QUIT` — control.
+- `CREATE TABLE`, `DROP TABLE` — DDL (on-demand default, waiters unless
+  `NOWAIT`, `IF [NOT] EXISTS`).
+- `DESCRIBE <table>`, `SHOW TABLES` — introspection.
+- `INSERT` / `REPLACE` — PutItem (INSERT conditional on
+  `attribute_not_exists(pk)`; REPLACE unconditional).
+- `SELECT` — the full SQL→API decision matrix (GetItem vs Query vs Scan, base
+  table and `.index`), the WHERE expression tree, `CONSISTENT`, projections, and
+  `RETURN CONSUMED CAPACITY`.
+- `SHOW VERSION`.
+- `EXPLAIN <any supported command>` — prints the serialized API request(s)
+  instead of executing.
+
+**Deferred to later phases:** `UPDATE`/`UPSERT`, `DELETE`, transactions
+(`BEGIN..COMMIT`), `ALTER TABLE`, backups (`BACKUP`/`DROP BACKUP`/
+`DESCRIBE BACKUP`/`RESTORE`), `SHOW LIMITS`/`SHOW BACKUPS`/`SHOW CREATE TABLE`,
+return-values nuances, and rate-limiting. The parser may recognize these and
+return a clear "not implemented in this build" error rather than a parse error.
+
+## isql-mode input
+
+The CLI assembles input in the **Sybase isql style**: it buffers physical lines
+until it reads a **terminator line**, then hands the whole batch to the engine,
+which parses every `;`-terminated statement in order (a missing trailing `;` on
+the last statement is tolerated). Statements inside a batch stay `;`-terminated;
+the terminator word itself is never sent to the engine.
+
+- The default terminator is the word `go` on a line by itself (case-insensitive).
+- `-t[STR]` / `--terminator[=STR]` overrides the terminator word. `-t` with **no
+  argument** makes a **blank line** the terminator.
+- The runtime meta-command `set terminator [STR]` changes the terminator
+  mid-session (recognized only at the start of a batch; `set terminator` with no
+  value restores the blank-line terminator).
+- **EOF is always a terminator** — a file given with `-f`, the `-c` string, or an
+  interactive Ctrl-D flushes the buffered batch regardless.
+
+```
+us-east-1> SELECT * FROM Movies
+       ...> WHERE year = 2014;
+       ...> go
+```
+
+This isql batch input is a **deliberate, documented divergence** (tenets 2 and
+8) from the original `ddbsh`, which executed each statement as soon as it read a
+bare unquoted `;` interactively. The divergence is additive and lives only at
+the CLI layer: the engine still parses `;`-terminated statements, so the golden
+`.exp` command strings (all `;`-terminated and flushed by EOF) produce
+byte-identical output.
+
+## CLI flags, config, and environment
+
+```
+Usage: dynamodb-shell [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
+```
+
+- `-c "<cmds>"` — run a batch string, then exit (mutually exclusive with `-f`).
+- `-f <file>` — run a file, then exit (mutually exclusive with `-c`).
+- `-q` — quiet: suppress the startup banner.
+- `-e` — abort on the first error.
+- `-d` — debug (accepted; the engine logging subsystem is not yet ported).
+- `-t[STR]` / `--terminator[=STR]` — set the batch terminator (see above).
+
+At startup the CLI loads a config file (`DDBSH_CONFIG_FILE`, else
+`~/.ddbsh_config`) if present and reads/writes interactive history at
+`~/.ddbsh_history`. The region resolves from `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then `us-east-1`; `DDBSH_ENDPOINT_OVERRIDE` sets an
+endpoint override, which marks the prompt with a `(*)` suffix.
+
+## Embedding the library
+
+`examples/embed_demo.cpp` is a standalone program (built by its own plain
+Makefile, independent of this project's CMake) that embeds `libddbsh`: it
+implements the injected `ddbsh::IDDBClient` seam, constructs a `ddbsh::Session`,
+runs SQL-ish statements through `Session::run()`, and renders the result with
+`ddbsh::render::Renderer`. It is offline (an in-memory client, no AWS account
+needed). See [`examples/README.md`](examples/README.md).
+
+```sh
+cmake --install build --prefix /path/to/prefix
+cd examples
+make DDBSH_PREFIX=/path/to/prefix
+make run DDBSH_PREFIX=/path/to/prefix
+```
+
+## Tests
+
+Run the test suite via `devtools/run-tests` from the orchestration repo. It
+builds both the new engine and the original (the fidelity oracle), then runs
+each golden family against the appropriate one — the ported families
+(`ist-*`, `isel-*`, `iins-*` today) against the new engine, the rest against the
+oracle — so the suite stays whole as families port family-by-family. The native
+GoogleTest unit tests build with the project (`ddbsh-tests`).
+
+---
+
 # Installation
 
 ## Using pre-built binaries
