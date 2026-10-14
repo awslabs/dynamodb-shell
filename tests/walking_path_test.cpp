@@ -23,9 +23,9 @@ ddbsh::Session make_session(ddbsh::test::FakeDDBClient& client) {
     return ddbsh::Session(ddbsh::SessionConfig{"us-east-1", ""}, client);
 }
 
-TEST(WalkingPath, VersionIs093) {
+TEST(WalkingPath, VersionIs094) {
     // D15: the reimplementation version starts at 0.9.1; bumped per merge.
-    EXPECT_EQ(ddbsh::version(), "0.9.3");
+    EXPECT_EQ(ddbsh::version(), "0.9.4");
 }
 
 TEST(WalkingPath, ShowVersionRendersBanner) {
@@ -35,7 +35,7 @@ TEST(WalkingPath, ShowVersionRendersBanner) {
 
     auto outcome = session.run("show version;");
     ASSERT_TRUE(outcome.has_value()) << outcome.error().message;
-    EXPECT_EQ(renderer.render(*outcome), "ddbsh - version 0.9.3\n");
+    EXPECT_EQ(renderer.render(*outcome), "ddbsh - version 0.9.4\n");
 }
 
 TEST(WalkingPath, ShowVersionIsCaseInsensitive) {
@@ -46,7 +46,7 @@ TEST(WalkingPath, ShowVersionIsCaseInsensitive) {
 
     auto outcome = session.run("SHOW VERSION;");
     ASSERT_TRUE(outcome.has_value()) << outcome.error().message;
-    EXPECT_EQ(renderer.render(*outcome), "ddbsh - version 0.9.3\n");
+    EXPECT_EQ(renderer.render(*outcome), "ddbsh - version 0.9.4\n");
 }
 
 TEST(WalkingPath, QuitRendersStatusToken) {

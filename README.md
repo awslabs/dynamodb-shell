@@ -19,7 +19,7 @@ It is strongly advised that you understand what ddbsh is doing, and experiment w
 # Reimplementation (C++23 library + shell)
 
 This repository is being reimplemented as a **consumable engine library**
-(`libddbsh`) with the `dynamodb-shell` command as a thin line-reader wrapper
+(`libddbsh`) with the `ddbsh` command as a thin line-reader wrapper
 around it. The engine — lexer, parser, command model, expression engine, SQL→API
 planner, execution behind an injected client, and output/EXPLAIN formatting — is
 a library with an SDK-free, terminal-free public API (headers under
@@ -27,7 +27,7 @@ a library with an SDK-free, terminal-free public API (headers under
 and history, config-file loading, signal handling, and wiring a concrete AWS SDK
 client into the library.
 
-Current version: **0.9.2**. The reimplementation is delivered in phases; the
+Current version: **0.9.4**. The reimplementation is delivered in phases; the
 command surface below is what the new engine drives today. The full command
 reference further down this document describes the complete `ddbsh` behavior
 that the reimplementation targets.
@@ -48,7 +48,8 @@ cmake --build build
 ```
 
 This produces three targets from one build: the engine library (`ddbsh`), the
-CLI (`dynamodb-shell`), and the native unit tests (`ddbsh-tests`). If the AWS
+CLI (CMake target `ddbsh-cli`, installed as the executable `ddbsh`), and the
+native unit tests (`ddbsh-tests`). If the AWS
 SDK is installed to a non-default prefix, point CMake at it:
 
 ```sh
@@ -118,7 +119,7 @@ byte-identical output.
 ## CLI flags, config, and environment
 
 ```
-Usage: dynamodb-shell [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
 ```
 
 - `-c "<cmds>"` — run a batch string, then exit (mutually exclusive with `-f`).

@@ -5,7 +5,9 @@
 #
 # Three targets from one build:
 #   ddbsh          — the engine library (SDK-free public API; no terminal)
-#   dynamodb-shell — the thin CLI (readline + AWS SDK + AwsDDBClient)
+#   ddbsh-cli      — the thin CLI (readline + AWS SDK + AwsDDBClient); the
+#                    executable file is named `ddbsh` (OUTPUT_NAME), distinct
+#                    from the `ddbsh` library target (file: libddbsh)
 #   ddbsh-tests    — native GoogleTest unit tests + the boundary check
 #
 # The compiler is NOT hardcoded (choose via CMakePresets or -DCMAKE_CXX_COMPILER).
@@ -23,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.3
+        VERSION 0.9.4
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -120,11 +122,16 @@ set_source_files_properties(
 find_package(AWSSDK REQUIRED COMPONENTS dynamodb iam sts)
 find_package(ZLIB REQUIRED)
 
-add_executable(dynamodb-shell
+# Target name `ddbsh-cli` is distinct from the `ddbsh` library target; the
+# OUTPUT_NAME makes the installed executable `ddbsh` (the shipping binary name,
+# human decision 2026-10-14). No file collision: the library file is
+# `libddbsh.{so,a}`, the executable is `ddbsh`.
+add_executable(ddbsh-cli
                cli/main.cpp
                cli/aws_ddb_client.cpp)
-target_include_directories(dynamodb-shell PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
-target_link_libraries(dynamodb-shell
+set_target_properties(ddbsh-cli PROPERTIES OUTPUT_NAME ddbsh)
+target_include_directories(ddbsh-cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
+target_link_libraries(ddbsh-cli
     PRIVATE ddbsh::ddbsh ddbsh_warnings readline ${AWSSDK_LINK_LIBRARIES})
 
 # --- tests -------------------------------------------------------------------
@@ -170,7 +177,7 @@ if(DDBSH_BUILD_TESTS)
                      "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
-install(TARGETS ddbsh dynamodb-shell
+install(TARGETS ddbsh ddbsh-cli
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)

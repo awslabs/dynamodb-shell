@@ -11,7 +11,7 @@
 #
 # Golden family routing (Step 2b, D24): as command families port to the
 # reimplementation, their golden families run against the NEW engine (the
-# shipping `dynamodb-shell` binary driven through the external harness in
+# shipping `ddbsh` binary driven through the external harness in
 # tests/golden/), while every non-routed family keeps running on the original
 # C++11 oracle. This script builds BOTH — the oracle (oracle/) and the new
 # engine (the top-level C++23 tree) — then runs the routed families on the new
@@ -111,7 +111,7 @@ export AWS_REGION="$REGION"
 # --- Golden family routing (Step 2b, D24) -----------------------------------
 # As the reimplementation ports command families, their golden families are
 # routed off the original C++11 oracle and onto the NEW engine (the shipping
-# `dynamodb-shell` binary driven through the external harness, tests/golden/).
+# `ddbsh` binary driven through the external harness, tests/golden/).
 # The oracle runs the COMPLEMENT (every non-routed family) so the combined suite
 # equals an all-oracle run in the same environment — no test is dropped.
 #
@@ -142,6 +142,14 @@ if [ ! -x "$BUILD_DIR/ddbshtest" ]; then
     exit 1
 fi
 
+# Expose the oracle binary under the human-facing name `ddbsh-old` (the new
+# shipping engine binary is `ddbsh`; human decision 2026-10-14). oracle/ source
+# stays pristine — this is build glue only. A relative symlink avoids a stale
+# copy drifting from the oracle build.
+if [ -x "$BUILD_DIR/ddbsh" ]; then
+    ln -sf ddbsh "$BUILD_DIR/ddbsh-old"
+fi
+
 # --- Build: new engine (runs the routed families via the golden harness) ----
 if [ ! -f "$ENGINE_BUILD/CMakeCache.txt" ]; then
     echo "=== Configuring new-engine build (no CMakeCache at $ENGINE_BUILD) ==="
@@ -152,10 +160,10 @@ if [ ! -f "$ENGINE_BUILD/CMakeCache.txt" ]; then
         -DCMAKE_CXX_COMPILER="$DDBSH_CXX" \
         -DDDBSH_BUILD_TESTS=OFF
 fi
-echo "=== Building new-engine dynamodb-shell ($HASH) ==="
-cmake --build "$ENGINE_BUILD" --target dynamodb-shell
+echo "=== Building new-engine ddbsh CLI ($HASH) ==="
+cmake --build "$ENGINE_BUILD" --target ddbsh-cli
 
-ENGINE_BIN="$ENGINE_BUILD/dynamodb-shell"
+ENGINE_BIN="$ENGINE_BUILD/ddbsh"
 if [ ! -x "$ENGINE_BIN" ]; then
     echo "error: $ENGINE_BIN not found after build." >&2
     exit 1

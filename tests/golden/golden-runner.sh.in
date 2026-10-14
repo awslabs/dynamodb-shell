@@ -6,7 +6,7 @@
 #
 # This is REPLACEABLE TEST-RUNNER TOOLING, not compiled C++ and not part of the
 # engine or the CLI. It reproduces the original `ddbshtest` harness CLI surface
-# (-c / -f / -T / -R / -s / -q / -e / -d) by driving the SHIPPING `dynamodb-shell`
+# (-c / -f / -T / -R / -s / -q / -e / -d) by driving the SHIPPING `ddbsh`
 # binary as a subprocess with legitimate production flags, then doing the
 # capture -> (optional LC_ALL=C sort) -> diff against the golden `.exp` itself.
 # This lets the original golden family files (tests/*.txt) and golden results
