@@ -124,7 +124,11 @@ not_dquote             [^\"]
 "="             { return Parser::make_T_EQUAL(yytext); }
 ";"             { return Parser::make_SEMICOLON(); }
 
-<<EOF>>         { return Parser::make_END(); }
+<<EOF>>         { /* record end-of-input so the batch loop (Driver::parse_next)
+                   * can tell a terminal empty parse from a bare-';' empty
+                   * statement, then hand bison its end token. */
+                  yyextra->mark_eof();
+                  return Parser::make_END(); }
 
 .               { /* any other char: hand the raw character to the grammar
                    * (this is how ( ) , . [ ] { } : + - * reach the parser) */

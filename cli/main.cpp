@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -34,25 +35,33 @@ const char* env_or(const char* name, const char* fallback) {
     return (v != nullptr && v[0] != '\0') ? v : fallback;
 }
 
-// Feed one statement's text through the engine and write the result. Returns
-// false when the statement asks the shell to quit. The exit decision is typed:
-// we parse first and inspect Statement::kind (available pre-render) rather than
-// matching the rendered status-token string, so adding status tokens later
-// cannot accidentally look like a quit.
-bool run_statement(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
-                   const std::string& text) {
-    auto stmt = session.parse(text);
-    if (!stmt.has_value()) {
-        std::fputs(renderer.render_error(stmt.error()).c_str(), stderr);
-        return true;
+// Execute a BATCH of ';'-separated statements through the engine, in order,
+// writing each result to the appropriate stream. Returns false when a QUIT
+// statement runs (the shell should stop). The engine parses the whole string
+// in one call (Session::parse_batch) and tolerates a missing trailing ';'
+// (arch §4); the CLI owns the execute loop and the stop-on-quit policy — no
+// lexing/parsing lives here (tenet 3). A trailing parse error is rendered to
+// stderr after the statements that parsed ("execute what you can"). (-e
+// abort-on-error, the isql `go`/`-t` terminator, `-f`, and the `set`
+// terminator knob are the dedicated CLI round, W8.)
+bool run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
+                    std::string_view text) {
+    ddbsh::ParsedBatch batch = session.parse_batch(text);
+    for (const auto& stmt : batch.statements) {
+        auto outcome = session.execute(stmt);
+        if (!outcome.has_value()) {
+            std::fputs(renderer.render_error(outcome.error()).c_str(), stderr);
+            continue;
+        }
+        std::fputs(renderer.render(*outcome).c_str(), stdout);
+        if (stmt.kind() == ddbsh::StatementKind::quit) {
+            return false;
+        }
     }
-    auto outcome = session.execute(*stmt);
-    if (!outcome.has_value()) {
-        std::fputs(renderer.render_error(outcome.error()).c_str(), stderr);
-        return true;
+    if (batch.error.has_value()) {
+        std::fputs(renderer.render_error(*batch.error).c_str(), stderr);
     }
-    std::fputs(renderer.render(*outcome).c_str(), stdout);
-    return stmt->kind() != ddbsh::StatementKind::quit;
+    return true;
 }
 
 }  // namespace
@@ -67,21 +76,23 @@ int main(int argc, char** argv) {
     ddbsh::Session session(ddbsh::SessionConfig{region, endpoint}, client);
     ddbsh::render::Renderer renderer;
 
-    // -c "<cmds>": run a single string then exit (mirrors the original -c).
+    // -c "<cmds>": run a batch string then exit (mirrors the original -c; the
+    // payload may hold several ';'-separated statements and need not end in ';').
     if (argc >= 3 && std::strcmp(argv[1], "-c") == 0) {
-        run_statement(session, renderer, argv[2]);
+        run_batch_text(session, renderer, argv[2]);
         return 0;
     }
 
     // Interactive REPL. Prompt = "<region>> " with a "(*)" suffix when an
-    // endpoint override is in effect (arch §4/§11).
+    // endpoint override is in effect (arch §4/§11). Each line is run as a batch
+    // (full isql line-buffering to a `go`/blank terminator is W8).
     const std::string prompt = region + (endpoint.empty() ? "" : " (*)") + "> ";
     char* line = nullptr;
     while ((line = readline(prompt.c_str())) != nullptr) {
         if (line[0] != '\0') {
             add_history(line);
         }
-        bool keep_going = run_statement(session, renderer, line);
+        bool keep_going = run_batch_text(session, renderer, line);
         std::free(line);
         if (!keep_going) {
             break;

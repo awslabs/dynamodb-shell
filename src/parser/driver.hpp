@@ -37,8 +37,27 @@ public:
     Driver(const Driver&) = delete;
     Driver& operator=(const Driver&) = delete;
 
-    /// Run scanner + parser over the input. On success `result` holds the
-    /// parsed Statement; on failure `error` holds a parse_error.
+    /// The outcome of parsing the next statement from the batch.
+    enum class Step {
+        statement,     ///< a statement was parsed; release_result() yields it
+        empty_at_eof,  ///< no statement remained (end of input reached)
+        error,         ///< a parse/semantic error was recorded (see error())
+    };
+
+    /// Parse the NEXT `;`-terminated statement from the (persistent) scanner,
+    /// constructing a fresh bison Parser over it. The scanner survives across
+    /// calls, so successive calls walk the batch string statement by statement
+    /// until end of input (the W7 multi-statement model). Resets the per-
+    /// statement result/error (but NOT the line/column cursor or the EOF flag,
+    /// which stay continuous across the batch — matching the original's
+    /// run-loop error locations). Call repeatedly until `empty_at_eof` or
+    /// `error`.
+    Step parse_next();
+
+    /// Run scanner + parser over the input for a SINGLE statement. Back-compat
+    /// shim for Session::parse(): one parse_next() call, treating a terminal
+    /// empty parse as the empty statement. On success `result` holds the parsed
+    /// Statement; on failure `error` holds the error.
     /// @returns true on success, false on parse/scan failure.
     bool parse();
 
@@ -46,6 +65,13 @@ public:
     void* scanner() { return scanner_; }
     std::string_view input() const { return input_; }
     std::size_t& scan_offset() { return scan_offset_; }
+
+    /// Record that the scanner reached end of input (set by the lexer's
+    /// <<EOF>> rule). Sticky for the batch's lifetime: it lets parse_next()
+    /// distinguish a terminal empty parse (stop) from a bare-';' empty
+    /// statement mid-batch (continue).
+    void mark_eof() { saw_eof_ = true; }
+    bool saw_eof() const { return saw_eof_; }
 
     /// Record the verbatim text of the most recently scanned lexeme and advance
     /// the line/column cursor over it (set by the scanner's YY_USER_ACTION).
@@ -87,6 +113,7 @@ private:
     std::string last_lexeme_;      ///< verbatim text of the last scanned lexeme
     int line_ = 1;                 ///< 1-based line of the scan cursor
     int column_ = 1;               ///< 1-based column of the scan cursor
+    bool saw_eof_ = false;         ///< scanner reached end of input (sticky)
     std::optional<Statement> result_;
     std::optional<Error> error_;
 };

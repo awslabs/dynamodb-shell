@@ -33,12 +33,42 @@ Driver::~Driver() {
     }
 }
 
-bool Driver::parse() {
+Driver::Step Driver::parse_next() {
+    // Fresh per-statement state; the scanner, EOF flag, and line/column cursor
+    // persist across statements (the cursor stays continuous so a later
+    // statement's error reports the original's `[line, col]`).
+    result_.reset();
+    error_.reset();
+
     Parser parser(*this);
     int rc = parser.parse();
-    // A nonzero bison return, or an error recorded by the error() hook, is a
-    // failure. On success the grammar has set result_.
-    return rc == 0 && !error_.has_value();
+    if (rc != 0 || error_.has_value()) {
+        // A nonzero bison return, or an error recorded by error()/
+        // set_semantic_error() (even when the grammar YYACCEPTed via the
+        // `error SEMICOLON` recovery arm), is a failed statement.
+        return Step::error;
+    }
+    // On success the grammar always set a result (a command or the empty
+    // statement). A terminal empty parse — the empty statement reached because
+    // the scanner is at end of input — ends the batch; a bare-';' empty
+    // statement mid-batch (EOF not yet seen) is a real, no-op statement.
+    if (!result_.has_value() || (result_->kind() == StatementKind::empty && saw_eof_)) {
+        return Step::empty_at_eof;
+    }
+    return Step::statement;
+}
+
+bool Driver::parse() {
+    Step step = parse_next();
+    if (step == Step::error) {
+        return false;
+    }
+    // Back-compat: Session::parse() treats a terminal empty parse (e.g. empty
+    // or comment-only input) as the empty statement.
+    if (step == Step::empty_at_eof && !result_.has_value()) {
+        result_ = Statement{};
+    }
+    return true;
 }
 
 void Driver::on_token(const char* text, int length) {

@@ -143,6 +143,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/reentrancy_test.cpp
                    tests/lexer_test.cpp
                    tests/parse_test.cpp
+                   tests/batch_test.cpp
                    tests/expression_test.cpp
                    tests/planner_test.cpp
                    tests/select_exec_test.cpp

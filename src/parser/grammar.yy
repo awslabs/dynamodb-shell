@@ -291,23 +291,49 @@
 
 %%
 
-/* One `;`-terminated statement per parse (the engine parses one command at a
- * time; the original's yyparse likewise YYACCEPTs after each command). The
- * EXPLAIN prefix wraps a ddl/dml command (arch §7); it sets the AST's explain
- * flag rather than mutating a shared command object (P2a-02 §4.2). On a syntax
- * error, bison records the Error via error() and recovers to the next ';'; the
- * Driver then reports failure. */
+/* ONE `;`-terminated statement per parser invocation, then YYACCEPT (exactly
+ * the original's run loop: its yyparse YYACCEPTs after each top-level command
+ * and is re-entered for the next statement — arch §3/§5). The Driver keeps a
+ * single persistent scanner alive for the whole batch string and constructs a
+ * fresh Parser per statement over it (Driver::parse_next); the YYACCEPT below
+ * returns control to that loop at each statement boundary WITHOUT requiring the
+ * end-of-input token, so a batch like `a; b;` parses as two statements rather
+ * than erroring on the second (the W7 multi-statement blocker). This is engine-
+ * internal to a single one-shot parse_batch() call: no input is pulled across
+ * calls and no state carries over (human-ratified isql-batch model, 2026-10-14
+ * — supersedes the InputSource/StatementStream design).
+ *
+ * The trailing ';' is OPTIONAL on the final statement (the `command` /
+ * `K_EXPLAIN explainable` arms with no SEMICOLON). This reproduces the
+ * original string input source, which appended a ';' if the `-c` payload
+ * lacked one (arch §4) — many golden `-c` commands omit the terminator
+ * (e.g. `drop table if exists icd1`, `explain select ... from st1`, and the
+ * trailing `select` of a multi-statement batch). The engine never mutates its
+ * input to add the ';'; the grammar accepts the end-of-input in its place. The
+ * `command SEMICOLON` vs `command` (and explainable) pair is unambiguous: the
+ * state after `command` shifts on ';' and reduces (to a complete statement)
+ * only on end-of-input, so there is no shift/reduce conflict and no lookahead
+ * token is consumed past the terminator.
+ *
+ * The EXPLAIN prefix wraps a ddl/dml command (arch §7); it sets the AST's
+ * explain flag rather than mutating a shared command object (P2a-02 §4.2). On a
+ * syntax error, bison records the Error via error() and recovers to the next
+ * ';'; the Driver then reports failure for that statement. */
 input:
       %empty
         { drv.set_empty_result(); }
     | SEMICOLON
-        { drv.set_empty_result(); }
+        { drv.set_empty_result(); YYACCEPT; }
     | command SEMICOLON
-        { drv.set_result(std::move($1), false); }
+        { drv.set_result(std::move($1), false); YYACCEPT; }
+    | command
+        { drv.set_result(std::move($1), false); YYACCEPT; }
     | K_EXPLAIN explainable SEMICOLON
-        { drv.set_result(std::move($2), true); }
+        { drv.set_result(std::move($2), true); YYACCEPT; }
+    | K_EXPLAIN explainable
+        { drv.set_result(std::move($2), true); YYACCEPT; }
     | error SEMICOLON
-        { /* error already recorded by error(); recover to ';' */ }
+        { /* error already recorded by error(); recover to ';' */ YYACCEPT; }
     ;
 
 command:

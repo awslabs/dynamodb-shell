@@ -61,6 +61,28 @@ Result<Statement> Session::parse(std::string_view text) {
     return driver.release_result();
 }
 
+ParsedBatch Session::parse_batch(std::string_view text) {
+    ParsedBatch batch;
+    engine::Driver driver(text);
+    for (;;) {
+        engine::Driver::Step step = driver.parse_next();
+        if (step == engine::Driver::Step::error) {
+            // The statement after the ones already collected failed to parse.
+            // Keep the good prefix ("execute what you can") and surface the
+            // error for the embedder to render after it.
+            batch.error = driver.error().has_value()
+                              ? *driver.error()
+                              : Error{Errc::parse_error, "parse error", std::nullopt, std::nullopt};
+            break;
+        }
+        if (step == engine::Driver::Step::empty_at_eof) {
+            break;  // end of the batch
+        }
+        batch.statements.push_back(driver.release_result());
+    }
+    return batch;
+}
+
 Result<ExecOutcome> Session::execute(const Statement& statement) {
     switch (statement.kind()) {
         case StatementKind::empty:
