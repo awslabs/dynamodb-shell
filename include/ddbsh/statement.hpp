@@ -45,6 +45,7 @@ enum class StatementKind {
     create_table,      ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
     insert,            ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
     select_statement,  ///< SELECT [CONSISTENT] <proj|*> FROM <table>[.<index>] [WHERE ...]
+    help,              ///< HELP [topic ...] — print usage (no API call)
 };
 
 /// A self-contained parsed statement. Move-only: it owns the parsed AST via a

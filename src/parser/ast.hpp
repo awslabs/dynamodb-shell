@@ -66,6 +66,51 @@ inline double parse_double(const std::string& s) {
 /// Blank / comment-only / bare-';' input: executes to nothing.
 struct EmptyCmd {};
 
+/// A HELP topic. The original parser had one grammar production per HELP form
+/// (parser.y: `help_command`), each printing a fixed usage string during the
+/// parse and yielding no command (arch §5). This reimplementation keeps the
+/// shell terminal-free: HELP parses to a HelpCmd carrying the topic, and
+/// execute() emits the matching usage text as a ReportOutcome (same pattern as
+/// SHOW VERSION, which also moved its parser-time printf into execute()). The
+/// per-topic text lives in src/parser/help_text.cpp, byte-for-byte faithful to
+/// the original so output matches `ddbsh-old` exactly (tenet 1, D-B).
+enum class HelpTopic {
+    general,            ///< HELP
+    explain,            ///< HELP EXPLAIN
+    begin,              ///< HELP BEGIN
+    commit,             ///< HELP COMMIT
+    rollback,           ///< HELP ROLLBACK
+    connect,            ///< HELP CONNECT
+    drop,               ///< HELP DROP
+    drop_table,         ///< HELP DROP TABLE
+    describe,           ///< HELP DESCRIBE
+    show,               ///< HELP SHOW
+    show_tables,        ///< HELP SHOW TABLES
+    create,             ///< HELP CREATE
+    create_table,       ///< HELP CREATE TABLE
+    alter_table,        ///< HELP ALTER TABLE
+    show_limits,        ///< HELP SHOW LIMITS
+    show_backups,       ///< HELP SHOW BACKUPS
+    describe_backup,    ///< HELP DESCRIBE BACKUP
+    drop_backup,        ///< HELP DROP BACKUP
+    backup,             ///< HELP BACKUP
+    restore,            ///< HELP RESTORE
+    select_statement,   ///< HELP SELECT
+    insert,             ///< HELP INSERT
+    replace,            ///< HELP REPLACE
+    update,             ///< HELP UPDATE
+    upsert,             ///< HELP UPSERT
+    del,                ///< HELP DELETE
+    show_version,       ///< HELP SHOW VERSION
+    show_create_table,  ///< HELP SHOW CREATE TABLE
+};
+
+/// HELP [topic ...] — print usage text, contact no API (arch §7). Carries only
+/// the resolved topic; the usage text is produced at render time.
+struct HelpCmd {
+    HelpTopic topic = HelpTopic::general;
+};
+
 /// QUIT — exit the shell.
 struct QuitCmd {};
 
@@ -203,8 +248,9 @@ struct SelectCmd {
 };
 
 /// The parsed command. Grows one alternative per ported command family.
-using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
-                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd>;
+using CommandNode =
+    std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
+                 DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd, HelpCmd>;
 
 /// Map a CommandNode to its public StatementKind. The variant alternative is
 /// the single source of truth; this keeps the public enum in lockstep.
@@ -232,6 +278,8 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::insert;
             } else if constexpr (std::is_same_v<T, SelectCmd>) {
                 return StatementKind::select_statement;
+            } else if constexpr (std::is_same_v<T, HelpCmd>) {
+                return StatementKind::help;
             } else {
                 static_assert(sizeof(T) == 0, "unhandled CommandNode alternative");
             }
