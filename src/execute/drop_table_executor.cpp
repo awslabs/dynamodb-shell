@@ -38,4 +38,25 @@ Result<ExecOutcome> execute_drop_table(const DropTableCmd& cmd, IDDBClient& clie
     return ExecOutcome{StatusOutcome{"DROP"}};
 }
 
+Result<ExecOutcome> execute_drop_table_explain(const DropTableCmd& cmd, IDDBClient& client) {
+    // IF EXISTS: the original's guard (`!m_exists || table_exists(...)`) runs
+    // even when explaining, so EXPLAIN DROP IF EXISTS on a missing table emits
+    // nothing (no DeleteTable block).
+    if (cmd.if_exists) {
+        auto described = client.describe_table(DescribeTableIn{cmd.table});
+        if (!described.has_value()) {
+            return ExecOutcome{EmptyOutcome{}};
+        }
+    }
+
+    auto body = client.explain_request(DeleteTableIn{cmd.table});
+    if (!body.has_value()) {
+        return fail(body.error());
+    }
+    ExplainOutcome outcome;
+    outcome.blocks.push_back(
+        ExplainBlock{"DeleteTable", std::move(*body), ExplainBlock::Format::pretty});
+    return ExecOutcome{std::move(outcome)};
+}
+
 }  // namespace ddbsh::engine

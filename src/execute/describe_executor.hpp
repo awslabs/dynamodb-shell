@@ -36,6 +36,14 @@ namespace ddbsh::engine {
 /// lines, or an Error if the table cannot be described.
 Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client);
 
+/// EXPLAIN a DESCRIBE: serialize the four requests the report WOULD issue, in
+/// call order, into an ExplainOutcome — DescribeTable and DescribeTimeToLive in
+/// COMPACT form (the original used strip_newlines for these two, via
+/// CDescribeHelper), then DescribeContinuousBackups and
+/// DescribeTableReplicaAutoScaling in PRETTY form (explain_string, describe.cpp).
+/// Makes no service call (every request carries only the table name).
+Result<ExecOutcome> execute_describe_explain(const DescribeCmd& cmd, IDDBClient& client);
+
 }  // namespace ddbsh::engine
 
 #endif  // DDBSH_SRC_EXECUTE_DESCRIBE_EXECUTOR_HPP

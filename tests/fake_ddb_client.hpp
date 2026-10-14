@@ -246,6 +246,30 @@ public:
         return TableReplicaAutoScalingOut{};
     }
 
+    // The fake cannot reproduce the AWS SDK's byte-exact SerializePayload()
+    // (that IS the point of the real adapter — golden parity validates it via
+    // the real AwsDDBClient, W7). For offline plumbing tests it records the
+    // request and returns a deterministic placeholder body WITH a tab, so an
+    // executor-path test still exercises the Renderer's explain_string
+    // transform; byte-exactness of the JSON is a golden concern, not a fake one.
+    Result<std::string> explain_request(const ExplainRequest& request) override {
+        explain_requests_.push_back(request);
+        if (explain_error_.has_value()) {
+            return fail(*explain_error_);
+        }
+        return explain_body_;
+    }
+
+    /// Set the placeholder body explain_request returns (default has a tab so
+    /// the Renderer transform is exercised).
+    void set_explain_body(std::string body) { explain_body_ = std::move(body); }
+
+    /// Make explain_request fail with this Error. nullopt => succeed.
+    void set_explain_error(std::optional<Error> error) { explain_error_ = std::move(error); }
+
+    /// The requests passed to explain_request, in order.
+    const std::vector<ExplainRequest>& explain_requests() const { return explain_requests_; }
+
 private:
     // The synthetic pagination cursor encodes the NEXT page index as a single
     // attribute `__page` (number). page 0 has no cursor on entry.
@@ -291,6 +315,9 @@ private:
     std::vector<CreateTableIn> create_requests_;
     std::optional<Error> create_error_;
     std::vector<std::string> waited_active_;
+    std::vector<ExplainRequest> explain_requests_;
+    std::string explain_body_ = "{\n\t\"stub\":\t\"explain\"\n}";
+    std::optional<Error> explain_error_;
 };
 
 }  // namespace ddbsh::test

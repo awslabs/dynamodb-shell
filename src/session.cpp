@@ -89,48 +89,43 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             return ExecOutcome{StatusOutcome{"CONNECT"}};
         }
         case StatementKind::select_statement: {
-            // EXPLAIN of a SELECT must not contact the service; it renders the
-            // serialized request(s) instead, which lands with the EXPLAIN
-            // Renderer slice (W6). Until then an explaining SELECT reports
-            // not-implemented rather than executing.
-            if (statement.ast()->explain) {
-                return fail(Errc::not_implemented,
-                            "EXPLAIN SELECT is not yet available in this build");
-            }
             const auto& select = std::get<engine::SelectCmd>(statement.ast()->command);
+            if (statement.ast()->explain) {
+                // EXPLAIN renders the serialized GetItem/Query/Scan request
+                // (the planner still resolves the key schema; it does not read
+                // data). W6.
+                return engine::execute_select_explain(select, impl_->client,
+                                                      impl_->next_alias_prefix());
+            }
             return engine::execute_select(select, impl_->client, impl_->next_alias_prefix());
         }
         case StatementKind::drop_table: {
-            // EXPLAIN of a DROP renders the serialized DeleteTable request and
-            // must not contact the service (W6); until then an explaining DROP
-            // reports not-implemented rather than executing.
-            if (statement.ast()->explain) {
-                return fail(Errc::not_implemented,
-                            "EXPLAIN DROP TABLE is not yet available in this build");
-            }
             const auto& drop = std::get<engine::DropTableCmd>(statement.ast()->command);
+            if (statement.ast()->explain) {
+                // EXPLAIN renders the serialized DeleteTable request (IF EXISTS
+                // still probes existence; a missing table emits nothing). W6.
+                return engine::execute_drop_table_explain(drop, impl_->client);
+            }
             return engine::execute_drop_table(drop, impl_->client);
         }
         case StatementKind::insert: {
-            // EXPLAIN of an INSERT/REPLACE renders the serialized PutItem
-            // request(s) and must not contact the service (W6).
-            if (statement.ast()->explain) {
-                return fail(Errc::not_implemented,
-                            "EXPLAIN INSERT/REPLACE is not yet available in this build");
-            }
             const auto& insert = std::get<engine::InsertCmd>(statement.ast()->command);
+            if (statement.ast()->explain) {
+                // EXPLAIN renders the serialized PutItem request(s), one per
+                // row (the key schema is still resolved for the condition). W6.
+                return engine::execute_insert_explain(
+                    insert, impl_->client, [this] { return impl_->next_alias_prefix(); });
+            }
             return engine::execute_insert(insert, impl_->client,
                                           [this] { return impl_->next_alias_prefix(); });
         }
         case StatementKind::create_table: {
-            // EXPLAIN of a CREATE renders the serialized CreateTable request and
-            // must not contact the service (W6); until then an explaining CREATE
-            // reports not-implemented rather than executing.
-            if (statement.ast()->explain) {
-                return fail(Errc::not_implemented,
-                            "EXPLAIN CREATE TABLE is not yet available in this build");
-            }
             const auto& create = std::get<engine::CreateTableCmd>(statement.ast()->command);
+            if (statement.ast()->explain) {
+                // EXPLAIN renders the serialized CreateTable request plus the
+                // CREATE token the original prints even when explaining. W6.
+                return engine::execute_create_table_explain(create, impl_->client);
+            }
             return engine::execute_create_table(create, impl_->client);
         }
         case StatementKind::show_tables: {
@@ -141,14 +136,12 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             return engine::execute_show_tables(show, impl_->client);
         }
         case StatementKind::describe:
-            // DESCRIBE is not explainable here yet: the EXPLAIN block renders
-            // the four serialized requests (DescribeTable, DescribeTimeToLive,
-            // DescribeContinuousBackups, DescribeTableReplicaAutoScaling) and
-            // must not contact the service (W6). Until then an explaining
-            // DESCRIBE reports not-implemented.
             if (statement.ast()->explain) {
-                return fail(Errc::not_implemented,
-                            "EXPLAIN DESCRIBE is not yet available in this build");
+                // EXPLAIN renders the four serialized DescribeTable/
+                // DescribeTimeToLive/DescribeContinuousBackups/
+                // DescribeTableReplicaAutoScaling requests; no service call. W6.
+                return engine::execute_describe_explain(
+                    std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client);
             }
             return engine::execute_describe(std::get<engine::DescribeCmd>(statement.ast()->command),
                                             impl_->client);

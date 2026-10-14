@@ -168,14 +168,4 @@ TEST(CreateTableExec, GsiAndLsiCaptured) {
     EXPECT_EQ(*req.lsis[0].key_schema.range, "c");
 }
 
-TEST(CreateTableExec, ExplainCreateReportsNotImplemented) {
-    ddbsh::test::FakeDDBClient client;
-    ddbsh::Session session = make_session(client);
-
-    auto out = session.run("explain create table t ( a number ) primary key ( a hash );");
-    ASSERT_FALSE(out.has_value());
-    EXPECT_EQ(out.error().code, Errc::not_implemented);
-    EXPECT_TRUE(client.create_requests().empty());  // EXPLAIN contacts no service
-}
-
 }  // namespace

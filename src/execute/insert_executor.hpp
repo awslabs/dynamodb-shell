@@ -44,6 +44,14 @@ namespace ddbsh::engine {
 Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
                                    const std::function<std::string()>& next_prefix);
 
+/// EXPLAIN an INSERT/REPLACE: build the same per-row PutItem request(s) and
+/// serialize each into an ExplainOutcome (one PutItem block per row), without
+/// issuing them. Still resolves the key schema (for the INSERT condition) and
+/// consumes the per-row alias prefix exactly as execute_insert, so the EXPLAIN
+/// alias numbering matches a real run. Returns the ExplainOutcome or an Error.
+Result<ExecOutcome> execute_insert_explain(const InsertCmd& cmd, IDDBClient& client,
+                                           const std::function<std::string()>& next_prefix);
+
 }  // namespace ddbsh::engine
 
 #endif  // DDBSH_SRC_EXECUTE_INSERT_EXECUTOR_HPP

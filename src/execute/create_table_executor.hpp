@@ -38,6 +38,14 @@ namespace ddbsh::engine {
 /// Error on a create / waiter failure.
 Result<ExecOutcome> execute_create_table(const CreateTableCmd& cmd, IDDBClient& client);
 
+/// EXPLAIN a CREATE TABLE: serialize the CreateTable request into an
+/// ExplainOutcome. The original prints the CREATE token even in EXPLAIN mode
+/// (the printf is outside the explain branch, create_table.cpp), so the outcome
+/// carries `trailing_status = "CREATE"`. IF NOT EXISTS still probes via
+/// describe_table: when the table already exists there is NO CreateTable block
+/// (just the CREATE token), matching the original's skipped else-branch.
+Result<ExecOutcome> execute_create_table_explain(const CreateTableCmd& cmd, IDDBClient& client);
+
 }  // namespace ddbsh::engine
 
 #endif  // DDBSH_SRC_EXECUTE_CREATE_TABLE_EXECUTOR_HPP

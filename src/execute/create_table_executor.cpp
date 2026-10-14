@@ -62,4 +62,28 @@ Result<ExecOutcome> execute_create_table(const CreateTableCmd& cmd, IDDBClient& 
     return ExecOutcome{StatusOutcome{"CREATE"}};
 }
 
+Result<ExecOutcome> execute_create_table_explain(const CreateTableCmd& cmd, IDDBClient& client) {
+    ExplainOutcome outcome;
+    // The original prints the CREATE token even in EXPLAIN mode (outside the
+    // explain branch, create_table.cpp).
+    outcome.trailing_status = "CREATE";
+
+    // IF NOT EXISTS: probe first. When the table exists, the else-branch (which
+    // builds + serializes the request) is skipped — EXPLAIN emits only CREATE.
+    if (cmd.if_not_exists) {
+        auto described = client.describe_table(DescribeTableIn{cmd.table_name});
+        if (described.has_value()) {
+            return ExecOutcome{std::move(outcome)};
+        }
+    }
+
+    auto body = client.explain_request(make_request(cmd));
+    if (!body.has_value()) {
+        return fail(body.error());
+    }
+    outcome.blocks.push_back(
+        ExplainBlock{"CreateTable", std::move(*body), ExplainBlock::Format::pretty});
+    return ExecOutcome{std::move(outcome)};
+}
+
 }  // namespace ddbsh::engine

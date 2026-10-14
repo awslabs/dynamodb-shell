@@ -244,14 +244,4 @@ TEST(SelectExec, MissingTablePropagatesError) {
     EXPECT_EQ(out.error().code, ddbsh::Errc::no_such_table);
 }
 
-TEST(SelectExec, ExplainSelectReportsNotImplemented) {
-    ddbsh::test::FakeDDBClient client;
-    client.set_table(table_a("t"));
-    ddbsh::Session session = make_session(client);
-
-    auto out = session.run("explain select * from t where a = 1;");
-    ASSERT_FALSE(out.has_value());
-    EXPECT_EQ(out.error().code, ddbsh::Errc::not_implemented);
-}
-
 }  // namespace

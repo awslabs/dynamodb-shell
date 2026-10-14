@@ -10,9 +10,10 @@
 // totalizes consumed capacity across pages, and returns a SelectOutcome (DATA,
 // never bytes — the Renderer formats it, P2a-03).
 //
-// EXPLAIN of a SELECT is NOT handled here: EXPLAIN must not contact the service
-// and renders the serialized request(s) instead, which lands with the EXPLAIN
-// Renderer slice (W6). The caller routes an explaining SELECT elsewhere.
+// EXPLAIN of a SELECT is handled by execute_select_explain: it plans the same
+// access pattern but, instead of issuing the op, serializes the chosen request
+// (via IDDBClient::explain_request) into an ExplainOutcome and does NOT contact
+// the service for data (it still resolves the key schema to plan — arch §8).
 //
 // D12: never aborts; a key-schema or service failure is returned as an Error.
 
@@ -33,6 +34,13 @@ namespace ddbsh::engine {
 /// Session::next_alias_prefix()). Returns a SelectOutcome.
 Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
                                    const std::string& alias_prefix);
+
+/// EXPLAIN a SELECT: plan the access pattern (same decision as execute_select)
+/// and serialize the chosen GetItem/Query/Scan request into an ExplainOutcome
+/// (one block). Returns the ExplainOutcome, or an Error if planning/serializing
+/// fails.
+Result<ExecOutcome> execute_select_explain(const SelectCmd& cmd, IDDBClient& client,
+                                           const std::string& alias_prefix);
 
 }  // namespace ddbsh::engine
 

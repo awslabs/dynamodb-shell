@@ -8,9 +8,10 @@
 // engine writes nothing to any stream.
 //
 // 2b scope: StatusOutcome, ReportOutcome, EmptyOutcome (walking skeleton) plus
-// SelectOutcome (W5 — SELECT execution) and WriteOutcome (W5 part 2 —
-// INSERT/REPLACE). BulkWriteOutcome, ConditionalWriteOutcome,
-// transact/explain/help arms land in later sub-phases per the P2a-03 schema.
+// SelectOutcome (W5 — SELECT execution), WriteOutcome (W5 part 2 —
+// INSERT/REPLACE), and ExplainOutcome (W6 — EXPLAIN of the in-scope commands).
+// BulkWriteOutcome, ConditionalWriteOutcome, transact/help arms land in later
+// sub-phases per the P2a-03 schema.
 
 #ifndef DDBSH_EXEC_OUTCOME_HPP
 #define DDBSH_EXEC_OUTCOME_HPP
@@ -64,10 +65,45 @@ struct WriteOutcome {
     std::vector<std::string> tokens;
 };
 
+/// One serialized DynamoDB API request in an EXPLAIN block (P2a-03 §4.3).
+/// `api_name` is the operation the original wrapped the request in — "GetItem",
+/// "Query", "Scan", "PutItem", "CreateTable", "DeleteTable", "DescribeTable",
+/// "DescribeTimeToLive", "DescribeContinuousBackups",
+/// "DescribeTableReplicaAutoScaling". `body` is the SDK's RAW SerializePayload()
+/// output (tab-indented JSON) — the serialization contract, produced at the
+/// adapter where the request is built (D11); the engine never inspects it.
+/// `format` selects the Renderer transform the original applied for that call:
+///   * `pretty`  — explain_string (tab -> 3 spaces): the multi-line
+///     `ApiName({\n   "k":   "v"\n})` block used for most requests (arch §9).
+///   * `compact` — strip_newlines (newlines+tabs -> a single line, `:\t` ->
+///     `: `): the one-line form the original emitted for DescribeTable and
+///     DescribeTimeToLive via CDescribeHelper (describe_helper.cpp).
+/// Keeping the body raw lets the Renderer own the transform (unit-testable with
+/// a hand-built block, no SDK), per P2a-03 §5.
+struct ExplainBlock {
+    enum class Format { pretty, compact };
+    std::string api_name;
+    std::string body;
+    Format format = Format::pretty;
+};
+
+/// EXPLAIN <command>: the serialized API request(s) the command WOULD issue,
+/// rendered instead of executed (arch §7). Blocks are emitted in call order,
+/// each as `ApiName(<formatted body>)\n`. `trailing_status` carries a status
+/// token the original prints even in EXPLAIN mode: CREATE TABLE's run() prints
+/// "CREATE" OUTSIDE the explain branch (create_table.cpp), so EXPLAIN CREATE
+/// emits the CreateTable block AND the CREATE token; the other in-scope
+/// commands leave it nullopt (EXPLAIN DROP prints only DeleteTable — its DROP
+/// token lives in the non-explain branch, drop_table.cpp).
+struct ExplainOutcome {
+    std::vector<ExplainBlock> blocks;
+    std::optional<std::string> trailing_status;
+};
+
 /// Discriminated union over the observable shapes a command produces. Extended
-/// per sub-phase (BulkWriteOutcome, ExplainOutcome, ...).
-using ExecOutcome =
-    std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome, WriteOutcome>;
+/// per sub-phase (BulkWriteOutcome, ...).
+using ExecOutcome = std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome,
+                                 WriteOutcome, ExplainOutcome>;
 
 }  // namespace ddbsh
 

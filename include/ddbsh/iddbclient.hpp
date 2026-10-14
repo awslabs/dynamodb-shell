@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ddbsh/result.hpp"
@@ -323,6 +324,14 @@ struct TableReplicaAutoScalingOut {
     std::vector<ReplicaAutoScalingDescription> replicas;
 };
 
+/// A request to serialize for EXPLAIN WITHOUT executing (P2a-03 §4.3). The
+/// adapter translates the active alternative to its SDK request and returns the
+/// raw SerializePayload() string; the engine never sees an Aws:: type. One
+/// alternative per in-scope API the EXPLAIN paths can emit (arch §7/§8).
+using ExplainRequest = std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn,
+                                    DeleteTableIn, DescribeTableIn, DescribeTimeToLiveIn,
+                                    DescribeContinuousBackupsIn, DescribeTableReplicaAutoScalingIn>;
+
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
 class IDDBClient {
@@ -373,6 +382,16 @@ public:
     /// FakeDDBClient returns immediately.
     virtual Result<void> wait_for_table_gone(const std::string& table_name) = 0;
     // update/transact + a CancelToken: added per sub-phase (2b-2d).
+
+    /// Serialize a planned request to its EXPLAIN body — the SDK's
+    /// SerializePayload() output (tab-indented JSON) — WITHOUT executing it.
+    /// Used only by the EXPLAIN paths; the serialization itself makes no service
+    /// call (note EXPLAIN SELECT/INSERT still resolve the key schema via
+    /// describe_table BEFORE building the request — arch §8). The Renderer
+    /// applies the explain_string/strip_newlines transform, so this returns the
+    /// raw body (P2a-03 §4.3). This is the sole EXPLAIN seam; the engine's
+    /// executors wrap the body in `ApiName(...)` and pick the format.
+    virtual Result<std::string> explain_request(const ExplainRequest&) = 0;
 };
 
 }  // namespace ddbsh

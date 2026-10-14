@@ -285,16 +285,4 @@ TEST(Describe, MissingTableIsError) {
     EXPECT_EQ(out.error().code, Errc::no_such_table);
 }
 
-TEST(Describe, ExplainIsNotYetImplemented) {
-    // EXPLAIN DESCRIBE renders the four serialized requests (W6); until then it
-    // reports not-implemented and must not contact the service.
-    ddbsh::test::FakeDDBClient client;
-    client.set_table(base_provisioned("t1"));
-    ddbsh::Session session = make_session(client);
-
-    auto out = session.run("explain describe t1;");
-    ASSERT_FALSE(out.has_value());
-    EXPECT_EQ(out.error().code, Errc::not_implemented);
-}
-
 }  // namespace

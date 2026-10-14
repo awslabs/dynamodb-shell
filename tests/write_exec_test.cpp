@@ -135,17 +135,6 @@ TEST(WriteExec, InsertMissingTablePropagatesError) {
     EXPECT_EQ(out.error().code, Errc::no_such_table);
 }
 
-TEST(WriteExec, ExplainInsertReportsNotImplemented) {
-    ddbsh::test::FakeDDBClient client;
-    client.set_table(table_pk("t"));
-    ddbsh::Session session = make_session(client);
-
-    auto out = session.run("explain insert into t ( id ) values ( 1 );");
-    ASSERT_FALSE(out.has_value());
-    EXPECT_EQ(out.error().code, Errc::not_implemented);
-    EXPECT_TRUE(client.put_requests().empty());  // EXPLAIN contacts no service
-}
-
 // ---- DROP TABLE ------------------------------------------------------------
 
 TEST(WriteExec, DropTableDeletesAndWaits) {
@@ -206,17 +195,6 @@ TEST(WriteExec, DropTableDeleteFailurePropagatesError) {
     ASSERT_FALSE(out.has_value());
     EXPECT_EQ(out.error().code, Errc::service_error);
     EXPECT_TRUE(client.waited_gone().empty());  // no wait after a failed delete
-}
-
-TEST(WriteExec, ExplainDropReportsNotImplemented) {
-    ddbsh::test::FakeDDBClient client;
-    client.set_table(table_pk("t"));
-    ddbsh::Session session = make_session(client);
-
-    auto out = session.run("explain drop table t;");
-    ASSERT_FALSE(out.has_value());
-    EXPECT_EQ(out.error().code, Errc::not_implemented);
-    EXPECT_TRUE(client.deleted_tables().empty());
 }
 
 }  // namespace

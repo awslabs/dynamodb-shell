@@ -11,7 +11,9 @@
 // describe_time_to_live / describe_continuous_backups /
 // describe_table_replica_auto_scaling / list_tables), the ACTIVE/gone waiters,
 // and the data-plane ops (get_item / query / scan / put_item) with full
-// ddbsh::Value <-> Aws::AttributeValue translation.
+// ddbsh::Value <-> Aws::AttributeValue translation. It also serves EXPLAIN via
+// explain_request(), which serializes the exact SDK request each op would send
+// (SerializePayload) without issuing it (P2a-03 §4.3).
 
 #ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
 #define DDBSH_CLI_AWS_DDB_CLIENT_HPP
@@ -48,6 +50,7 @@ public:
         const DescribeTableReplicaAutoScalingIn&) override;
     Result<void> wait_for_table_gone(const std::string& table_name) override;
     Result<void> wait_for_table_active(const std::string& table_name) override;
+    Result<std::string> explain_request(const ExplainRequest&) override;
 
 private:
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;

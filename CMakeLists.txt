@@ -149,7 +149,8 @@ if(DDBSH_BUILD_TESTS)
                    tests/write_exec_test.cpp
                    tests/create_table_exec_test.cpp
                    tests/show_tables_exec_test.cpp
-                   tests/describe_exec_test.cpp)
+                   tests/describe_exec_test.cpp
+                   tests/explain_exec_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src")

@@ -30,6 +30,14 @@ namespace ddbsh::engine {
 /// table (no output, matching the original).
 Result<ExecOutcome> execute_drop_table(const DropTableCmd& cmd, IDDBClient& client);
 
+/// EXPLAIN a DROP TABLE: serialize the DeleteTable request into an
+/// ExplainOutcome (one block, no trailing token — the original prints DROP only
+/// in the non-explain branch). IF EXISTS still probes existence first: a missing
+/// table yields an EmptyOutcome (no DeleteTable block, no output), matching the
+/// original's guard (`!m_exists || table_exists(...)`), which runs even when
+/// explaining.
+Result<ExecOutcome> execute_drop_table_explain(const DropTableCmd& cmd, IDDBClient& client);
+
 }  // namespace ddbsh::engine
 
 #endif  // DDBSH_SRC_EXECUTE_DROP_TABLE_EXECUTOR_HPP

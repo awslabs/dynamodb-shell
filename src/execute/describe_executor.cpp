@@ -5,7 +5,9 @@
 
 #include "execute/describe_executor.hpp"
 
+#include <array>
 #include <string>
+#include <utility>
 
 namespace ddbsh::engine {
 
@@ -238,6 +240,37 @@ Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client)
     }
 
     return ExecOutcome{std::move(report)};
+}
+
+Result<ExecOutcome> execute_describe_explain(const DescribeCmd& cmd, IDDBClient& client) {
+    // The four requests the DESCRIBE report would issue, in call order. The
+    // original emitted DescribeTable + DescribeTimeToLive via CDescribeHelper
+    // using strip_newlines (COMPACT, one line each), then DescribeContinuousBackups
+    // and DescribeTableReplicaAutoScaling using explain_string (PRETTY). None of
+    // these contacts the service — each request carries only the table name.
+    using Format = ExplainBlock::Format;
+    struct Spec {
+        const char* api_name;
+        ExplainRequest request;
+        Format format;
+    };
+    const std::array<Spec, 4> specs{{
+        {"DescribeTable", DescribeTableIn{cmd.table}, Format::compact},
+        {"DescribeTimeToLive", DescribeTimeToLiveIn{cmd.table}, Format::compact},
+        {"DescribeContinuousBackups", DescribeContinuousBackupsIn{cmd.table}, Format::pretty},
+        {"DescribeTableReplicaAutoScaling", DescribeTableReplicaAutoScalingIn{cmd.table},
+         Format::pretty},
+    }};
+
+    ExplainOutcome outcome;
+    for (const auto& spec : specs) {
+        auto body = client.explain_request(spec.request);
+        if (!body.has_value()) {
+            return fail(body.error());
+        }
+        outcome.blocks.push_back(ExplainBlock{spec.api_name, std::move(*body), spec.format});
+    }
+    return ExecOutcome{std::move(outcome)};
 }
 
 }  // namespace ddbsh::engine

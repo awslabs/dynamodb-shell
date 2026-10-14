@@ -9,9 +9,11 @@
 // WriteOutcome — the item format
 // (alpha-sorted attributes, quote_if_required, TRUE/FALSE/NULL, the top-level
 // `: ` vs nested `:` asymmetry, lists/maps/empties), the
-// `SELECT (table, cu, rcu, wcu)` consumed-capacity line (arch §9), and the
-// per-row INSERT/REPLACE status lines. The EXPLAIN block and remaining
-// write/report refinements land with their outcome arms (W6).
+// `SELECT (table, cu, rcu, wcu)` consumed-capacity line (arch §9), the per-row
+// INSERT/REPLACE status lines, and (W6) the EXPLAIN block
+// (ApiName({...}) per API call, explain_string 3-space indent / strip_newlines
+// compact form). Remaining write/report refinements land with their outcome
+// arms.
 
 #include "ddbsh/renderer.hpp"
 
@@ -176,6 +178,46 @@ std::string render_write(const WriteOutcome& w) {
     return out;
 }
 
+// ---- EXPLAIN block formatting (port of util/strip_newlines.cpp) ------------
+
+/// explain_string: each tab -> 3 spaces. The AWS SDK's SerializePayload()
+/// emits tab-indented JSON (one tab per nesting level, a tab after each key's
+/// colon); replacing every tab with 3 spaces yields the pretty multi-line
+/// EXPLAIN block the goldens expect (`"Name":   "value"`, 3-space indent).
+std::string explain_string(const std::string& s) {
+    static const std::regex tabs("[\t]");
+    return std::regex_replace(s, tabs, "   ");
+}
+
+/// strip_newlines: collapse the SDK's pretty JSON onto a single line — a
+/// newline/CR plus any following tabs becomes one space, and a key's `:\t`
+/// becomes `: `. The original used this (not explain_string) for the
+/// DescribeTable and DescribeTimeToLive EXPLAIN blocks (describe_helper.cpp).
+/// The two regex passes and their order match the original exactly.
+std::string strip_newlines(const std::string& s) {
+    static const std::regex whitespace("[\n\r][\t]*");
+    static const std::regex colontab(":\t");
+    return std::regex_replace(std::regex_replace(s, whitespace, " "), colontab, ": ");
+}
+
+/// EXPLAIN renders each block as `ApiName(<formatted body>)\n` in call order,
+/// applying the per-block transform (pretty => explain_string, compact =>
+/// strip_newlines), then any trailing status token the original prints even in
+/// EXPLAIN mode (CREATE's "CREATE"). See ExplainOutcome.
+std::string render_explain(const ExplainOutcome& e) {
+    std::string out;
+    for (const auto& block : e.blocks) {
+        const std::string body = block.format == ExplainBlock::Format::compact
+                                     ? strip_newlines(block.body)
+                                     : explain_string(block.body);
+        out += block.api_name + "(" + body + ")\n";
+    }
+    if (e.trailing_status.has_value()) {
+        out += *e.trailing_status + "\n";
+    }
+    return out;
+}
+
 }  // namespace
 
 std::string Renderer::render(const ExecOutcome& outcome) const {
@@ -192,6 +234,8 @@ std::string Renderer::render(const ExecOutcome& outcome) const {
                 return render_select(payload);
             } else if constexpr (std::is_same_v<T, WriteOutcome>) {
                 return render_write(payload);
+            } else if constexpr (std::is_same_v<T, ExplainOutcome>) {
+                return render_explain(payload);
             } else {
                 static_assert(sizeof(T) == 0, "unhandled ExecOutcome arm");
             }

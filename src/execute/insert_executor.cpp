@@ -91,4 +91,34 @@ Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
     return ExecOutcome{std::move(outcome)};
 }
 
+Result<ExecOutcome> execute_insert_explain(const InsertCmd& cmd, IDDBClient& client,
+                                           const std::function<std::string()>& next_prefix) {
+    // Resolve the partition key and validate rows exactly as execute_insert
+    // (the original resolves the key schema unconditionally, even when
+    // explaining), then serialize each row's PutItem instead of issuing it.
+    auto schema = get_key_schema(client, cmd.table_name, "");
+    if (!schema.has_value()) {
+        return fail(schema.error());
+    }
+    const std::string& pk = schema->pk;
+
+    if (auto valid = validate_rows(cmd); !valid.has_value()) {
+        return fail(valid.error());
+    }
+
+    ExplainOutcome outcome;
+    outcome.blocks.reserve(cmd.rows.size());
+    for (std::size_t row = 0; row < cmd.rows.size(); ++row) {
+        PutItemIn request = make_put_request(cmd, row, pk, next_prefix);
+        auto body = client.explain_request(request);
+        if (!body.has_value()) {
+            return fail(body.error());
+        }
+        outcome.blocks.push_back(
+            ExplainBlock{"PutItem", std::move(*body), ExplainBlock::Format::pretty});
+    }
+
+    return ExecOutcome{std::move(outcome)};
+}
+
 }  // namespace ddbsh::engine

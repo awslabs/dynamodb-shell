@@ -132,4 +132,43 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
     return ExecOutcome{std::move(outcome)};
 }
 
+Result<ExecOutcome> execute_select_explain(const SelectCmd& cmd, IDDBClient& client,
+                                           const std::string& alias_prefix) {
+    // Plan the SAME access pattern execute_select would (this resolves the key
+    // schema via describe_table — the one service call EXPLAIN SELECT makes,
+    // arch §8), then serialize the chosen request instead of issuing it.
+    auto planned = plan_select(cmd, client, alias_prefix);
+    if (!planned.has_value()) {
+        return fail(planned.error());
+    }
+    const SelectPlan& plan = *planned;
+
+    std::string api_name;
+    ExplainRequest request;
+    switch (plan.api) {
+        case SelectApi::get_item:
+            api_name = "GetItem";
+            request = plan.get_item;
+            break;
+        case SelectApi::query:
+            api_name = "Query";
+            request = plan.query;
+            break;
+        case SelectApi::scan:
+            api_name = "Scan";
+            request = plan.scan;
+            break;
+    }
+
+    auto body = client.explain_request(request);
+    if (!body.has_value()) {
+        return fail(body.error());
+    }
+
+    ExplainOutcome outcome;
+    outcome.blocks.push_back(
+        ExplainBlock{std::move(api_name), std::move(*body), ExplainBlock::Format::pretty});
+    return ExecOutcome{std::move(outcome)};
+}
+
 }  // namespace ddbsh::engine

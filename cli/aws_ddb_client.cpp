@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <type_traits>
 
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/utils/HashingUtils.h>
@@ -257,22 +258,12 @@ std::optional<ConsumedCapacity> from_sdk_consumed_capacity(
     return out;
 }
 
-}  // namespace
+// ---- Request builders (shared by the execute ops and explain_request) ------
+// Building the SDK request is factored out of each execute op so EXPLAIN
+// serializes the EXACT request the op would send (byte-identical to what runs),
+// per P2a-03 §4.3.
 
-AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint) {
-    Aws::Client::ClientConfiguration cfg;
-    if (!region.empty()) {
-        cfg.region = region;
-    }
-    if (!endpoint.empty()) {
-        cfg.endpointOverride = endpoint;
-    }
-    client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
-}
-
-AwsDDBClient::~AwsDDBClient() = default;
-
-Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
+Aws::DynamoDB::Model::GetItemRequest build_get_item(const GetItemIn& in) {
     Aws::DynamoDB::Model::GetItemRequest request;
     request.SetTableName(in.table_name);
     request.SetKey(to_sdk_item(in.key));
@@ -284,22 +275,10 @@ Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
     }
     request.SetConsistentRead(in.consistent_read);
     request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
-
-    auto outcome = client_->GetItem(request);
-    if (!outcome.IsSuccess()) {
-        return fail(from_sdk_error(outcome.GetError()));
-    }
-    const auto& result = outcome.GetResult();
-    GetItemOut out;
-    const auto& item = result.GetItem();
-    if (!item.empty()) {
-        out.item = ItemRow{from_sdk_item(item)};
-    }
-    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
-    return out;
+    return request;
 }
 
-Result<QueryOut> AwsDDBClient::query(const QueryIn& in) {
+Aws::DynamoDB::Model::QueryRequest build_query(const QueryIn& in) {
     Aws::DynamoDB::Model::QueryRequest request;
     request.SetTableName(in.table_name);
     if (in.index_name.has_value()) {
@@ -323,25 +302,10 @@ Result<QueryOut> AwsDDBClient::query(const QueryIn& in) {
     if (in.exclusive_start_key.has_value()) {
         request.SetExclusiveStartKey(to_sdk_item(*in.exclusive_start_key));
     }
-
-    auto outcome = client_->Query(request);
-    if (!outcome.IsSuccess()) {
-        return fail(from_sdk_error(outcome.GetError()));
-    }
-    const auto& result = outcome.GetResult();
-    QueryOut out;
-    for (const auto& item : result.GetItems()) {
-        out.items.push_back(ItemRow{from_sdk_item(item)});
-    }
-    const auto& lek = result.GetLastEvaluatedKey();
-    if (!lek.empty()) {
-        out.last_evaluated_key = from_sdk_item(lek);
-    }
-    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
-    return out;
+    return request;
 }
 
-Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
+Aws::DynamoDB::Model::ScanRequest build_scan(const ScanIn& in) {
     Aws::DynamoDB::Model::ScanRequest request;
     request.SetTableName(in.table_name);
     if (in.index_name.has_value()) {
@@ -364,6 +328,79 @@ Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
     if (in.exclusive_start_key.has_value()) {
         request.SetExclusiveStartKey(to_sdk_item(*in.exclusive_start_key));
     }
+    return request;
+}
+
+Aws::DynamoDB::Model::PutItemRequest build_put_item(const PutItemIn& in) {
+    Aws::DynamoDB::Model::PutItemRequest request;
+    request.SetTableName(in.table_name);
+    request.SetItem(to_sdk_item(in.item));
+    if (in.condition_expression.has_value()) {
+        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    return request;
+}
+
+}  // namespace
+
+AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint) {
+    Aws::Client::ClientConfiguration cfg;
+    if (!region.empty()) {
+        cfg.region = region;
+    }
+    if (!endpoint.empty()) {
+        cfg.endpointOverride = endpoint;
+    }
+    client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
+}
+
+AwsDDBClient::~AwsDDBClient() = default;
+
+Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
+    auto request = build_get_item(in);
+
+    auto outcome = client_->GetItem(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    GetItemOut out;
+    const auto& item = result.GetItem();
+    if (!item.empty()) {
+        out.item = ItemRow{from_sdk_item(item)};
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
+}
+
+Result<QueryOut> AwsDDBClient::query(const QueryIn& in) {
+    auto request = build_query(in);
+
+    auto outcome = client_->Query(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    QueryOut out;
+    for (const auto& item : result.GetItems()) {
+        out.items.push_back(ItemRow{from_sdk_item(item)});
+    }
+    const auto& lek = result.GetLastEvaluatedKey();
+    if (!lek.empty()) {
+        out.last_evaluated_key = from_sdk_item(lek);
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
+}
+
+Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
+    auto request = build_scan(in);
 
     auto outcome = client_->Scan(request);
     if (!outcome.IsSuccess()) {
@@ -383,18 +420,7 @@ Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
 }
 
 Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn& in) {
-    Aws::DynamoDB::Model::PutItemRequest request;
-    request.SetTableName(in.table_name);
-    request.SetItem(to_sdk_item(in.item));
-    if (in.condition_expression.has_value()) {
-        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
-    }
-    if (!in.expression_attribute_names.empty()) {
-        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
-    }
-    if (!in.expression_attribute_values.empty()) {
-        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
-    }
+    auto request = build_put_item(in);
 
     auto outcome = client_->PutItem(request);
     if (!outcome.IsSuccess()) {
@@ -513,9 +539,7 @@ void apply_gsi_throughput(Aws::DynamoDB::Model::GlobalSecondaryIndex& gsi,
     }
 }
 
-}  // namespace
-
-Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
+Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn& in) {
     Aws::DynamoDB::Model::CreateTableRequest request;
     request.SetTableName(in.table_name);
 
@@ -607,6 +631,19 @@ Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
         sdk_tag.SetValue(tag.value);
         request.AddTags(sdk_tag);
     }
+    return request;
+}
+
+Aws::DynamoDB::Model::DeleteTableRequest build_delete_table(const DeleteTableIn& in) {
+    Aws::DynamoDB::Model::DeleteTableRequest request;
+    request.SetTableName(in.table_name);
+    return request;
+}
+
+}  // namespace
+
+Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
+    auto request = build_create_table(in);
 
     auto outcome = client_->CreateTable(request);
     if (!outcome.IsSuccess()) {
@@ -619,8 +656,7 @@ Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
 }
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
-    Aws::DynamoDB::Model::DeleteTableRequest request;
-    request.SetTableName(in.table_name);
+    auto request = build_delete_table(in);
     auto outcome = client_->DeleteTable(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -976,6 +1012,53 @@ Result<void> AwsDDBClient::wait_for_table_active(const std::string& table_name) 
         std::this_thread::sleep_for(interval);
         interval = std::min(interval * 2, cap);
     }
+}
+
+Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request) {
+    // Serialize the EXACT SDK request each op would send, without executing it.
+    // The body is the SDK's raw SerializePayload() (tab-indented JSON); the
+    // Renderer applies the explain_string/strip_newlines transform (P2a-03
+    // §4.3). The describe-family requests carry only a table name, so they are
+    // built inline here (no shared builder needed).
+    auto payload = [](auto&& sdk_request) -> std::string {
+        return std::string(sdk_request.SerializePayload().c_str());
+    };
+    return std::visit(
+        [&](const auto& in) -> Result<std::string> {
+            using T = std::decay_t<decltype(in)>;
+            if constexpr (std::is_same_v<T, GetItemIn>) {
+                return payload(build_get_item(in));
+            } else if constexpr (std::is_same_v<T, QueryIn>) {
+                return payload(build_query(in));
+            } else if constexpr (std::is_same_v<T, ScanIn>) {
+                return payload(build_scan(in));
+            } else if constexpr (std::is_same_v<T, PutItemIn>) {
+                return payload(build_put_item(in));
+            } else if constexpr (std::is_same_v<T, CreateTableIn>) {
+                return payload(build_create_table(in));
+            } else if constexpr (std::is_same_v<T, DeleteTableIn>) {
+                return payload(build_delete_table(in));
+            } else if constexpr (std::is_same_v<T, DescribeTableIn>) {
+                Aws::DynamoDB::Model::DescribeTableRequest r;
+                r.SetTableName(in.table_name);
+                return payload(r);
+            } else if constexpr (std::is_same_v<T, DescribeTimeToLiveIn>) {
+                Aws::DynamoDB::Model::DescribeTimeToLiveRequest r;
+                r.SetTableName(in.table_name);
+                return payload(r);
+            } else if constexpr (std::is_same_v<T, DescribeContinuousBackupsIn>) {
+                Aws::DynamoDB::Model::DescribeContinuousBackupsRequest r;
+                r.SetTableName(in.table_name);
+                return payload(r);
+            } else if constexpr (std::is_same_v<T, DescribeTableReplicaAutoScalingIn>) {
+                Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingRequest r;
+                r.SetTableName(in.table_name);
+                return payload(r);
+            } else {
+                static_assert(sizeof(T) == 0, "unhandled ExplainRequest alternative");
+            }
+        },
+        request);
 }
 
 }  // namespace ddbsh::cli
