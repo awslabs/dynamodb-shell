@@ -134,7 +134,7 @@ if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
         -DCMAKE_C_COMPILER="$DDBSH_CC" \
         -DCMAKE_CXX_COMPILER="$DDBSH_CXX"
 fi
-echo "=== Building oracle ddbsh/ddbshtest ($HASH) ==="
+echo "=== Building oracle ddbsh-old/ddbshtest ($HASH) ==="
 cmake --build "$BUILD_DIR"
 
 if [ ! -x "$BUILD_DIR/ddbshtest" ]; then
@@ -142,12 +142,15 @@ if [ ! -x "$BUILD_DIR/ddbshtest" ]; then
     exit 1
 fi
 
-# Expose the oracle binary under the human-facing name `ddbsh-old` (the new
-# shipping engine binary is `ddbsh`; human decision 2026-10-14). oracle/ source
-# stays pristine — this is build glue only. A relative symlink avoids a stale
-# copy drifting from the oracle build.
-if [ -x "$BUILD_DIR/ddbsh" ]; then
-    ln -sf ddbsh "$BUILD_DIR/ddbsh-old"
+# The oracle executable is built directly as `ddbsh-old` (oracle/CMakeLists.txt
+# target + install rename, D-A, human decision 2026-10-14): the shipping-binary
+# name `ddbsh` belongs to the new engine (build-engine/ddbsh), so the original
+# C++11 oracle no longer emits a colliding `ddbsh`. The human-facing launcher
+# (devtools/ddbsh-aws) runs build/ddbsh-old. oracle/ SOURCE stays pristine; the
+# rename is build glue only.
+if [ ! -x "$BUILD_DIR/ddbsh-old" ]; then
+    echo "error: $BUILD_DIR/ddbsh-old not found after build." >&2
+    exit 1
 fi
 
 # --- Build: new engine (runs the routed families via the golden harness) ----

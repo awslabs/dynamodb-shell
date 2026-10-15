@@ -53,7 +53,7 @@ builds for local development. Keep them distinct — do not conflate them:
 
 | Directory              | Produced by            | Contains                                        |
 |------------------------|------------------------|-------------------------------------------------|
-| `build/`               | run-tests (oracle)     | oracle `ddbsh` (v0.8.x) + `ddbshtest`; `ddbsh-old` symlink |
+| `build/`               | run-tests (oracle)     | oracle `ddbsh-old` (v0.8.x) + `ddbshtest`       |
 | `build-engine/`        | run-tests (new engine) | the shipping `ddbsh` CLI (new C++23 engine)     |
 | `build-golden/`        | run-tests (golden)     | configure-only golden-parity CTest project      |
 | `build-preset/linux-*` | CMakePresets           | local dev builds (debug/release/sanitize)       |
@@ -147,11 +147,14 @@ still parses `;`-terminated statements.
   errors "Table not found". The deterministic, backend-free EXPLAIN signal is
   the native `FakeDDBClient` tests, not the shipping binary against a bare
   account.
-- **Two binaries named `ddbsh`.** The new shipping CLI (`build-engine/ddbsh`)
-  and the oracle (`build/ddbsh`, also symlinked `ddbsh-old`). The library file
-  is `libddbsh`; no filename collision with the executable.
-- **The oracle (`oracle/`) is pristine.** Never modify it. Expose comparison
-  behavior through build glue (the `ddbsh-old` symlink), not source edits.
+- **Two binaries, two names.** The new shipping CLI builds as `ddbsh`
+  (`build-engine/ddbsh`); the oracle builds as `ddbsh-old` (`build/ddbsh-old`),
+  so the shipping-binary name `ddbsh` is unambiguous and the two installs do not
+  collide (D-A). The library file is `libddbsh`; no collision with the engine
+  executable.
+- **The oracle (`oracle/`) is pristine.** Never modify its C++ source. The
+  `ddbsh` -> `ddbsh-old` rename is a CMake target + `install()` change (build
+  glue), the one allowed oracle edit class.
 - **AWS SDK toolchain.** The prebuilt SDK is gcc14; the oracle and engine must
   link with the matching toolchain (`CC=gcc14-gcc CXX=gcc14-g++`), as
   `devtools/run-tests` and the CMakePresets do.

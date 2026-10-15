@@ -54,7 +54,15 @@ BISON_TARGET(ddbsh_Parser
 
 ADD_FLEX_BISON_DEPENDENCY(ddbsh_Scanner ddbsh_Parser)
 
-add_executable(ddbsh
+# The shipping-binary name `ddbsh` now belongs to the Step-2 reimplementation
+# (top-level CMakeLists, target ddbsh-cli / OUTPUT_NAME ddbsh). To keep the two
+# builds from both emitting (and installing) a file named `ddbsh`, the original
+# C++11 oracle executable is built and installed as `ddbsh-old` — the
+# human-facing name for the fidelity oracle (human decision 2026-10-14, D-A).
+# This renames the CMake target and its install() only; the oracle SOURCE stays
+# pristine (it is build glue, not an oracle behavior change). The golden CTest
+# suite drives `ddbshtest` (the TEST_HARNESS binary, unchanged).
+add_executable(ddbsh-old
                ${BISON_ddbsh_Parser_OUTPUTS}
                ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp
                ${FLEX_ddbsh_Scanner_OUTPUTS}
@@ -140,15 +148,15 @@ add_executable(ddbshtest
 
 set_target_properties(ddbshtest PROPERTIES COMPILE_DEFINITIONS "TEST_HARNESS=1")
 
-target_compile_features(ddbsh PUBLIC cxx_std_11)
+target_compile_features(ddbsh-old PUBLIC cxx_std_11)
 target_compile_features(ddbshtest PUBLIC cxx_std_11)
 
-target_link_libraries(ddbsh readline ${AWSSDK_LINK_LIBRARIES})
-target_include_directories(ddbsh PUBLIC "${PROJECT_BINARY_DIR}")
+target_link_libraries(ddbsh-old readline ${AWSSDK_LINK_LIBRARIES})
+target_include_directories(ddbsh-old PUBLIC "${PROJECT_BINARY_DIR}")
 
 target_link_libraries(ddbshtest readline ${AWSSDK_LINK_LIBRARIES})
 target_include_directories(ddbshtest PUBLIC "${PROJECT_BINARY_DIR}")
 
 include(${CMAKE_SOURCE_DIR}/tests/ddbsh-tests.txt)
 
-install(TARGETS ddbsh DESTINATION bin)
+install(TARGETS ddbsh-old DESTINATION bin)

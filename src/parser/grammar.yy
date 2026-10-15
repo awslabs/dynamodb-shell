@@ -215,6 +215,7 @@
 %type <ddbsh::engine::CommandNode> create_table_command
 %type <ddbsh::engine::CommandNode> dml_command write_command
 %type <ddbsh::engine::CommandNode> insert_command replace_command
+%type <ddbsh::engine::CommandNode> help_command
 
 %type <std::string> string region_name connect_endpoint like_clause
 %type <bool> brief_clause if_exists_clause nowait_clause
@@ -341,6 +342,7 @@ command:
     | ddl_command        { $$ = std::move($1); }
     | dml_command        { $$ = std::move($1); }
     | show_command       { $$ = std::move($1); }
+    | help_command       { $$ = std::move($1); }
     ;
 
 /* EXPLAIN accepts ddl/dml commands only (as the original did); SHOW/CONNECT/
@@ -391,6 +393,76 @@ quit_command:
 show_version_command:
       K_SHOW K_VERSION
         { $$ = ddbsh::engine::ShowVersionCmd{}; }
+    ;
+
+/* ---- HELP (D-B) ----------------------------------------------------------
+ * A faithful port of the original parser.y `help_command` productions. The
+ * original printed a fixed usage string from each production DURING the parse
+ * and yielded no command (arch §5); to keep the engine terminal-free we parse
+ * HELP to a HelpCmd carrying the topic and emit the usage text from execute()
+ * as a ReportOutcome (the same move SHOW VERSION made). The usage strings live
+ * in src/parser/help_text.cpp, byte-for-byte faithful so `help ...;` matches
+ * `ddbsh-old`. The trailing ';' is consumed by `input` (as for every command
+ * here), so these forms omit it. All referenced keyword tokens already exist
+ * in the token set (arch §4); the help text describes command syntax and does
+ * not require the command itself to be implemented. */
+help_command:
+      K_HELP
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::general}; }
+    | K_HELP K_EXPLAIN
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::explain}; }
+    | K_HELP K_BEGIN
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::begin}; }
+    | K_HELP K_COMMIT
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::commit}; }
+    | K_HELP K_ROLLBACK
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::rollback}; }
+    | K_HELP K_CONNECT
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::connect}; }
+    | K_HELP K_DROP
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::drop}; }
+    | K_HELP K_DROP K_TABLE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::drop_table}; }
+    | K_HELP K_DROP K_BACKUP
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::drop_backup}; }
+    | K_HELP K_DESCRIBE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::describe}; }
+    | K_HELP K_DESCRIBE K_BACKUP
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::describe_backup}; }
+    | K_HELP K_SHOW
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::show}; }
+    | K_HELP K_SHOW K_TABLES
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::show_tables}; }
+    | K_HELP K_SHOW K_LIMITS
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::show_limits}; }
+    | K_HELP K_SHOW K_BACKUPS
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::show_backups}; }
+    | K_HELP K_SHOW K_VERSION
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::show_version}; }
+    | K_HELP K_SHOW K_CREATE K_TABLE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::show_create_table}; }
+    | K_HELP K_CREATE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::create}; }
+    | K_HELP K_CREATE K_TABLE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::create_table}; }
+    | K_HELP K_ALTER K_TABLE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::alter_table}; }
+    | K_HELP K_BACKUP
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::backup}; }
+    | K_HELP K_RESTORE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::restore}; }
+    | K_HELP K_SELECT
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::select_statement}; }
+    | K_HELP K_INSERT
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::insert}; }
+    | K_HELP K_REPLACE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::replace}; }
+    | K_HELP K_UPDATE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::update}; }
+    | K_HELP K_UPSERT
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::upsert}; }
+    | K_HELP K_DELETE
+        { $$ = ddbsh::engine::HelpCmd{ddbsh::engine::HelpTopic::del}; }
     ;
 
 connect_command:

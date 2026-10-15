@@ -22,6 +22,7 @@
 #include "execute/show_tables_executor.hpp"
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
+#include "parser/help_text.hpp"
 
 namespace ddbsh {
 
@@ -99,6 +100,14 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             return ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}};
         case StatementKind::quit:
             return ExecOutcome{StatusOutcome{"QUIT"}};
+        case StatementKind::help: {
+            // HELP contacts no API (arch §7). The original printed the usage
+            // text during the parse (parser.y help_command); we carry the topic
+            // on the AST and emit the identical bytes here as a ReportOutcome,
+            // keeping the engine terminal-free (same pattern as SHOW VERSION).
+            const auto& help = std::get<engine::HelpCmd>(statement.ast()->command);
+            return ExecOutcome{ReportOutcome{engine::help_lines(engine::help_text(help.topic))}};
+        }
         case StatementKind::connect: {
             // CONNECT contacts no API (arch §7): it updates the session's
             // region/endpoint (the original CConnectCommand calls
