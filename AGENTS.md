@@ -56,6 +56,7 @@ builds for local development. Keep them distinct — do not conflate them:
 | `build/`               | run-tests (oracle)     | oracle `ddbsh-old` (v0.8.x) + `ddbshtest`       |
 | `build-engine/`        | run-tests (new engine) | the shipping `ddbsh` CLI (new C++23 engine)     |
 | `build-golden/`        | run-tests (golden)     | configure-only golden-parity CTest project      |
+| `build-golden-full/`   | run-tests --full-engine| golden project with every family on the engine  |
 | `build-preset/linux-*` | CMakePresets           | local dev builds (debug/release/sanitize)       |
 
 All are git-ignored (`build*`). Preset builds live under `build-preset/` (not
@@ -90,6 +91,12 @@ flex/bison translation units are the only `-Wno-error` exceptions.
   command families to the new engine via the golden harness, runs the complement
   on the oracle, and writes artifacts into `discussions/` named by HEAD short
   hash.
+- **Full-engine exposure mode:** `devtools/run-tests --full-engine` routes EVERY
+  non-global-tables family to the new engine (golden project configured with
+  `-DDDBSH_GOLDEN_ALL_FAMILIES=ON`) and skips the oracle side, measuring the
+  implemented-surface parity against the original each phase exit (standing
+  directive, 2026-10-15). Unimplemented commands fail as expected until their
+  families port, so this is a measurement run, not the phase gate.
 - **Backend is real DynamoDB (us-east-1)** via the standard `~/.aws` chain. There
   is no DynamoDB Local / no endpoint override. `create/insert/update/delete/drop`
   hit real tables and cost real money — use a dedicated test account/region. The

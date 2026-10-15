@@ -32,7 +32,19 @@
 #   devtools/run-tests                     # full suite (label: all)
 #   devtools/run-tests -R isel             # ctest regex filter (label derived)
 #   devtools/run-tests --suite select -R isel
+#   devtools/run-tests --full-engine       # route EVERY family to the new engine
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
+#
+# Modes:
+#   default        routed families (DDBSH_ROUTED_RE) run on the new engine, the
+#                  complement on the original oracle; combined = whole suite.
+#   --full-engine  the exposure mode (AI-2a-A, standing directive D-2a-3):
+#                  configures the golden project with -DDDBSH_GOLDEN_ALL_FAMILIES=ON
+#                  so every non-global-tables family runs against the NEW engine,
+#                  with the oracle side excluded. Measures implemented-surface
+#                  parity vs. the original each phase exit (unimplemented commands
+#                  fail as expected until they port). This is a measurement run,
+#                  not the phase gate.
 #
 # Env overrides: DDBSH_ROUTED_RE (routed-family regex), DDBSH_ENGINE_BUILD_DIR,
 # DDBSH_GOLDEN_BUILD_DIR, DDBSH_SDK_PREFIX, DDBSH_SDK_LIB, CC/CXX.
@@ -46,14 +58,20 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- Argument parsing -------------------------------------------------------
-# Optional --suite <label>; all other args pass through to ctest.
+# Optional --suite <label>; --full-engine selects the exposure mode; all other
+# args pass through to ctest.
 SUITE=""
+FULL_ENGINE=0
 CTEST_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --suite)
             SUITE="${2:-}"
             shift 2
+            ;;
+        --full-engine)
+            FULL_ENGINE=1
+            shift
             ;;
         *)
             CTEST_ARGS+=("$1")
@@ -62,7 +80,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Derive a suite label if not given: use the -R regex if present, else "all".
+# Derive a suite label if not given: use the -R regex if present, else "all"
+# ("full-engine" in exposure mode).
 if [ -z "$SUITE" ]; then
     for ((i = 0; i < ${#CTEST_ARGS[@]}; i++)); do
         if [ "${CTEST_ARGS[$i]}" = "-R" ]; then
@@ -71,7 +90,9 @@ if [ -z "$SUITE" ]; then
         fi
     done
 fi
-[ -z "$SUITE" ] && SUITE="all"
+if [ -z "$SUITE" ]; then
+    if [ "$FULL_ENGINE" -eq 1 ]; then SUITE="full-engine"; else SUITE="all"; fi
+fi
 # Sanitize the label for use in a filename.
 SUITE="$(printf '%s' "$SUITE" | tr -c 'A-Za-z0-9._-' '-')"
 
@@ -126,31 +147,47 @@ GOLDEN_SRC="$REPO_DIR/tests/golden"
 GOLDEN_BUILD="${DDBSH_GOLDEN_BUILD_DIR:-$REPO_DIR/build-golden}"
 DDBSH_SDK_LIB="${DDBSH_SDK_LIB:-$DDBSH_SDK_PREFIX/lib64}"
 
+# Full-engine exposure mode: every family runs on the new engine (ROUTED_RE
+# matches all test names) and the oracle sub-run is skipped. Use a dedicated
+# golden build dir so the all-families CTest registration never contaminates the
+# default routed build's cache (and vice versa).
+GOLDEN_ALL_FAMILIES=OFF
+if [ "$FULL_ENGINE" -eq 1 ]; then
+    ROUTED_RE="."
+    GOLDEN_ALL_FAMILIES=ON
+    GOLDEN_BUILD="${DDBSH_GOLDEN_BUILD_DIR:-$REPO_DIR/build-golden-full}"
+fi
+
 # --- Build: original oracle (runs the non-routed families) ------------------
-if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
-    echo "=== Configuring oracle build (no CMakeCache at $BUILD_DIR) ==="
-    cmake -S "$SRC_DIR" -B "$BUILD_DIR" \
-        -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX" \
-        -DCMAKE_C_COMPILER="$DDBSH_CC" \
-        -DCMAKE_CXX_COMPILER="$DDBSH_CXX"
-fi
-echo "=== Building oracle ddbsh-old/ddbshtest ($HASH) ==="
-cmake --build "$BUILD_DIR"
+# Skipped in full-engine mode: every family runs on the new engine, so the
+# oracle binary is not needed (the golden harness only consumes the oracle
+# tests/ dir for family files + results, not the oracle executable).
+if [ "$FULL_ENGINE" -eq 0 ]; then
+    if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
+        echo "=== Configuring oracle build (no CMakeCache at $BUILD_DIR) ==="
+        cmake -S "$SRC_DIR" -B "$BUILD_DIR" \
+            -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX" \
+            -DCMAKE_C_COMPILER="$DDBSH_CC" \
+            -DCMAKE_CXX_COMPILER="$DDBSH_CXX"
+    fi
+    echo "=== Building oracle ddbsh-old/ddbshtest ($HASH) ==="
+    cmake --build "$BUILD_DIR"
 
-if [ ! -x "$BUILD_DIR/ddbshtest" ]; then
-    echo "error: $BUILD_DIR/ddbshtest not found after build." >&2
-    exit 1
-fi
+    if [ ! -x "$BUILD_DIR/ddbshtest" ]; then
+        echo "error: $BUILD_DIR/ddbshtest not found after build." >&2
+        exit 1
+    fi
 
-# The oracle executable is built directly as `ddbsh-old` (oracle/CMakeLists.txt
-# target + install rename, D-A, human decision 2026-10-14): the shipping-binary
-# name `ddbsh` belongs to the new engine (build-engine/ddbsh), so the original
-# C++11 oracle no longer emits a colliding `ddbsh`. The human-facing launcher
-# (devtools/ddbsh-aws) runs build/ddbsh-old. oracle/ SOURCE stays pristine; the
-# rename is build glue only.
-if [ ! -x "$BUILD_DIR/ddbsh-old" ]; then
-    echo "error: $BUILD_DIR/ddbsh-old not found after build." >&2
-    exit 1
+    # The oracle executable is built directly as `ddbsh-old` (oracle/CMakeLists.txt
+    # target + install rename, D-A, human decision 2026-10-14): the shipping-binary
+    # name `ddbsh` belongs to the new engine (build-engine/ddbsh), so the original
+    # C++11 oracle no longer emits a colliding `ddbsh`. The human-facing launcher
+    # (devtools/ddbsh-aws) runs build/ddbsh-old. oracle/ SOURCE stays pristine; the
+    # rename is build glue only.
+    if [ ! -x "$BUILD_DIR/ddbsh-old" ]; then
+        echo "error: $BUILD_DIR/ddbsh-old not found after build." >&2
+        exit 1
+    fi
 fi
 
 # --- Build: new engine (runs the routed families via the golden harness) ----
@@ -177,6 +214,7 @@ echo "=== Configuring golden-parity project (routed families -> new engine) ==="
 cmake -S "$GOLDEN_SRC" -B "$GOLDEN_BUILD" \
     -DDDBSH_SHELL_BIN="$ENGINE_BIN" \
     -DDDBSH_SDK_LIB="$DDBSH_SDK_LIB" \
+    -DDDBSH_GOLDEN_ALL_FAMILIES="$GOLDEN_ALL_FAMILIES" \
     -DORACLE_TESTS_DIR="$SRC_DIR/tests"
 
 # --- Target echo + verification ---------------------------------------------
@@ -219,10 +257,19 @@ ctest --test-dir "$GOLDEN_BUILD" --output-on-failure \
     ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"} 2>&1 | tee "$ENGINE_LOG"
 RC_ENGINE=${PIPESTATUS[0]}
 
-echo "=== Running ORACLE non-routed families (-E $ROUTED_RE) ===" | tee -a "$SUMMARY_FILE"
-ctest --test-dir "$BUILD_DIR" --output-on-failure -E "$ROUTED_RE" \
-    ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"} 2>&1 | tee "$ORACLE_LOG"
-RC_ORACLE=${PIPESTATUS[0]}
+if [ "$FULL_ENGINE" -eq 1 ]; then
+    # Exposure mode: the oracle side is excluded by design (every family ran on
+    # the new engine above). Emit an empty oracle log so the counting/combining
+    # below reports 0/0 for the oracle.
+    echo "=== ORACLE run skipped (--full-engine: every family routed to the new engine) ===" | tee -a "$SUMMARY_FILE"
+    : >"$ORACLE_LOG"
+    RC_ORACLE=0
+else
+    echo "=== Running ORACLE non-routed families (-E $ROUTED_RE) ===" | tee -a "$SUMMARY_FILE"
+    ctest --test-dir "$BUILD_DIR" --output-on-failure -E "$ROUTED_RE" \
+        ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"} 2>&1 | tee "$ORACLE_LOG"
+    RC_ORACLE=${PIPESTATUS[0]}
+fi
 set -e
 
 # Extract per-run counts from each sub-run's OWN log (not head/tail of the
@@ -253,12 +300,22 @@ read -r o_pass o_out < <(counts "$ORACLE_LOG")
 rm -f "$ENGINE_LOG" "$ORACLE_LOG"
 
 RC=0
-# ctest exit code 8 == "no tests were found": benign for a sub-run when a user
-# -R filter targets only the OTHER side (the complement carries the tests). A
-# real test failure is a nonzero code other than 8.
+# ctest exit code 8 historically treated here as "no tests were found" and
+# benign. NOTE (found 2026-10-15, AI-2a-A): empirically `ctest -R <no-match>`
+# returns 0, not 8 — exit 8 actually means a test FAILED. So this benign(8)
+# masks real failures in the DEFAULT gate's exit code (the printed counts below
+# stay accurate, which is what reviewers read). Left as-is to preserve the
+# established default-gate exit contract; flagged for a focused follow-up
+# decision (see the discussion entry) rather than changed under this tooling
+# sub-phase.
 benign() { [ "$1" -eq 0 ] || [ "$1" -eq 8 ]; }
 benign "$RC_ENGINE" || RC=$RC_ENGINE
 benign "$RC_ORACLE" || RC=$RC_ORACLE
+# Full-engine exposure is a MEASUREMENT, not a gate: failures from
+# not-yet-implemented command families are expected, so the mode always exits 0
+# explicitly (the parity figure is read from the printed counts / artifact, not
+# the exit code). Explicit so it does not depend on the benign(8) quirk above.
+[ "$FULL_ENGINE" -eq 1 ] && RC=0
 
 {
     echo ""
