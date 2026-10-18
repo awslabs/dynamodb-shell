@@ -742,4 +742,66 @@ TEST(Parse, AlterTableSetPitrDisabledBuildsPitrNode) {
     EXPECT_FALSE(pitr.enabled);
 }
 
+// ---- ALTER TABLE REPLICA (2e-5) builds an AlterReplicaCmd -------------------
+
+TEST(Parse, AlterTableDropReplicaBuildsReplicaNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t drop replica eu-west-1;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    EXPECT_EQ(replica.table, "t");
+    EXPECT_EQ(replica.replica.action, ddbsh::engine::ReplicaUpdate::Action::drop);
+    EXPECT_EQ(replica.replica.region, "eu-west-1");
+    EXPECT_FALSE(replica.replica.table_class.has_value());
+    EXPECT_FALSE(replica.replica.throughput_override.has_value());
+    EXPECT_TRUE(replica.replica.replica_gsis.empty());
+}
+
+TEST(Parse, AlterTableAddReplicaBareDefaultsClassToStandard) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t add replica us-west-2;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    EXPECT_EQ(replica.replica.action, ddbsh::engine::ReplicaUpdate::Action::add);
+    EXPECT_EQ(replica.replica.region, "us-west-2");
+    // optional_table_class defaults to STANDARD when the clause is absent.
+    ASSERT_TRUE(replica.replica.table_class.has_value());
+    EXPECT_EQ(*replica.replica.table_class, ddbsh::engine::TableClass::standard);
+    EXPECT_FALSE(replica.replica.throughput_override.has_value());
+    EXPECT_TRUE(replica.replica.replica_gsis.empty());
+}
+
+TEST(Parse, AlterTableAddReplicaWithClassThroughputAndGsis) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "alter table t add replica us-west-2 table class standard infrequent "
+                         "access ( 50 rcu ) gsi ( g1 ( 10 rcu ), g2 ( 20 rcu ) );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    ASSERT_TRUE(replica.replica.table_class.has_value());
+    EXPECT_EQ(*replica.replica.table_class, ddbsh::engine::TableClass::standard_infrequent_access);
+    ASSERT_TRUE(replica.replica.throughput_override.has_value());
+    EXPECT_EQ(replica.replica.throughput_override->read_capacity_units, 50);
+    ASSERT_EQ(replica.replica.replica_gsis.size(), 2u);
+    EXPECT_EQ(replica.replica.replica_gsis[0].index_name, "g1");
+    EXPECT_EQ(replica.replica.replica_gsis[0].throughput_override.read_capacity_units, 10);
+    EXPECT_EQ(replica.replica.replica_gsis[1].index_name, "g2");
+    EXPECT_EQ(replica.replica.replica_gsis[1].throughput_override.read_capacity_units, 20);
+}
+
+TEST(Parse, AlterTableUpdateReplicaBuildsUpdateAction) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t update replica us-west-2 ( 99 rcu );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    EXPECT_EQ(replica.replica.action, ddbsh::engine::ReplicaUpdate::Action::update);
+    EXPECT_EQ(replica.replica.region, "us-west-2");
+    ASSERT_TRUE(replica.replica.throughput_override.has_value());
+    EXPECT_EQ(replica.replica.throughput_override->read_capacity_units, 99);
+}
+
 }  // namespace

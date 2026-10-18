@@ -160,6 +160,9 @@ using ddbsh::Lsi;
 using ddbsh::OnDemandThroughput;
 using ddbsh::Projection;
 using ddbsh::ProjectionType;
+using ddbsh::ProvisionedThroughputOverride;
+using ddbsh::ReplicaGsi;
+using ddbsh::ReplicaUpdate;
 using ddbsh::ScalarType;
 using ddbsh::SseSpec;
 using ddbsh::SseType;
@@ -374,13 +377,33 @@ struct AlterPitrCmd {
     bool enabled = false;
 };
 
+/// ALTER TABLE <table> ADD|DROP|UPDATE REPLICA <region> ... (the original
+/// CUpdateTableReplica -> UpdateTable with ONE ReplicationGroupUpdate). The
+/// fourth and final ALTER AST node sharing the one StatementKind::alter_table
+/// (D-2e-1). It carries the table name plus the single ReplicaUpdate the clause
+/// built (action + region + class/throughput/gsis); the executor copies it into
+/// UpdateTableIn::replica and issues UpdateTable. On success -> the `ALTER`
+/// status token; EXPLAIN -> one `UpdateTable(...)` block (it IS an UpdateTable
+/// call, so the same label as a plain SET), NO trailing status (D-2e-9/-11).
+///
+/// NOTE (arch §12 #4): the original left its m_delete/m_update/m_create action
+/// pointers raw (the vendored oracle later default-initialized them to nullptr).
+/// Our value-type ReplicaUpdate is zero-initialized by construction — a natural
+/// RAII fix, NOT an observable divergence: the original sets exactly one action
+/// per invocation and guards the rest with `if (ptr)`, so the serialized
+/// UpdateTable request is identical.
+struct AlterReplicaCmd {
+    std::string table;
+    ReplicaUpdate replica;
+};
+
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
 
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode =
     std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
-                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, AlterPitrCmd, InsertCmd,
-                 SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, AlterPitrCmd,
+                 AlterReplicaCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -430,6 +453,8 @@ inline StatementKind kind_of(const CommandNode& command) {
             } else if constexpr (std::is_same_v<T, AlterTtlCmd>) {
                 return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, AlterPitrCmd>) {
+                return StatementKind::alter_table;
+            } else if constexpr (std::is_same_v<T, AlterReplicaCmd>) {
                 return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, InsertCmd>) {
                 return StatementKind::insert;

@@ -24,9 +24,11 @@
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
 #include <aws/dynamodb/model/CreateGlobalSecondaryIndexAction.h>
+#include <aws/dynamodb/model/CreateReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
 #include <aws/dynamodb/model/DeleteGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/DeleteItemRequest.h>
+#include <aws/dynamodb/model/DeleteReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
@@ -35,8 +37,11 @@
 #include <aws/dynamodb/model/GetItemRequest.h>
 #include <aws/dynamodb/model/GlobalSecondaryIndexUpdate.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
+#include <aws/dynamodb/model/ProvisionedThroughputOverride.h>
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
+#include <aws/dynamodb/model/ReplicaGlobalSecondaryIndex.h>
+#include <aws/dynamodb/model/ReplicationGroupUpdate.h>
 #include <aws/dynamodb/model/ScanRequest.h>
 #include <aws/dynamodb/model/TimeToLiveSpecification.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
@@ -44,6 +49,7 @@
 #include <aws/dynamodb/model/UpdateContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/UpdateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/UpdateItemRequest.h>
+#include <aws/dynamodb/model/UpdateReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/UpdateTableRequest.h>
 #include <aws/dynamodb/model/UpdateTimeToLiveRequest.h>
 
@@ -973,6 +979,76 @@ Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn&
     return request;
 }
 
+// ---- Replica translation (ddbsh::ReplicaUpdate -> ReplicationGroupUpdate) --
+// Port of the original CUpdateTableReplica (arch §7): ADD -> Create, UPDATE ->
+// Update, DROP -> Delete, exactly one action per ReplicationGroupUpdate.
+// ADD/UPDATE always set the TableClassOverride (the original defaults it to
+// STANDARD when the clause is absent — reproduced via value_or) and set the
+// read-only ProvisionedThroughputOverride and the per-GSI overrides only when
+// the clause provided them.
+Aws::DynamoDB::Model::ProvisionedThroughputOverride to_sdk_throughput_override(
+    const ProvisionedThroughputOverride& o) {
+    Aws::DynamoDB::Model::ProvisionedThroughputOverride out;
+    out.SetReadCapacityUnits(o.read_capacity_units);
+    return out;
+}
+
+Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex> to_sdk_replica_gsis(
+    const std::vector<ReplicaGsi>& gsis) {
+    Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex> out;
+    out.reserve(gsis.size());
+    for (const auto& g : gsis) {
+        Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex rgsi;
+        rgsi.SetIndexName(g.index_name);
+        rgsi.SetProvisionedThroughputOverride(to_sdk_throughput_override(g.throughput_override));
+        out.push_back(rgsi);
+    }
+    return out;
+}
+
+Aws::DynamoDB::Model::ReplicationGroupUpdate to_sdk_replica_update(const ReplicaUpdate& r) {
+    Aws::DynamoDB::Model::ReplicationGroupUpdate out;
+    switch (r.action) {
+        case ReplicaUpdate::Action::drop: {
+            Aws::DynamoDB::Model::DeleteReplicationGroupMemberAction del;
+            del.SetRegionName(r.region);
+            out.SetDelete(del);
+            break;
+        }
+        case ReplicaUpdate::Action::add: {
+            Aws::DynamoDB::Model::CreateReplicationGroupMemberAction create;
+            create.SetRegionName(r.region);
+            create.SetTableClassOverride(
+                to_sdk_table_class(r.table_class.value_or(TableClass::standard)));
+            if (r.throughput_override.has_value()) {
+                create.SetProvisionedThroughputOverride(
+                    to_sdk_throughput_override(*r.throughput_override));
+            }
+            if (!r.replica_gsis.empty()) {
+                create.SetGlobalSecondaryIndexes(to_sdk_replica_gsis(r.replica_gsis));
+            }
+            out.SetCreate(create);
+            break;
+        }
+        case ReplicaUpdate::Action::update: {
+            Aws::DynamoDB::Model::UpdateReplicationGroupMemberAction update;
+            update.SetRegionName(r.region);
+            update.SetTableClassOverride(
+                to_sdk_table_class(r.table_class.value_or(TableClass::standard)));
+            if (r.throughput_override.has_value()) {
+                update.SetProvisionedThroughputOverride(
+                    to_sdk_throughput_override(*r.throughput_override));
+            }
+            if (!r.replica_gsis.empty()) {
+                update.SetGlobalSecondaryIndexes(to_sdk_replica_gsis(r.replica_gsis));
+            }
+            out.SetUpdate(update);
+            break;
+        }
+    }
+    return out;
+}
+
 // ---- UpdateTable translation (ddbsh::UpdateTableIn -> SDK request) ---------
 // Mirrors the original CUpdateTableCommand (arch §7): set ONLY the fields the
 // ALTER clause provided, leaving the rest unset so the SDK omits them from the
@@ -1024,6 +1100,13 @@ Aws::DynamoDB::Model::UpdateTableRequest build_update_table(const UpdateTableIn&
 
     for (const auto& gu : in.gsi_updates) {
         request.AddGlobalSecondaryIndexUpdates(to_sdk_gsi_update(gu));
+    }
+
+    // A replica ALTER carries exactly one ReplicationGroupUpdate (the original
+    // CUpdateTableReplica::run added one). Only a replica ALTER sets this; a
+    // plain SET leaves it nullopt (D-2e-12).
+    if (in.replica.has_value()) {
+        request.AddReplicaUpdates(to_sdk_replica_update(*in.replica));
     }
 
     return request;

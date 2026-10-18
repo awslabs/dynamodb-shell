@@ -133,4 +133,38 @@ Result<ExecOutcome> execute_alter_pitr(const AlterPitrCmd& cmd, IDDBClient& clie
     return ExecOutcome{StatusOutcome{"ALTER"}};
 }
 
+Result<ExecOutcome> execute_alter_replica(const AlterReplicaCmd& cmd, IDDBClient& client,
+                                          bool explain) {
+    // A replica ALTER is an UpdateTable carrying exactly one
+    // ReplicationGroupUpdate (the original CUpdateTableReplica::run builds one
+    // UpdateTableRequest with a single ReplicationGroupUpdate). One UpdateTableIn
+    // backs both the plain SET path and this replica path (D-2e-12): here only
+    // the table name and the replica carrier are set; the billing/warm/sse/...
+    // fields stay unset.
+    UpdateTableIn request;
+    request.table_name = cmd.table;
+    request.replica = cmd.replica;
+
+    if (explain) {
+        // The original prints `UpdateTable(%s)` inside the explaining() branch
+        // (NOT a `Request`-suffixed label — that quirk is unique to PITR) and
+        // returns before the "ALTER" printf, so EXPLAIN carries NO trailing
+        // status (D-2e-11).
+        auto body = client.explain_request(request);
+        if (!body.has_value()) {
+            return fail(body.error());
+        }
+        ExplainOutcome outcome;
+        outcome.blocks.push_back(
+            ExplainBlock{"UpdateTable", std::move(*body), ExplainBlock::Format::pretty});
+        return ExecOutcome{std::move(outcome)};
+    }
+
+    auto updated = client.update_table(request);
+    if (!updated.has_value()) {
+        return fail(updated.error());
+    }
+    return ExecOutcome{StatusOutcome{"ALTER"}};
+}
+
 }  // namespace ddbsh::engine

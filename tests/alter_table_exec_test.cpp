@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // alter_table_exec_test.cpp — ALTER TABLE execution tests (2e-1 SET non-GSI,
-// 2e-2 GSI create/update/drop, 2e-3 SET TTL, 2e-4 SET PITR).
+// 2e-2 GSI create/update/drop, 2e-3 SET TTL, 2e-4 SET PITR, 2e-5 REPLICA
+// add/drop/update).
 //
 // Exercises the UpdateTable path offline via FakeDDBClient:
 //   * each SET clause (billing/throughput, warm, sse, stream, table class,
@@ -552,6 +553,124 @@ TEST(AlterTableExec, ExplainSetPitrEmitsUpdateContinuousBackupsRequestLabelNoTra
     EXPECT_EQ(req->table_name, "t");
     EXPECT_TRUE(req->enabled);
     EXPECT_TRUE(client.update_pitr_requests().empty());
+}
+
+// ---- 2e-5: REPLICA add / drop / update (UpdateTable ReplicationGroupUpdate) -
+
+TEST(AlterTableExec, DropReplicaIssuesUpdateTableWithDropAction) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t drop replica eu-west-1;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    ASSERT_EQ(client.update_table_requests().size(), 1u);
+    const auto& req = client.update_table_requests()[0];
+    EXPECT_EQ(req.table_name, "t");
+    ASSERT_TRUE(req.replica.has_value());
+    EXPECT_EQ(req.replica->action, ddbsh::ReplicaUpdate::Action::drop);
+    EXPECT_EQ(req.replica->region, "eu-west-1");
+    // DROP carries region only: no class override, throughput, or GSIs.
+    EXPECT_FALSE(req.replica->table_class.has_value());
+    EXPECT_FALSE(req.replica->throughput_override.has_value());
+    EXPECT_TRUE(req.replica->replica_gsis.empty());
+    // A replica ALTER sets ONLY the replica carrier; the SET fields stay unset.
+    EXPECT_FALSE(req.billing.has_value());
+    EXPECT_TRUE(req.gsi_updates.empty());
+}
+
+TEST(AlterTableExec, AddReplicaDefaultsTableClassToStandard) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // No table-class clause => the override defaults to STANDARD (the original's
+    // optional_table_class default; the adapter always sets it).
+    auto out = session.run("alter table t add replica us-west-2;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_TRUE(req.replica.has_value());
+    EXPECT_EQ(req.replica->action, ddbsh::ReplicaUpdate::Action::add);
+    EXPECT_EQ(req.replica->region, "us-west-2");
+    ASSERT_TRUE(req.replica->table_class.has_value());
+    EXPECT_EQ(*req.replica->table_class, TableClass::standard);
+    EXPECT_FALSE(req.replica->throughput_override.has_value());
+    EXPECT_TRUE(req.replica->replica_gsis.empty());
+}
+
+TEST(AlterTableExec, AddReplicaWithClassThroughputAndGsis) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "alter table t add replica us-west-2 table class standard infrequent access "
+        "( 50 rcu ) gsi ( g1 ( 10 rcu ), g2 ( 20 rcu ) );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_TRUE(req.replica.has_value());
+    EXPECT_EQ(req.replica->action, ddbsh::ReplicaUpdate::Action::add);
+    ASSERT_TRUE(req.replica->table_class.has_value());
+    EXPECT_EQ(*req.replica->table_class, TableClass::standard_infrequent_access);
+    ASSERT_TRUE(req.replica->throughput_override.has_value());
+    EXPECT_EQ(req.replica->throughput_override->read_capacity_units, 50);
+    ASSERT_EQ(req.replica->replica_gsis.size(), 2u);
+    EXPECT_EQ(req.replica->replica_gsis[0].index_name, "g1");
+    EXPECT_EQ(req.replica->replica_gsis[0].throughput_override.read_capacity_units, 10);
+    EXPECT_EQ(req.replica->replica_gsis[1].index_name, "g2");
+    EXPECT_EQ(req.replica->replica_gsis[1].throughput_override.read_capacity_units, 20);
+}
+
+TEST(AlterTableExec, UpdateReplicaIssuesUpdateAction) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t update replica us-west-2 ( 99 rcu );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_TRUE(req.replica.has_value());
+    EXPECT_EQ(req.replica->action, ddbsh::ReplicaUpdate::Action::update);
+    EXPECT_EQ(req.replica->region, "us-west-2");
+    // UPDATE also defaults the class override to STANDARD when absent.
+    ASSERT_TRUE(req.replica->table_class.has_value());
+    EXPECT_EQ(*req.replica->table_class, TableClass::standard);
+    ASSERT_TRUE(req.replica->throughput_override.has_value());
+    EXPECT_EQ(req.replica->throughput_override->read_capacity_units, 99);
+}
+
+TEST(AlterTableExec, ReplicaFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_update_table_error(
+        Error{Errc::service_error, "Update Table failed. X. Y. boom", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t drop replica eu-west-1;");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::service_error);
+}
+
+TEST(AlterTableExec, ExplainReplicaEmitsUpdateTableBlockNoTrailingStatus) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // A replica ALTER is an UpdateTable call, so the EXPLAIN label is
+    // `UpdateTable(...)` (NOT the PITR `Request` suffix) with no trailing status.
+    auto out = session.run("explain alter table t add replica us-west-2;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "UpdateTable({\n   \"stub\":   \"explain\"\n})\n");
+
+    ASSERT_EQ(client.explain_requests().size(), 1u);
+    const auto* req = std::get_if<UpdateTableIn>(&client.explain_requests()[0]);
+    ASSERT_NE(req, nullptr);
+    ASSERT_TRUE(req->replica.has_value());
+    EXPECT_EQ(req->replica->action, ddbsh::ReplicaUpdate::Action::add);
+    EXPECT_EQ(req->replica->region, "us-west-2");
+    // EXPLAIN never issues the mutation.
+    EXPECT_TRUE(client.update_table_requests().empty());
 }
 
 }  // namespace

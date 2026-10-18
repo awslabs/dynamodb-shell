@@ -223,8 +223,8 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
         case StatementKind::alter_table: {
             // The four ALTER AST nodes share one StatementKind::alter_table
             // (D-2e-1); dispatch on the active node. UpdateTable (AlterTableCmd),
-            // SET TTL (AlterTtlCmd), and SET PITR (AlterPitrCmd) exist so far —
-            // REPLICA lands in 2e-5, adding an arm here.
+            // SET TTL (AlterTtlCmd), SET PITR (AlterPitrCmd), and REPLICA
+            // (AlterReplicaCmd) — all four land here.
             const auto& command = statement.ast()->command;
             const bool explain = statement.ast()->explain;
             if (std::holds_alternative<engine::AlterTableCmd>(command)) {
@@ -243,10 +243,16 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 const auto& ttl = std::get<engine::AlterTtlCmd>(command);
                 return emit_single(engine::execute_alter_ttl(ttl, impl_->client, explain));
             }
-            // SET PITR: UpdateContinuousBackups (the executor owns the EXPLAIN
-            // `UpdateContinuousBackupsRequest(...)` label quirk, D-2e-8/-11).
-            const auto& pitr = std::get<engine::AlterPitrCmd>(command);
-            return emit_single(engine::execute_alter_pitr(pitr, impl_->client, explain));
+            if (std::holds_alternative<engine::AlterPitrCmd>(command)) {
+                // SET PITR: UpdateContinuousBackups (the executor owns the EXPLAIN
+                // `UpdateContinuousBackupsRequest(...)` label quirk, D-2e-8/-11).
+                const auto& pitr = std::get<engine::AlterPitrCmd>(command);
+                return emit_single(engine::execute_alter_pitr(pitr, impl_->client, explain));
+            }
+            // REPLICA: UpdateTable with one ReplicationGroupUpdate (D-2e-9); the
+            // executor owns the EXPLAIN `UpdateTable(...)` block.
+            const auto& replica = std::get<engine::AlterReplicaCmd>(command);
+            return emit_single(engine::execute_alter_replica(replica, impl_->client, explain));
         }
         case StatementKind::show_tables: {
             // SHOW TABLES is not explainable (it is a show_command, not in the

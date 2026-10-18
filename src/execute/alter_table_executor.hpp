@@ -14,8 +14,9 @@
 // The four oracle ALTER command classes split into four AST nodes sharing one
 // StatementKind::alter_table (D-2e-1); this file handles the UpdateTable node
 // (AlterTableCmd), the SET TTL node (AlterTtlCmd, DescribeTimeToLive +
-// UpdateTimeToLive), and the SET PITR node (AlterPitrCmd,
-// UpdateContinuousBackups). The REPLICA executor lands in 2e-5.
+// UpdateTimeToLive), the SET PITR node (AlterPitrCmd, UpdateContinuousBackups),
+// and the REPLICA node (AlterReplicaCmd, UpdateTable with a
+// ReplicationGroupUpdate).
 //
 // D12: never aborts; a service failure is returned as an Error (the CLI adapter
 // composes the byte-exact "Update Table failed. ..." message, D-2e-13).
@@ -59,6 +60,16 @@ Result<ExecOutcome> execute_alter_ttl(const AlterTtlCmd& cmd, IDDBClient& client
 /// A service failure is returned as an Error (the CLI adapter composes the
 /// byte-exact "Setting PITR failed. ..." message, D-2e-13).
 Result<ExecOutcome> execute_alter_pitr(const AlterPitrCmd& cmd, IDDBClient& client, bool explain);
+
+/// Execute an ALTER TABLE ADD|DROP|UPDATE REPLICA ... (UpdateTable with ONE
+/// ReplicationGroupUpdate; the original CUpdateTableReplica). On success ->
+/// StatusOutcome{"ALTER"}; under EXPLAIN -> one `UpdateTable(...)` block (the
+/// SAME label as a plain SET — a replica ALTER is still an UpdateTable call),
+/// NO trailing status (D-2e-9/-11). A service failure is returned as an Error
+/// (the CLI adapter composes the byte-exact "Update Table failed. ..." message,
+/// D-2e-13).
+Result<ExecOutcome> execute_alter_replica(const AlterReplicaCmd& cmd, IDDBClient& client,
+                                          bool explain);
 
 }  // namespace ddbsh::engine
 

@@ -150,6 +150,42 @@ struct Tag {
     std::string value;
 };
 
+/// A replica's provisioned-throughput override (ALTER TABLE ... REPLICA; arch
+/// §7). The original's provisioned_throughput_override grammar set ONLY the
+/// read capacity units (`( N rcu )`), so this carries read capacity only.
+struct ProvisionedThroughputOverride {
+    long long read_capacity_units = 0;
+};
+
+/// A per-replica GSI throughput override (the `GSI ( name ( N rcu ), ... )`
+/// clause on ADD/UPDATE REPLICA). The original's ReplicaGlobalSecondaryIndex
+/// carried the index name plus a read-only ProvisionedThroughputOverride.
+struct ReplicaGsi {
+    std::string index_name;
+    ProvisionedThroughputOverride throughput_override;
+};
+
+/// One ReplicationGroupUpdate for an ALTER TABLE ... REPLICA (arch §7, the
+/// original CUpdateTableReplica). The SDK-free carrier shared by the parse
+/// result (engine::AlterReplicaCmd) and the client seam (ddbsh::UpdateTableIn),
+/// matching the established no-duplicate pattern (cf. GsiUpdate):
+///   * `add`:    CreateReplicationGroupMemberAction — region + a TableClass
+///               override (the original defaults it to STANDARD when the clause
+///               is absent) + optional throughput override + optional GSIs.
+///   * `update`: UpdateReplicationGroupMemberAction — same fields as add.
+///   * `drop`:   DeleteReplicationGroupMemberAction — region only.
+/// `table_class` is nullopt only for `drop` (add/update always carry one,
+/// defaulting to STANDARD); `throughput_override` / `replica_gsis` are set only
+/// when the clause provided them.
+struct ReplicaUpdate {
+    enum class Action { add, drop, update };
+    Action action = Action::add;
+    std::string region;
+    std::optional<TableClass> table_class;
+    std::optional<ProvisionedThroughputOverride> throughput_override;
+    std::vector<ReplicaGsi> replica_gsis;
+};
+
 }  // namespace ddbsh
 
 #endif  // DDBSH_TABLE_SCHEMA_HPP

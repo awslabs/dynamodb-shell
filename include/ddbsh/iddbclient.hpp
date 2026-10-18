@@ -224,7 +224,10 @@ struct CreateTableOut {};
 // defaulted value) so "clause absent" serializes to NO TableClass /
 // DeletionProtectionEnabled in the request, matching the original's unset
 // fields. `attribute_definitions` + `gsi_updates` carry the CREATE / UPDATE /
-// DROP GSI actions (2e-2); the replica ReplicationGroupUpdate lands in 2e-5.
+// DROP GSI actions (2e-2). `replica` carries the ONE ReplicationGroupUpdate for
+// an ALTER TABLE ... REPLICA (2e-5); it is set ONLY for a replica ALTER (and
+// then the other fields stay unset), nullopt for a plain SET — one UpdateTableIn
+// backs both because both are UpdateTable calls (D-2e-12).
 struct UpdateTableIn {
     std::string table_name;
     std::optional<BillingModeAndThroughput> billing;  ///< SET billing_mode_and_throughput
@@ -235,6 +238,7 @@ struct UpdateTableIn {
     std::optional<bool> deletion_protection;  ///< SET deletion protection (nullopt => unset)
     std::vector<AttributeDef> attribute_definitions;  ///< new key attrs for CREATE GSI
     std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
+    std::optional<ReplicaUpdate> replica;  ///< ADD / DROP / UPDATE REPLICA (nullopt for plain SET)
 };
 struct UpdateTableOut {};
 

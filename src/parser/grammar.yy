@@ -242,6 +242,10 @@
 %type <ddbsh::engine::GsiUpdate> alter_table_gsi_create alter_table_gsi_drop
 %type <ddbsh::engine::GsiUpdate> alter_table_gsi_update_element
 %type <std::vector<ddbsh::engine::GsiUpdate>> alter_table_gsi_update
+%type <ddbsh::engine::ProvisionedThroughputOverride> provisioned_throughput_override
+%type <std::optional<ddbsh::engine::ProvisionedThroughputOverride>> optional_provisioned_throughput_override
+%type <ddbsh::engine::ReplicaGsi> replica_gsi_specification_list_entry
+%type <std::vector<ddbsh::engine::ReplicaGsi>> replica_gsi_specification_list optional_replica_gsi_specification
 %type <std::vector<ddbsh::engine::Lsi>> lsi_list lsi_specification
 %type <ddbsh::engine::Lsi> lsi
 %type <ddbsh::engine::Projection> index_projection
@@ -697,6 +701,49 @@ alter_table_command:
             cmd.enabled = false;
             $$ = std::move(cmd);
         }
+    | K_ALTER K_TABLE string K_DROP K_REPLICA string
+        {
+            /* DROP REPLICA region: builds an AlterReplicaCmd (UpdateTable with a
+             * DeleteReplicationGroupMemberAction, D-2e-9). K_REPLICA is a
+             * distinct token after K_DROP (vs K_GSI), so no new LALR conflict. */
+            ddbsh::engine::AlterReplicaCmd cmd;
+            cmd.table = std::move($3);
+            cmd.replica.action = ddbsh::engine::ReplicaUpdate::Action::drop;
+            cmd.replica.region = std::move($6);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_ADD K_REPLICA string optional_table_class
+            optional_provisioned_throughput_override optional_replica_gsi_specification
+        {
+            /* ADD REPLICA region [table class] [( N rcu )] [GSI (...)]: builds an
+             * AlterReplicaCmd (UpdateTable with a CreateReplicationGroupMemberAction).
+             * optional_table_class defaults to STANDARD when absent, which the
+             * adapter always sets as the TableClassOverride (matching the
+             * original's always-SetTableClassOverride behavior). */
+            ddbsh::engine::AlterReplicaCmd cmd;
+            cmd.table = std::move($3);
+            cmd.replica.action = ddbsh::engine::ReplicaUpdate::Action::add;
+            cmd.replica.region = std::move($6);
+            cmd.replica.table_class = $7;
+            cmd.replica.throughput_override = std::move($8);
+            cmd.replica.replica_gsis = std::move($9);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_UPDATE K_REPLICA string optional_table_class
+            optional_provisioned_throughput_override optional_replica_gsi_specification
+        {
+            /* UPDATE REPLICA region ...: builds an AlterReplicaCmd (UpdateTable
+             * with an UpdateReplicationGroupMemberAction). Same fields as ADD;
+             * K_REPLICA is a distinct token after K_UPDATE (vs K_GSI). */
+            ddbsh::engine::AlterReplicaCmd cmd;
+            cmd.table = std::move($3);
+            cmd.replica.action = ddbsh::engine::ReplicaUpdate::Action::update;
+            cmd.replica.region = std::move($6);
+            cmd.replica.table_class = $7;
+            cmd.replica.throughput_override = std::move($8);
+            cmd.replica.replica_gsis = std::move($9);
+            $$ = std::move(cmd);
+        }
     ;
 
 /* ---- GSI update actions (2e-2) -------------------------------------------
@@ -756,6 +803,44 @@ alter_table_gsi_update:
         }
     | alter_table_gsi_update ',' alter_table_gsi_update_element
         { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+/* ---- REPLICA support non-terminals (2e-5) --------------------------------
+ * Port of the original's provisioned_throughput_override /
+ * optional_provisioned_throughput_override / optional_replica_gsi_specification
+ * / replica_gsi_specification_list(_entry) (parser.y). A replica throughput
+ * override carries READ capacity only (`( N rcu )` — the original set only
+ * RCU). The per-replica GSI list is `GSI ( name ( N rcu ), ... )`.
+ * optional_table_class is reused from CREATE TABLE (it defaults to STANDARD
+ * when absent, which the adapter always sets as the TableClassOverride). */
+provisioned_throughput_override:
+      '(' T_WHOLE_NUMBER K_RCU ')'
+        { $$ = ddbsh::engine::ProvisionedThroughputOverride{ddbsh::engine::parse_ll($2)}; }
+    ;
+
+optional_provisioned_throughput_override:
+      provisioned_throughput_override  { $$ = std::move($1); }
+    | %empty                           { $$ = std::nullopt; }
+    ;
+
+optional_replica_gsi_specification:
+      K_GSI '(' replica_gsi_specification_list ')'  { $$ = std::move($3); }
+    | %empty                                        { $$ = std::vector<ddbsh::engine::ReplicaGsi>{}; }
+    ;
+
+replica_gsi_specification_list:
+      replica_gsi_specification_list_entry
+        {
+            $$ = std::vector<ddbsh::engine::ReplicaGsi>{};
+            $$.push_back(std::move($1));
+        }
+    | replica_gsi_specification_list ',' replica_gsi_specification_list_entry
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+replica_gsi_specification_list_entry:
+      string provisioned_throughput_override
+        { $$ = ddbsh::engine::ReplicaGsi{std::move($1), std::move($2)}; }
     ;
 
 attribute_name_type_list:
