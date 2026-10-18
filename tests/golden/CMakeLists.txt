@@ -33,6 +33,13 @@
 # oracle until its commands port in 2c+. devtools/run-tests excludes the routed
 # families from the oracle run so the combined suite stays 583/583.
 #
+# Full-engine exposure mode (AI-2a-A): set -DDDBSH_GOLDEN_ALL_FAMILIES=ON to
+# register EVERY non-global-tables family here so the whole suite runs against
+# the new engine. devtools/run-tests --full-engine drives this to measure the
+# implemented-surface parity against the original each phase exit (standing
+# directive D-2a-3, 2026-10-15). Unimplemented commands fail as expected until
+# their families port; the mode is a measurement, not a gate.
+#
 # Configuration inputs (set by devtools/run-tests or on the command line):
 #   -DDDBSH_SHELL_BIN=<path>   the shipping ddbsh binary (required)
 #   -DDDBSH_SDK_LIB=<path>     AWS SDK shared-library dir (prepended to
@@ -75,7 +82,48 @@ set_target_properties(ddbshtest PROPERTIES IMPORTED_LOCATION "${GOLDEN_RUNNER}")
 # `${RD}` is the golden results dir, exactly as the original ddbsh-tests.txt.
 set(RD "${ORACLE_TESTS_DIR}/results")
 
-# Route only the cleanly-in-scope 2b families (D24).
-include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-insert-tests.txt")
+# Full-engine exposure mode (AI-2a-A, D-2a-3 standing directive 2026-10-15):
+# when ON, register EVERY non-global-tables golden family so the whole suite
+# runs against the new engine, measuring implemented-surface parity against the
+# original (devtools/run-tests --full-engine). When OFF (the default), only the
+# cleanly-in-scope routed families run on the new engine and devtools/run-tests
+# keeps the complement on the oracle, so the combined suite stays whole.
+#
+# The global-tables families (ddbsh-gt-*) are excluded in both modes: they need
+# a multi-region live setup (arch §11) and are commented out in the oracle
+# master include (oracle/tests/ddbsh-tests.txt) as well.
+option(DDBSH_GOLDEN_ALL_FAMILIES
+    "Register every non-global-tables golden family (full-engine exposure mode) instead of only the routed families."
+    OFF)
+
+if(DDBSH_GOLDEN_ALL_FAMILIES)
+    # Several families reference ${CMAKE_SOURCE_DIR}/tests/*.sql for their `-f`
+    # load scripts (e.g. ddbsh-update-tests.txt, ddbsh-create-drop-tests.txt).
+    # The oracle master include resolves those relative to the oracle project
+    # root; here CMAKE_SOURCE_DIR is tests/golden, so shadow it with the oracle
+    # root (the parent of ORACLE_TESTS_DIR) for the duration of the includes so
+    # the load-script paths resolve. The oracle family files are reused verbatim
+    # — this is the only non-invasive way to satisfy their path assumption.
+    get_filename_component(_oracle_root "${ORACLE_TESTS_DIR}" DIRECTORY)
+    set(CMAKE_SOURCE_DIR "${_oracle_root}")
+
+    # Mirror the oracle master include order (oracle/tests/ddbsh-tests.txt),
+    # minus the commented-out global-tables families.
+    include("${ORACLE_TESTS_DIR}/ddbsh-basic-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-create-drop-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-pitr-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-update-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-delete-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-insert-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-transactions-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-return-values.txt")
+    include("${ORACLE_TESTS_DIR}/test-cleanup.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
+else()
+    # Route only the cleanly-in-scope 2b families (D24).
+    include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-insert-tests.txt")
+endif()
