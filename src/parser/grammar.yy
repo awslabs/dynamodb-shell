@@ -239,6 +239,9 @@
 %type <std::optional<ddbsh::engine::WarmThroughput>> optional_warm_throughput
 %type <std::vector<ddbsh::engine::Gsi>> gsi_list gsi_specification
 %type <ddbsh::engine::Gsi> gsi
+%type <ddbsh::engine::GsiUpdate> alter_table_gsi_create alter_table_gsi_drop
+%type <ddbsh::engine::GsiUpdate> alter_table_gsi_update_element
+%type <std::vector<ddbsh::engine::GsiUpdate>> alter_table_gsi_update
 %type <std::vector<ddbsh::engine::Lsi>> lsi_list lsi_specification
 %type <ddbsh::engine::Lsi> lsi
 %type <ddbsh::engine::Projection> index_projection
@@ -545,18 +548,29 @@ create_table_command:
         }
     ;
 
-/* ---- ALTER TABLE (2e-1: SET non-GSI -> UpdateTable) ----------------------
- * Faithful port of the original alter_table_command SET forms that map to one
- * CUpdateTableCommand -> UpdateTable (parser.y). The trailing ';' is consumed
- * by `input`, so each form omits it. Each alternative builds ONE AlterTableCmd
- * and fills only the field(s) the clause provided (D-2e-2); the executor
- * copies them into an UpdateTableIn and the adapter sets only the present
- * fields on the UpdateTableRequest, matching the original's "leave the rest
- * unset" behavior. The billing+warm form fills both `billing` and `warm`; the
- * standalone warm form fills only `warm` (arch §8, D-2e-3/-4). The GSI
- * create/update/drop and REPLICA/TTL/PITR forms land in 2e-2..2e-5. The first
- * tokens after K_SET are all distinct (K_BILLING / K_WARM / K_SSE / K_TABLE /
- * K_STREAM / K_DELETION), so these alternatives are LALR(1)-clean. */
+/* ---- ALTER TABLE (2e-1 SET non-GSI + 2e-2 GSI -> UpdateTable) ------------
+ * Faithful port of the original alter_table_command SET / GSI forms that map
+ * to one CUpdateTableCommand -> UpdateTable (parser.y). The trailing ';' is
+ * consumed by `input`, so each form omits it. Each alternative builds ONE
+ * AlterTableCmd and fills only the field(s) the clause provided (D-2e-2); the
+ * executor copies them into an UpdateTableIn and the adapter sets only the
+ * present fields on the UpdateTableRequest, matching the original's "leave the
+ * rest unset" behavior. The billing+warm form fills both `billing` and `warm`;
+ * the standalone warm form fills only `warm` (arch §8, D-2e-3/-4).
+ *
+ * GSI forms (2e-2): CREATE GSI carries the new key attribute_definitions plus
+ * one create GsiUpdate; DROP GSI carries one drop GsiUpdate; UPDATE GSI carries
+ * a list of update GsiUpdates. The combined `SET billing ... UPDATE GSI` form
+ * applies the D-2e-6 on-demand gate in its action: when the table billing mode
+ * is on-demand the GSI updates are dropped (the index throughput is implied)
+ * and a flag records the (unpinned) informational diagnostic. The REPLICA / TTL
+ * / PITR forms land in 2e-3..2e-5.
+ *
+ * LALR(1): the first tokens after K_SET are all distinct (K_BILLING / K_WARM /
+ * K_SSE / K_TABLE / K_STREAM / K_DELETION / K_TTL / K_PITR). The shared prefix
+ * `K_SET billing_mode_and_throughput optional_warm_throughput` of the bare SET
+ * form vs. the combined UPDATE-GSI form is resolved by one-token lookahead
+ * (reduce on FOLLOW vs. shift K_UPDATE), exactly as the original factored it. */
 alter_table_command:
       K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput
         {
@@ -601,6 +615,106 @@ alter_table_command:
             cmd.deletion_protection = $5;
             $$ = std::move(cmd);
         }
+    | K_ALTER K_TABLE string '(' attribute_name_type_list ')' K_CREATE K_GSI alter_table_gsi_create
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.attribute_definitions = std::move($5);
+            cmd.gsi_updates.push_back(std::move($9));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_DROP K_GSI alter_table_gsi_drop
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.gsi_updates.push_back(std::move($6));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput
+            K_UPDATE K_GSI '(' alter_table_gsi_update ')'
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            // D-2e-6: setting the table to on-demand implies the index
+            // throughput; the original drops the GSI update list and logs an
+            // informational message. Keep the gate; carry the GSI updates only
+            // when the table billing mode is PROVISIONED.
+            const bool provisioned = $5.mode == ddbsh::engine::BillingMode::provisioned;
+            cmd.billing = std::move($5);
+            cmd.warm = std::move($6);
+            if (provisioned) {
+                cmd.gsi_updates = std::move($10);
+            } else {
+                cmd.ignored_gsi_on_demand = true;
+            }
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_UPDATE K_GSI '(' alter_table_gsi_update ')'
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.gsi_updates = std::move($7);
+            $$ = std::move(cmd);
+        }
+    ;
+
+/* ---- GSI update actions (2e-2) -------------------------------------------
+ * Each produces one engine::GsiUpdate (the SDK-free carrier for a
+ * GlobalSecondaryIndexUpdate). CREATE reuses the CREATE-TABLE key_schema /
+ * index_projection / billing / warm non-terminals verbatim. An UPDATE element
+ * sets EITHER billing OR warm (the original's two update-element forms), never
+ * both in one element. DROP carries only the index name. */
+alter_table_gsi_create:
+      string K_ON key_schema index_projection optional_billing_mode_and_throughput optional_warm_throughput
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::create;
+            g.index_name = std::move($1);
+            g.key_schema = std::move($3);
+            g.projection = std::move($4);
+            g.billing = std::move($5);
+            g.warm = std::move($6);
+            $$ = std::move(g);
+        }
+    ;
+
+alter_table_gsi_drop:
+      string
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::drop;
+            g.index_name = std::move($1);
+            $$ = std::move(g);
+        }
+    ;
+
+alter_table_gsi_update_element:
+      string K_SET billing_mode_and_throughput
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::update;
+            g.index_name = std::move($1);
+            g.billing = std::move($3);
+            $$ = std::move(g);
+        }
+    | string K_SET warm_throughput
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::update;
+            g.index_name = std::move($1);
+            g.warm = std::move($3);
+            $$ = std::move(g);
+        }
+    ;
+
+alter_table_gsi_update:
+      alter_table_gsi_update_element
+        {
+            $$ = std::vector<ddbsh::engine::GsiUpdate>{};
+            $$.push_back(std::move($1));
+        }
+    | alter_table_gsi_update ',' alter_table_gsi_update_element
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
     ;
 
 attribute_name_type_list:

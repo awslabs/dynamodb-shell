@@ -23,7 +23,9 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
+#include <aws/dynamodb/model/CreateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
+#include <aws/dynamodb/model/DeleteGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/DeleteItemRequest.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
@@ -31,12 +33,14 @@
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/DescribeTimeToLiveRequest.h>
 #include <aws/dynamodb/model/GetItemRequest.h>
+#include <aws/dynamodb/model/GlobalSecondaryIndexUpdate.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
 #include <aws/dynamodb/model/ScanRequest.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
 #include <aws/dynamodb/model/TransactWriteItemsRequest.h>
+#include <aws/dynamodb/model/UpdateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/UpdateItemRequest.h>
 #include <aws/dynamodb/model/UpdateTableRequest.h>
 
@@ -798,6 +802,63 @@ void apply_gsi_throughput(Aws::DynamoDB::Model::GlobalSecondaryIndex& gsi,
     }
 }
 
+// Translate one engine::GsiUpdate into a GlobalSecondaryIndexUpdate, mirroring
+// the original's alter_table_gsi_create / _update_element / _drop grammar
+// actions (parser.y): a Create action carries key schema + projection +
+// optional throughput/warm; an Update action carries only throughput (matching
+// the table mode) OR warm; a Delete action carries only the index name. The
+// create/update throughput setters take the same shape as the table-level ones.
+Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate to_sdk_gsi_update(const GsiUpdate& gu) {
+    Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate out;
+    switch (gu.action) {
+        case GsiUpdate::Action::create: {
+            Aws::DynamoDB::Model::CreateGlobalSecondaryIndexAction action;
+            action.SetIndexName(gu.index_name);
+            if (gu.key_schema.has_value()) {
+                action.SetKeySchema(to_sdk_key_schema(*gu.key_schema));
+            }
+            if (gu.projection.has_value()) {
+                action.SetProjection(to_sdk_projection(*gu.projection));
+            }
+            if (gu.billing.has_value()) {
+                if (gu.billing->mode == BillingMode::provisioned) {
+                    action.SetProvisionedThroughput(to_sdk_provisioned(*gu.billing));
+                } else {
+                    action.SetOnDemandThroughput(to_sdk_ondemand(gu.billing->od));
+                }
+            }
+            if (gu.warm.has_value()) {
+                action.SetWarmThroughput(to_sdk_warm(*gu.warm));
+            }
+            out.SetCreate(action);
+            break;
+        }
+        case GsiUpdate::Action::update: {
+            Aws::DynamoDB::Model::UpdateGlobalSecondaryIndexAction action;
+            action.SetIndexName(gu.index_name);
+            if (gu.billing.has_value()) {
+                if (gu.billing->mode == BillingMode::provisioned) {
+                    action.SetProvisionedThroughput(to_sdk_provisioned(*gu.billing));
+                } else {
+                    action.SetOnDemandThroughput(to_sdk_ondemand(gu.billing->od));
+                }
+            }
+            if (gu.warm.has_value()) {
+                action.SetWarmThroughput(to_sdk_warm(*gu.warm));
+            }
+            out.SetUpdate(action);
+            break;
+        }
+        case GsiUpdate::Action::drop: {
+            Aws::DynamoDB::Model::DeleteGlobalSecondaryIndexAction action;
+            action.SetIndexName(gu.index_name);
+            out.SetDelete(action);
+            break;
+        }
+    }
+    return out;
+}
+
 // Translate an SSE spec to the SDK SSESpecification (shared by CREATE and
 // ALTER). Mirrors the original's sse_specification grammar action.
 Aws::DynamoDB::Model::SSESpecification to_sdk_sse(const SseSpec& spec) {
@@ -947,6 +1008,19 @@ Aws::DynamoDB::Model::UpdateTableRequest build_update_table(const UpdateTableIn&
 
     if (in.deletion_protection.has_value()) {
         request.SetDeletionProtectionEnabled(*in.deletion_protection);
+    }
+
+    // CREATE GSI carries the new key attributes in AttributeDefinitions (the
+    // SDK requires them on the UpdateTable request); UPDATE/DROP GSI carry none.
+    for (const auto& attr : in.attribute_definitions) {
+        Aws::DynamoDB::Model::AttributeDefinition def;
+        def.SetAttributeName(attr.name);
+        def.SetAttributeType(to_sdk(attr.type));
+        request.AddAttributeDefinitions(def);
+    }
+
+    for (const auto& gu : in.gsi_updates) {
+        request.AddGlobalSecondaryIndexUpdates(to_sdk_gsi_update(gu));
     }
 
     return request;

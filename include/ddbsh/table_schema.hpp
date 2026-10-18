@@ -91,6 +91,29 @@ struct Gsi {
     std::optional<WarmThroughput> warm;
 };
 
+/// One GlobalSecondaryIndexUpdate action in an ALTER TABLE (arch §7). The
+/// original wrapped a CreateGlobalSecondaryIndexAction /
+/// UpdateGlobalSecondaryIndexAction / DeleteGlobalSecondaryIndexAction in a
+/// GlobalSecondaryIndexUpdate; this is the SDK-free carrier shared by the parse
+/// result (engine::AlterTableCmd) and the client seam (ddbsh::UpdateTableIn).
+///
+///   * `create`: `index_name` + `key_schema` + `projection`, with optional
+///     `billing` (provisioned/on-demand throughput) and/or `warm`. The new key
+///     attributes are carried in AlterTableCmd::attribute_definitions (the SDK
+///     requires them in the UpdateTable AttributeDefinitions).
+///   * `update`: `index_name` + EITHER `billing` OR `warm` (the original's
+///     UpdateGlobalSecondaryIndexAction took one per update element).
+///   * `drop`: `index_name` only.
+struct GsiUpdate {
+    enum class Action { create, update, drop };
+    Action action = Action::update;
+    std::string index_name;
+    std::optional<KeySchema> key_schema;              ///< create only
+    std::optional<Projection> projection;             ///< create only
+    std::optional<BillingModeAndThroughput> billing;  ///< create or update
+    std::optional<WarmThroughput> warm;               ///< create or update
+};
+
 /// A local secondary index definition.
 struct Lsi {
     std::string name;

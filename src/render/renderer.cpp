@@ -298,7 +298,14 @@ std::string render_outcome_stderr(const ExecOutcome& outcome) {
     return std::visit(
         [](const auto& payload) -> std::string {
             using T = std::decay_t<decltype(payload)>;
-            if constexpr (std::is_same_v<T, TransactOutcome>) {
+            if constexpr (std::is_same_v<T, StatusOutcome>) {
+                std::string out;
+                for (const auto& line : payload.diagnostics) {
+                    out += line;
+                    out += '\n';
+                }
+                return out;
+            } else if constexpr (std::is_same_v<T, TransactOutcome>) {
                 std::string out;
                 for (const auto& line : payload.diagnostics) {
                     out += line;

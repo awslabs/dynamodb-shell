@@ -223,8 +223,8 @@ struct CreateTableOut {};
 // sentinels). `table_class` / `deletion_protection` are optional<> (NOT a
 // defaulted value) so "clause absent" serializes to NO TableClass /
 // DeletionProtectionEnabled in the request, matching the original's unset
-// fields. GSI updates and the replica ReplicationGroupUpdate land in later
-// sub-phases (2e-2 / 2e-5); this 2e-1 struct carries the non-GSI SET fields.
+// fields. `attribute_definitions` + `gsi_updates` carry the CREATE / UPDATE /
+// DROP GSI actions (2e-2); the replica ReplicationGroupUpdate lands in 2e-5.
 struct UpdateTableIn {
     std::string table_name;
     std::optional<BillingModeAndThroughput> billing;  ///< SET billing_mode_and_throughput
@@ -233,6 +233,8 @@ struct UpdateTableIn {
     std::optional<StreamSpec> stream;                 ///< SET stream_specification
     std::optional<TableClass> table_class;            ///< SET table_class (nullopt => unset)
     std::optional<bool> deletion_protection;  ///< SET deletion protection (nullopt => unset)
+    std::vector<AttributeDef> attribute_definitions;  ///< new key attrs for CREATE GSI
+    std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
 };
 struct UpdateTableOut {};
 

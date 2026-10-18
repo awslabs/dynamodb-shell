@@ -22,8 +22,17 @@ UpdateTableIn make_request(const AlterTableCmd& cmd) {
     request.stream = cmd.stream;
     request.table_class = cmd.table_class;
     request.deletion_protection = cmd.deletion_protection;
+    request.attribute_definitions = cmd.attribute_definitions;
+    request.gsi_updates = cmd.gsi_updates;
     return request;
 }
+
+/// The informational message the original emitted (logmsg) when a combined
+/// `SET billing ... UPDATE GSI` targets an on-demand table (D-2e-6). Unpinned
+/// by any golden; carried as a stderr diagnostic so it does not flip the exit
+/// code. The original text came from logmsg; we drop its [file,line] prefix.
+constexpr char kOnDemandGsiIgnored[] =
+    "Setting table to on-demand, ignoring specifications for indices.";
 
 }  // namespace
 
@@ -32,7 +41,11 @@ Result<ExecOutcome> execute_alter_table(const AlterTableCmd& cmd, IDDBClient& cl
     if (!updated.has_value()) {
         return fail(updated.error());
     }
-    return ExecOutcome{StatusOutcome{"ALTER"}};
+    StatusOutcome status{"ALTER"};
+    if (cmd.ignored_gsi_on_demand) {
+        status.diagnostics.push_back(kOnDemandGsiIgnored);
+    }
+    return ExecOutcome{std::move(status)};
 }
 
 Result<ExecOutcome> execute_alter_table_explain(const AlterTableCmd& cmd, IDDBClient& client) {

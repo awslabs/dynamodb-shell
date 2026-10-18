@@ -154,6 +154,7 @@ using ddbsh::AttributeDef;
 using ddbsh::BillingMode;
 using ddbsh::BillingModeAndThroughput;
 using ddbsh::Gsi;
+using ddbsh::GsiUpdate;
 using ddbsh::KeySchema;
 using ddbsh::Lsi;
 using ddbsh::OnDemandThroughput;
@@ -337,6 +338,14 @@ struct AlterTableCmd {
     std::optional<StreamSpec> stream;                 ///< SET stream_specification
     std::optional<TableClass> table_class;            ///< SET table_class
     std::optional<bool> deletion_protection;          ///< SET deletion protection enabled|disabled
+    std::vector<AttributeDef> attribute_definitions;  ///< ( attr type, ... ) for CREATE GSI
+    std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
+    /// D-2e-6: a combined `SET billing ... UPDATE GSI (...)` whose table billing
+    /// mode is on-demand drops the GSI updates (the index throughput is implied)
+    /// and the original emitted an informational message. The gate is applied in
+    /// the grammar action (gsi_updates cleared); this flag records that it fired
+    /// so the executor surfaces the (unpinned) diagnostic on stderr.
+    bool ignored_gsi_on_demand = false;
 };
 
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
