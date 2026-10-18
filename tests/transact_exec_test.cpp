@@ -200,6 +200,27 @@ TEST(TransactRead, NonReducibleSelectAbortsWithDiagnostic) {
     EXPECT_EQ(client.transact_get_requests().size(), 0u);
 }
 
+TEST(TransactRead, MissingResponseRendersBlankLineInRequestOrder) {
+    // Fidelity (reviewer must-fix 514bb00 / D-2d §7): the original's
+    // transact-read run() loop prints `show_item(item)` unconditionally for
+    // every response, and show_item of an empty map is "", so a miss renders as
+    // a blank line. A read transaction (unlike a SELECT) does NOT filter empty
+    // responses; the positional one-line-per-Get output is the contract.
+    ddbsh::test::FakeDDBClient client;
+    register_tables(client);
+    // Get #1 present, Get #2 a miss (nullopt), Get #3 present.
+    client.set_transact_get_responses(
+        {num_row({{"a", "1"}, {"b", "1"}}), std::nullopt, num_row({{"a", "3"}, {"b", "1"}})});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "begin; select * from itxt1 where a = 1; select * from itxt1 where a = 2; "
+        "select * from itxt1 where a = 3; commit;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    // Blank line for the miss, in request order (NOT skipped).
+    EXPECT_EQ(render(*out), "{a: 1, b: 1}\n\n{a: 3, b: 1}\n");
+}
+
 // ---- Write transactions ----------------------------------------------------
 
 TEST(TransactWrite, CommitRendersCommit) {

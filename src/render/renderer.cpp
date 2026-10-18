@@ -238,6 +238,20 @@ std::string render_transact(const TransactOutcome& t) {
     return t.token + "\n";
 }
 
+/// A successful read transaction renders one line per Get response in request
+/// order (D-2d-8). Unlike render_select, which filters empty items, this emits
+/// a line for EVERY response — a miss renders as a blank line — reproducing the
+/// original's `printf("%s\n", show_item(item))` loop (show_item of an empty map
+/// is "", so a miss prints just "\n"). See TransactReadOutcome.
+std::string render_transact_read(const TransactReadOutcome& t) {
+    std::string out;
+    for (const auto& item : t.items) {
+        out += show_item(item);
+        out += '\n';
+    }
+    return out;
+}
+
 /// Dispatch one ExecOutcome to its formatter. A free function (not the member)
 /// so MultiOutcome can recurse into it for each of its parts.
 std::string render_outcome(const ExecOutcome& outcome) {
@@ -260,6 +274,8 @@ std::string render_outcome(const ExecOutcome& outcome) {
                 return render_bulk_write(payload);
             } else if constexpr (std::is_same_v<T, TransactOutcome>) {
                 return render_transact(payload);
+            } else if constexpr (std::is_same_v<T, TransactReadOutcome>) {
+                return render_transact_read(payload);
             } else if constexpr (std::is_same_v<T, MultiOutcome>) {
                 std::string out;
                 for (const auto& part : payload.parts) {

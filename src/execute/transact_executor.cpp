@@ -57,7 +57,11 @@ Result<void> execute_transact_read(const TransactCmd& cmd, IDDBClient& client,
     for (const auto& item : cmd.items) {
         const auto* select = std::get_if<SelectCmd>(&item);
         if (select == nullptr) {
-            aborted = true;  // parse-error placeholder; abort without a message
+            // Internal-invariant guard, not an oracle-sourced path: the grammar
+            // only admits SelectCmd in a read transaction, so a non-SelectCmd
+            // node here means a parse-error placeholder. Abort without a
+            // diagnostic (unreachable via the grammar).
+            aborted = true;
             continue;
         }
         auto get = build_transact_get(*select, client, next_prefix);
@@ -94,14 +98,18 @@ Result<void> execute_transact_read(const TransactCmd& cmd, IDDBClient& client,
         return fail(out.error());
     }
 
-    // Render each response item; a missing/empty response renders to nothing
-    // (the SelectOutcome renderer skips empty items — D-2d §7).
-    SelectOutcome items;
+    // Render each response in request order. A missing/empty response renders
+    // as a blank line (the original's transact-read run() prints
+    // `show_item(item)` unconditionally for every response, and show_item of an
+    // empty map is "" — D-2d §7, reviewer must-fix 514bb00). TransactReadOutcome
+    // (unlike SelectOutcome) does NOT filter empties, preserving the positional
+    // one-line-per-Get output.
+    TransactReadOutcome items;
     for (auto& response : out->responses) {
         if (response.has_value()) {
             items.items.push_back(std::move(*response));
         } else {
-            items.items.push_back(ItemRow{});  // empty row -> skipped by the Renderer
+            items.items.push_back(ItemRow{});  // miss -> blank line (not skipped)
         }
     }
     sink.emit(ExecOutcome{std::move(items)});

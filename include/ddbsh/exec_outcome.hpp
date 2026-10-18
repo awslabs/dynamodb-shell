@@ -137,13 +137,27 @@ struct TransactOutcome {
     std::vector<std::string> diagnostics;  ///< stderr lines (may be empty)
 };
 
+/// The result of a successful read transaction (TransactGetItems): one row per
+/// Get, in request order. Unlike SelectOutcome — which filters empty items to
+/// match the original's `show_items` for a SELECT — a read transaction renders
+/// EVERY response, including misses: the original's `CTransactReadCommand::run`
+/// loop does `printf("%s\n", show_item(item))` unconditionally, and
+/// `show_item` of an empty map returns "" (select_helper.cpp), so a missing
+/// item prints as a blank line. Preserving the positional, one-line-per-Get
+/// output (blank line for a miss) is the fidelity contract (tenet 1); a
+/// read transaction does not totalize/display consumed capacity (the original's
+/// transact-read run() never does), so there is no capacity field here.
+struct TransactReadOutcome {
+    std::vector<ItemRow> items;  ///< one per Get, request order; a miss -> blank line
+};
+
 /// Discriminated union over the observable shapes a command produces. Extended
 /// per sub-phase. `MultiOutcome` carries several fragments emitted by ONE
 /// statement (multi-row INSERT; future batched forms) in production order; it
 /// is the buffering form of the streaming OutcomeSink (D-2c-12).
-using ExecOutcome =
-    std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome, WriteOutcome,
-                 ExplainOutcome, BulkWriteOutcome, TransactOutcome, MultiOutcome>;
+using ExecOutcome = std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome,
+                                 WriteOutcome, ExplainOutcome, BulkWriteOutcome, TransactOutcome,
+                                 TransactReadOutcome, MultiOutcome>;
 
 /// Carries >1 fragment produced by one statement, in production order (e.g. a
 /// multi-row INSERT emits one WriteOutcome per row). The buffering
