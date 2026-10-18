@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // alter_table_exec_test.cpp — ALTER TABLE execution tests (2e-1 SET non-GSI,
-// 2e-2 GSI create/update/drop, 2e-3 SET TTL).
+// 2e-2 GSI create/update/drop, 2e-3 SET TTL, 2e-4 SET PITR).
 //
 // Exercises the UpdateTable path offline via FakeDDBClient:
 //   * each SET clause (billing/throughput, warm, sse, stream, table class,
@@ -492,6 +492,66 @@ TEST(AlterTableExec, ExplainSetTtlDisableWhenAlreadyDisabledEmitsAlterToken) {
     EXPECT_EQ(render(*out), "ALTER\n");
     EXPECT_TRUE(client.explain_requests().empty());
     EXPECT_TRUE(client.update_ttl_requests().empty());
+}
+
+// ---- 2e-4: SET PITR (UpdateContinuousBackups, D-2e-8) ----------------------
+
+TEST(AlterTableExec, SetPitrEnabledIssuesUpdateContinuousBackups) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set pitr enabled;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    ASSERT_EQ(client.update_pitr_requests().size(), 1u);
+    const auto& req = client.update_pitr_requests()[0];
+    EXPECT_EQ(req.table_name, "t");
+    EXPECT_TRUE(req.enabled);
+}
+
+TEST(AlterTableExec, SetPitrDisabledIssuesUpdateContinuousBackups) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set pitr disabled;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    ASSERT_EQ(client.update_pitr_requests().size(), 1u);
+    const auto& req = client.update_pitr_requests()[0];
+    EXPECT_EQ(req.table_name, "t");
+    EXPECT_FALSE(req.enabled);
+}
+
+TEST(AlterTableExec, SetPitrFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_update_pitr_error(
+        Error{Errc::service_error, "pitr failed", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set pitr enabled;");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(client.update_pitr_requests().size(), 1u);
+}
+
+TEST(AlterTableExec, ExplainSetPitrEmitsUpdateContinuousBackupsRequestLabelNoTrailingStatus) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // D-2e-11: the EXPLAIN label carries the `Request` suffix — the ONLY EXPLAIN
+    // label the original gives one (pitr.cpp printf). No trailing status token.
+    auto out = session.run("explain alter table t set pitr enabled;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "UpdateContinuousBackupsRequest({\n   \"stub\":   \"explain\"\n})\n");
+
+    // EXPLAIN serializes the request and issues no mutation.
+    ASSERT_EQ(client.explain_requests().size(), 1u);
+    const auto* req = std::get_if<ddbsh::UpdateContinuousBackupsIn>(&client.explain_requests()[0]);
+    ASSERT_NE(req, nullptr);
+    EXPECT_EQ(req->table_name, "t");
+    EXPECT_TRUE(req->enabled);
+    EXPECT_TRUE(client.update_pitr_requests().empty());
 }
 
 }  // namespace

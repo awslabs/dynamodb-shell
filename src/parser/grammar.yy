@@ -564,8 +564,9 @@ create_table_command:
  * applies the D-2e-6 on-demand gate in its action: when the table billing mode
  * is on-demand the GSI updates are dropped (the index throughput is implied)
  * and a flag records the (unpinned) informational diagnostic. SET TTL (2e-3)
- * builds an AlterTtlCmd (DescribeTimeToLive + UpdateTimeToLive); the REPLICA /
- * PITR forms land in 2e-4..2e-5.
+ * builds an AlterTtlCmd (DescribeTimeToLive + UpdateTimeToLive); SET PITR (2e-4)
+ * builds an AlterPitrCmd (UpdateContinuousBackups); the REPLICA forms land in
+ * 2e-5.
  *
  * LALR(1): the first tokens after K_SET are all distinct (K_BILLING / K_WARM /
  * K_SSE / K_TABLE / K_STREAM / K_DELETION / K_TTL / K_PITR). The shared prefix
@@ -675,6 +676,25 @@ alter_table_command:
             cmd.table = std::move($3);
             cmd.enabled = true;
             cmd.attribute = std::move($7);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_PITR K_ENABLED
+        {
+            /* SET PITR ENABLED: builds an AlterPitrCmd (UpdateContinuousBackups,
+             * D-2e-8), a distinct ALTER node sharing the one
+             * StatementKind::alter_table. K_PITR is a distinct first token after
+             * K_SET, so no new LALR conflict. */
+            ddbsh::engine::AlterPitrCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = true;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_PITR K_DISABLED
+        {
+            /* SET PITR DISABLED. */
+            ddbsh::engine::AlterPitrCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = false;
             $$ = std::move(cmd);
         }
     ;

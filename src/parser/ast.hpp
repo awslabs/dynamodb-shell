@@ -361,13 +361,26 @@ struct AlterTtlCmd {
     std::string attribute;  ///< the TTL attribute name; set only when enabled
 };
 
+/// ALTER TABLE <table> SET PITR ENABLED | SET PITR DISABLED (the original
+/// CUpdatePITRCommand -> UpdateContinuousBackups). A third ALTER AST node
+/// sharing the one StatementKind::alter_table (D-2e-1). `enabled` sets the
+/// PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled flag. On success
+/// the executor emits the `ALTER` status token; EXPLAIN serializes the request
+/// under the quirky label `UpdateContinuousBackupsRequest(...)` — the ONLY
+/// EXPLAIN label in the original that carries a `Request` suffix (the original
+/// pitr.cpp printf). D-2e-8 / D-2e-11.
+struct AlterPitrCmd {
+    std::string table;
+    bool enabled = false;
+};
+
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
 
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode =
     std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
-                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, InsertCmd, SelectCmd,
-                 UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, AlterPitrCmd, InsertCmd,
+                 SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -415,6 +428,8 @@ inline StatementKind kind_of(const CommandNode& command) {
             } else if constexpr (std::is_same_v<T, AlterTableCmd>) {
                 return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, AlterTtlCmd>) {
+                return StatementKind::alter_table;
+            } else if constexpr (std::is_same_v<T, AlterPitrCmd>) {
                 return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, InsertCmd>) {
                 return StatementKind::insert;

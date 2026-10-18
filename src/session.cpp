@@ -222,9 +222,9 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
         }
         case StatementKind::alter_table: {
             // The four ALTER AST nodes share one StatementKind::alter_table
-            // (D-2e-1); dispatch on the active node. UpdateTable (AlterTableCmd)
-            // and SET TTL (AlterTtlCmd) exist so far — PITR / REPLICA land in
-            // later sub-phases, each adding an arm here.
+            // (D-2e-1); dispatch on the active node. UpdateTable (AlterTableCmd),
+            // SET TTL (AlterTtlCmd), and SET PITR (AlterPitrCmd) exist so far —
+            // REPLICA lands in 2e-5, adding an arm here.
             const auto& command = statement.ast()->command;
             const bool explain = statement.ast()->explain;
             if (std::holds_alternative<engine::AlterTableCmd>(command)) {
@@ -236,11 +236,17 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 }
                 return emit_single(engine::execute_alter_table(alter, impl_->client));
             }
-            // SET TTL: DescribeTimeToLive + UpdateTimeToLive (the executor owns
-            // the probe-first / already-disabled short-circuit / EXPLAIN logic,
-            // D-2e-7), so pass the explain flag through.
-            const auto& ttl = std::get<engine::AlterTtlCmd>(command);
-            return emit_single(engine::execute_alter_ttl(ttl, impl_->client, explain));
+            if (std::holds_alternative<engine::AlterTtlCmd>(command)) {
+                // SET TTL: DescribeTimeToLive + UpdateTimeToLive (the executor
+                // owns the probe-first / already-disabled short-circuit / EXPLAIN
+                // logic, D-2e-7), so pass the explain flag through.
+                const auto& ttl = std::get<engine::AlterTtlCmd>(command);
+                return emit_single(engine::execute_alter_ttl(ttl, impl_->client, explain));
+            }
+            // SET PITR: UpdateContinuousBackups (the executor owns the EXPLAIN
+            // `UpdateContinuousBackupsRequest(...)` label quirk, D-2e-8/-11).
+            const auto& pitr = std::get<engine::AlterPitrCmd>(command);
+            return emit_single(engine::execute_alter_pitr(pitr, impl_->client, explain));
         }
         case StatementKind::show_tables: {
             // SHOW TABLES is not explainable (it is a show_command, not in the

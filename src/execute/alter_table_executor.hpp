@@ -13,8 +13,9 @@
 //
 // The four oracle ALTER command classes split into four AST nodes sharing one
 // StatementKind::alter_table (D-2e-1); this file handles the UpdateTable node
-// (AlterTableCmd) and the SET TTL node (AlterTtlCmd, DescribeTimeToLive +
-// UpdateTimeToLive). The PITR / REPLICA executors land in later sub-phases.
+// (AlterTableCmd), the SET TTL node (AlterTtlCmd, DescribeTimeToLive +
+// UpdateTimeToLive), and the SET PITR node (AlterPitrCmd,
+// UpdateContinuousBackups). The REPLICA executor lands in 2e-5.
 //
 // D12: never aborts; a service failure is returned as an Error (the CLI adapter
 // composes the byte-exact "Update Table failed. ..." message, D-2e-13).
@@ -50,6 +51,14 @@ Result<ExecOutcome> execute_alter_table_explain(const AlterTableCmd& cmd, IDDBCl
 ///      -> StatusOutcome{"ALTER"}; under EXPLAIN -> one `UpdateTimeToLive(...)`
 ///      block (the probe is live but NOT serialized), NO trailing status.
 Result<ExecOutcome> execute_alter_ttl(const AlterTtlCmd& cmd, IDDBClient& client, bool explain);
+
+/// Execute an ALTER TABLE SET PITR ENABLED|DISABLED (UpdateContinuousBackups;
+/// the original CUpdatePITRCommand). On success -> StatusOutcome{"ALTER"}; under
+/// EXPLAIN -> one `UpdateContinuousBackupsRequest(...)` block (the sole EXPLAIN
+/// label the original gives a `Request` suffix — D-2e-11), NO trailing status.
+/// A service failure is returned as an Error (the CLI adapter composes the
+/// byte-exact "Setting PITR failed. ..." message, D-2e-13).
+Result<ExecOutcome> execute_alter_pitr(const AlterPitrCmd& cmd, IDDBClient& client, bool explain);
 
 }  // namespace ddbsh::engine
 

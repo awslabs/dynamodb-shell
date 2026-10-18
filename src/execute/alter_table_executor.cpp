@@ -106,4 +106,31 @@ Result<ExecOutcome> execute_alter_ttl(const AlterTtlCmd& cmd, IDDBClient& client
     return ExecOutcome{StatusOutcome{"ALTER"}};
 }
 
+Result<ExecOutcome> execute_alter_pitr(const AlterPitrCmd& cmd, IDDBClient& client, bool explain) {
+    UpdateContinuousBackupsIn request;
+    request.table_name = cmd.table;
+    request.enabled = cmd.enabled;
+
+    if (explain) {
+        // EXPLAIN serializes the UpdateContinuousBackups request under the
+        // quirky label `UpdateContinuousBackupsRequest(...)` — the ONLY EXPLAIN
+        // label the original gives a `Request` suffix (pitr.cpp printf) — with
+        // NO trailing status token (D-2e-11).
+        auto body = client.explain_request(request);
+        if (!body.has_value()) {
+            return fail(body.error());
+        }
+        ExplainOutcome outcome;
+        outcome.blocks.push_back(ExplainBlock{"UpdateContinuousBackupsRequest", std::move(*body),
+                                              ExplainBlock::Format::pretty});
+        return ExecOutcome{std::move(outcome)};
+    }
+
+    auto updated = client.update_continuous_backups(request);
+    if (!updated.has_value()) {
+        return fail(updated.error());
+    }
+    return ExecOutcome{StatusOutcome{"ALTER"}};
+}
+
 }  // namespace ddbsh::engine

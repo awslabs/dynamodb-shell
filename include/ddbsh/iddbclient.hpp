@@ -254,6 +254,23 @@ struct UpdateTimeToLiveIn {
 };
 struct UpdateTimeToLiveOut {};
 
+// ---- UpdateContinuousBackups (PITR) ----------------------------------------
+// ALTER TABLE SET PITR ENABLED / SET PITR DISABLED issues UpdateContinuousBackups
+// (arch §7, the original CUpdatePITRCommand). `enabled` sets the
+// PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled flag. On success
+// the executor emits the `ALTER` status token. The SDK-free struct keeps the
+// seam AWS-type-free (D11); the CLI adapter translates it to
+// Aws::DynamoDB::Model::UpdateContinuousBackupsRequest and composes the
+// byte-exact "Setting PITR failed. ..." failure message the original logged
+// (D-2e-13). EXPLAIN serializes it under the quirky label
+// `UpdateContinuousBackupsRequest(...)` — the ONLY EXPLAIN label the original
+// gives a `Request` suffix (D-2e-11).
+struct UpdateContinuousBackupsIn {
+    std::string table_name;
+    bool enabled = false;
+};
+struct UpdateContinuousBackupsOut {};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -490,9 +507,10 @@ struct TransactWriteItemsOut {};
 /// alternative per in-scope API the EXPLAIN paths can emit (arch §7/§8).
 using ExplainRequest =
     std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, UpdateTableIn,
-                 UpdateTimeToLiveIn, DeleteTableIn, DescribeTableIn, DescribeTimeToLiveIn,
-                 DescribeContinuousBackupsIn, DescribeTableReplicaAutoScalingIn, UpdateItemIn,
-                 DeleteItemIn, TransactGetItemsIn, TransactWriteItemsIn>;
+                 UpdateTimeToLiveIn, UpdateContinuousBackupsIn, DeleteTableIn, DescribeTableIn,
+                 DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
+                 DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
+                 TransactWriteItemsIn>;
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
@@ -519,6 +537,13 @@ public:
     /// D-2e-7). A service failure is returned as an Error (the adapter composes
     /// the byte-exact "Error updating TTL. ..." message, D-2e-13).
     virtual Result<UpdateTimeToLiveOut> update_time_to_live(const UpdateTimeToLiveIn&) = 0;
+
+    /// UpdateContinuousBackups for an ALTER TABLE SET PITR ... (arch §7, the
+    /// original CUpdatePITRCommand). On success the executor emits the `ALTER`
+    /// status token. A service failure is returned as an Error (the adapter
+    /// composes the byte-exact "Setting PITR failed. ..." message, D-2e-13).
+    virtual Result<UpdateContinuousBackupsOut> update_continuous_backups(
+        const UpdateContinuousBackupsIn&) = 0;
 
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;

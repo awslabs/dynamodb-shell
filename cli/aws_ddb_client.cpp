@@ -41,6 +41,7 @@
 #include <aws/dynamodb/model/TimeToLiveSpecification.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
 #include <aws/dynamodb/model/TransactWriteItemsRequest.h>
+#include <aws/dynamodb/model/UpdateContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/UpdateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/UpdateItemRequest.h>
 #include <aws/dynamodb/model/UpdateTableRequest.h>
@@ -1049,6 +1050,19 @@ Aws::DynamoDB::Model::UpdateTimeToLiveRequest build_update_time_to_live(
     return request;
 }
 
+// Mirrors the original CUpdatePITRCommand (arch §7): one
+// UpdateContinuousBackupsRequest carrying a PointInTimeRecoverySpecification
+// {PointInTimeRecoveryEnabled}. A flat translation.
+Aws::DynamoDB::Model::UpdateContinuousBackupsRequest build_update_continuous_backups(
+    const UpdateContinuousBackupsIn& in) {
+    Aws::DynamoDB::Model::UpdateContinuousBackupsRequest request;
+    request.SetTableName(in.table_name);
+    Aws::DynamoDB::Model::PointInTimeRecoverySpecification spec;
+    spec.SetPointInTimeRecoveryEnabled(in.enabled);
+    request.SetPointInTimeRecoverySpecification(spec);
+    return request;
+}
+
 }  // namespace
 
 Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
@@ -1100,6 +1114,27 @@ Result<UpdateTimeToLiveOut> AwsDDBClient::update_time_to_live(const UpdateTimeTo
                           std::string(err.GetRequestId().c_str())});
     }
     return UpdateTimeToLiveOut{};
+}
+
+Result<UpdateContinuousBackupsOut> AwsDDBClient::update_continuous_backups(
+    const UpdateContinuousBackupsIn& in) {
+    auto request = build_update_continuous_backups(in);
+    auto outcome = client_->UpdateContinuousBackups(request);
+    if (!outcome.IsSuccess()) {
+        // Compose the byte-exact message the original logged on an
+        // UpdateContinuousBackups failure: "Setting PITR failed. <ExceptionName>.
+        // <RequestId>.\n\t<Message>" (pitr.cpp logerror). Unpinned by golden
+        // (ipt asserts success paths), D-2e-13.
+        const auto& err = outcome.GetError();
+        std::string message = "Setting PITR failed. " +
+                              std::string(err.GetExceptionName().c_str()) + ". " +
+                              std::string(err.GetRequestId().c_str()) + ".\n\t" +
+                              std::string(err.GetMessage().c_str());
+        return fail(Error{Errc::service_error, std::move(message),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return UpdateContinuousBackupsOut{};
 }
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
@@ -1491,6 +1526,8 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                 return payload(build_update_table(in));
             } else if constexpr (std::is_same_v<T, UpdateTimeToLiveIn>) {
                 return payload(build_update_time_to_live(in));
+            } else if constexpr (std::is_same_v<T, UpdateContinuousBackupsIn>) {
+                return payload(build_update_continuous_backups(in));
             } else if constexpr (std::is_same_v<T, DeleteTableIn>) {
                 return payload(build_delete_table(in));
             } else if constexpr (std::is_same_v<T, DescribeTableIn>) {

@@ -720,4 +720,26 @@ TEST(Parse, AlterTableSetTtlDisableBuildsTtlNode) {
     EXPECT_TRUE(ttl.attribute.empty());
 }
 
+// ---- ALTER TABLE SET PITR (2e-4) builds an AlterPitrCmd ---------------------
+
+TEST(Parse, AlterTableSetPitrEnabledBuildsPitrNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set pitr enabled;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& pitr = node_of<ddbsh::engine::AlterPitrCmd>(stmt);
+    EXPECT_EQ(pitr.table, "t");
+    EXPECT_TRUE(pitr.enabled);
+}
+
+TEST(Parse, AlterTableSetPitrDisabledBuildsPitrNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set pitr disabled;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& pitr = node_of<ddbsh::engine::AlterPitrCmd>(stmt);
+    EXPECT_EQ(pitr.table, "t");
+    EXPECT_FALSE(pitr.enabled);
+}
+
 }  // namespace
