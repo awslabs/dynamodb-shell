@@ -26,6 +26,7 @@
 #ifndef DDBSH_SRC_EXECUTE_INSERT_EXECUTOR_HPP
 #define DDBSH_SRC_EXECUTE_INSERT_EXECUTOR_HPP
 
+#include <cstddef>
 #include <functional>
 #include <string>
 
@@ -36,6 +37,19 @@
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
+
+/// Validate that every row supplies exactly one value per named column
+/// (port of CInsertCommand::valid). Returns a descriptive Error on the first
+/// mismatch. Shared with the transaction Put builder (2d).
+Result<void> validate_insert_rows(const InsertCmd& cmd);
+
+/// Build the PutItem request for one row (port of
+/// CInsertCommand::make_put_request). For INSERT, aliases the partition key
+/// through a fresh SymbolTable (seeded with the next alias prefix) and adds the
+/// `attribute_not_exists(pk)` condition; REPLACE builds no SymbolTable and
+/// consumes no prefix. Shared with the transaction Put builder (2d).
+PutItemIn make_put_request(const InsertCmd& cmd, std::size_t row, const std::string& pk,
+                           const std::function<std::string()>& next_prefix);
 
 /// Execute a (non-EXPLAIN) INSERT or REPLACE, emitting one WriteOutcome per
 /// written row to `sink` BEFORE a failing row's Error is returned (AI-4 /

@@ -245,8 +245,17 @@ BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Rendere
         const ddbsh::render::Renderer& renderer;
         explicit RenderingSink(const ddbsh::render::Renderer& r) : renderer(r) {}
         void emit(const ddbsh::ExecOutcome& fragment) override {
+            // stdout gets the result bytes; stderr gets any diagnostics the
+            // outcome carries (a transaction's non-reducible-SELECT message,
+            // D-2d-6). Both are flushed so a mid-batch error interleaves
+            // correctly (AI-4 / D-2c-12).
             std::fputs(renderer.render(fragment).c_str(), stdout);
             std::fflush(stdout);
+            std::string diag = renderer.render_stderr(fragment);
+            if (!diag.empty()) {
+                std::fputs(diag.c_str(), stderr);
+                std::fflush(stderr);
+            }
         }
     };
 

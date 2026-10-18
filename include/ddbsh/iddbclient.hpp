@@ -367,6 +367,76 @@ struct TableReplicaAutoScalingOut {
     std::vector<ReplicaAutoScalingDescription> replicas;
 };
 
+// ---- TransactGetItems ------------------------------------------------------
+// A read transaction (BEGIN; <SELECTs>; COMMIT) issues ONE TransactGetItems
+// with one Get per inner SELECT, each reduced to a full-key GetItem (arch §7,
+// transact-read.hpp). The engine aliases the projection through a SymbolTable
+// (one per inner item, in parse order — D-2d-11), so a Get carries the
+// serialized ProjectionExpression + ExpressionAttributeNames; `key` is the
+// literal get_gud_key map. A read transaction never carries values.
+struct TransactGet {
+    std::string table_name;
+    ValueMap key;
+    std::optional<std::string> projection_expression;
+    ExpressionAttributeNames expression_attribute_names;
+};
+struct TransactGetItemsIn {
+    std::vector<TransactGet> items;
+};
+struct TransactGetItemsOut {
+    /// One response per Get, in request order. A missing item is nullopt; the
+    /// original rendered every response (including empties) via show_item,
+    /// which yields the empty string for an empty item (select_helper.cpp) —
+    /// the engine maps nullopt/empty to an empty ItemRow that the Renderer
+    /// skips (arch §9). The itxt goldens all hit existing keys, so the
+    /// empty-response shape is unpinned; reproduced from the oracle (D-2d §7).
+    std::vector<std::optional<ItemRow>> responses;
+};
+
+// ---- TransactWriteItems ----------------------------------------------------
+// A write transaction (BEGIN; <writes>; COMMIT) issues ONE TransactWriteItems
+// with one sub-item per inner write (arch §7, transact-write.hpp). INSERT/
+// REPLACE -> Put (one per row); UPDATE/UPSERT -> Update (full key); DELETE ->
+// Delete (full key); EXISTS/NOT EXISTS SELECT -> ConditionCheck. No sub-item
+// carries ReturnValues (the original never sets them in a transaction —
+// D-2d-10). Each sub-item's expression attributes come from a per-item
+// SymbolTable (arch §6).
+struct TransactPut {
+    std::string table_name;
+    ValueMap item;
+    std::optional<std::string> condition_expression;  ///< INSERT: attribute_not_exists(pk)
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+};
+struct TransactUpdate {
+    std::string table_name;
+    ValueMap key;
+    std::string update_expression;
+    std::optional<std::string> condition_expression;
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+};
+struct TransactDelete {
+    std::string table_name;
+    ValueMap key;
+    std::optional<std::string> condition_expression;
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+};
+struct TransactConditionCheck {
+    std::string table_name;
+    ValueMap key;
+    std::string condition_expression;  ///< always present: attribute_[not_]exists(...)
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+};
+using TransactWriteItem =
+    std::variant<TransactPut, TransactUpdate, TransactDelete, TransactConditionCheck>;
+struct TransactWriteItemsIn {
+    std::vector<TransactWriteItem> items;
+};
+struct TransactWriteItemsOut {};
+
 /// A request to serialize for EXPLAIN WITHOUT executing (P2a-03 §4.3). The
 /// adapter translates the active alternative to its SDK request and returns the
 /// raw SerializePayload() string; the engine never sees an Aws:: type. One
@@ -374,7 +444,8 @@ struct TableReplicaAutoScalingOut {
 using ExplainRequest =
     std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, DeleteTableIn,
                  DescribeTableIn, DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
-                 DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn>;
+                 DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
+                 TransactWriteItemsIn>;
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
@@ -401,6 +472,20 @@ public:
     /// DeleteItem for a single addressed item (DELETE; arch §7). Same ccf
     /// mapping as update_item (D-2c-7).
     virtual Result<DeleteItemOut> delete_item(const DeleteItemIn&) = 0;
+
+    /// TransactGetItems for a read transaction (arch §7, transact-read.hpp). A
+    /// service failure (e.g. TransactionCanceledException) is mapped by the
+    /// adapter to an Error whose message is the byte-exact
+    /// "Transaction failed. <ExceptionName>. <RequestId>. <Message>" string the
+    /// original logged (D-2d-9); the transaction executor emits `ABORT` then
+    /// returns that Error (exit nonzero, D-2d-5 path 2).
+    virtual Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn&) = 0;
+
+    /// TransactWriteItems for a write transaction (arch §7, transact-write.hpp).
+    /// Same failure mapping as transact_get_items (D-2d-9): a cancellation
+    /// yields the composed "Transaction failed. ..." Error. Success commits
+    /// (the executor emits the `COMMIT` token, D-2d-8).
+    virtual Result<TransactWriteItemsOut> transact_write_items(const TransactWriteItemsIn&) = 0;
 
     /// DescribeTimeToLive for a table (arch §7/§10). SHOW TABLES / DESCRIBE pair
     /// it with describe_table; a failure here makes a non-brief SHOW TABLES row

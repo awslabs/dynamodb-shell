@@ -15,10 +15,17 @@ namespace ddbsh::engine {
 
 namespace {
 
-/// Build the DeleteItem request template (port of
-/// CDeleteCommand::make_delete_request). The caller sets `.key` per item. `st`
-/// is the write SymbolTable (first prefix); `pk`/`rk` are the base-table key
-/// names (the residual predicate is evaluated against the base table).
+/// Enumerated row (base-table keys) -> sorted item key (SDK std::map order).
+ValueMap row_key(const ItemRow& item) {
+    KeyMap sorted;
+    for (const auto& [name, value] : item.attributes) {
+        sorted.emplace(name, value);
+    }
+    return key_of(sorted);
+}
+
+}  // namespace
+
 DeleteItemIn make_delete_request(const DeleteCmd& cmd, const std::string& pk, const std::string& rk,
                                  SymbolTable& st) {
     DeleteItemIn request;
@@ -39,17 +46,6 @@ DeleteItemIn make_delete_request(const DeleteCmd& cmd, const std::string& pk, co
     }
     return request;
 }
-
-/// Enumerated row (base-table keys) -> sorted item key (SDK std::map order).
-ValueMap row_key(const ItemRow& item) {
-    KeyMap sorted;
-    for (const auto& [name, value] : item.attributes) {
-        sorted.emplace(name, value);
-    }
-    return key_of(sorted);
-}
-
-}  // namespace
 
 Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
                             const std::function<std::string()>& next_prefix, bool explain,

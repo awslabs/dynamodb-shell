@@ -30,6 +30,16 @@ public:
     /// newline rules per outcome kind).
     std::string render(const ExecOutcome& outcome) const;
 
+    /// The STDERR portion of a success outcome. Only a transaction's
+    /// diagnostics (the non-reducible-SELECT message, D-2d-6) use this channel;
+    /// every other outcome returns the empty string. The CLI writes render()
+    /// to stdout and render_stderr() to stderr, so a transaction's `ABORT`
+    /// (stdout) and its diagnostics (stderr) land on the right streams while
+    /// the golden harness (which merges and -s sorts both) still matches. This
+    /// is DATA on a success outcome — it does NOT flip the exit code
+    /// (itxt-2 stays exit 0).
+    std::string render_stderr(const ExecOutcome& outcome) const;
+
     /// Error path: byte-exact user-facing error string (tenet 5).
     std::string render_error(const Error& error) const;
 };

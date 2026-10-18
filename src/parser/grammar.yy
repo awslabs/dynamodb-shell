@@ -217,6 +217,8 @@
 %type <ddbsh::engine::CommandNode> insert_command replace_command
 %type <ddbsh::engine::CommandNode> update_command upsert_command delete_command
 %type <ddbsh::engine::CommandNode> help_command
+%type <ddbsh::engine::CommandNode> transact_command exists_command
+%type <ddbsh::engine::CommandNode> transact_get_command transact_write_command
 
 %type <std::string> string region_name connect_endpoint like_clause
 %type <bool> brief_clause if_exists_clause nowait_clause
@@ -352,14 +354,18 @@ command:
     | dml_command        { $$ = std::move($1); }
     | show_command       { $$ = std::move($1); }
     | help_command       { $$ = std::move($1); }
+    | transact_command   { $$ = std::move($1); }
     ;
 
-/* EXPLAIN accepts ddl/dml commands only (as the original did); SHOW/CONNECT/
- * QUIT are not explainable. dml is the write family (INSERT/REPLACE) and the
- * read family (SELECT via get_command, W3). */
+/* EXPLAIN accepts ddl/dml commands and transactions (as the original did);
+ * SHOW/CONNECT/QUIT are not explainable. dml is the write family
+ * (INSERT/REPLACE/UPDATE/UPSERT/DELETE/EXISTS) and the read family (SELECT via
+ * get_command). A transaction EXPLAIN serializes the ONE batch request
+ * (TransactGetItems / TransactWriteItems) and runs no enumeration (D-2d-12). */
 explainable:
       ddl_command        { $$ = std::move($1); }
     | dml_command        { $$ = std::move($1); }
+    | transact_command   { $$ = std::move($1); }
     ;
 
 control_command:
@@ -390,6 +396,7 @@ write_command:
     | update_command     { $$ = std::move($1); }
     | upsert_command     { $$ = std::move($1); }
     | delete_command     { $$ = std::move($1); }
+    | exists_command     { $$ = std::move($1); }
     ;
 
 show_command:
@@ -890,6 +897,102 @@ delete_command:
             cmd.ratelimit = std::move($5);
             cmd.return_value = $6;
             $$ = std::move(cmd);
+        }
+    ;
+
+/* ---- Transactions (2d) ----------------------------------------------------
+ * A whole `BEGIN; <inner statements> (COMMIT|ROLLBACK)` reduces to ONE
+ * TransactCmd in a SINGLE parse (D-2d-1, the crux): BEGIN has no standalone
+ * production, so the persistent scanner shifts past every inner ';' and
+ * YYACCEPT fires only at the top-level `input: command [SEMICOLON]` after the
+ * terminator. Unlike the original (whose select_command/write_command carried
+ * their own trailing ';'), here each inner statement is followed by an explicit
+ * SEMICOLON inside the transact_*_command lists, and the trailing ';' after
+ * COMMIT/ROLLBACK is consumed by `input`. Homogeneity (all reads or all writes)
+ * is enforced by the grammar: a mixed body has no production and is a syntax
+ * error (preserve the original). */
+transact_command:
+      K_BEGIN SEMICOLON transact_get_command K_COMMIT
+        {
+            std::get<ddbsh::engine::TransactCmd>($3).rollback = false;
+            $$ = std::move($3);
+        }
+    | K_BEGIN SEMICOLON transact_write_command K_COMMIT
+        {
+            std::get<ddbsh::engine::TransactCmd>($3).rollback = false;
+            $$ = std::move($3);
+        }
+    | K_BEGIN SEMICOLON transact_get_command K_ROLLBACK
+        {
+            std::get<ddbsh::engine::TransactCmd>($3).rollback = true;
+            $$ = std::move($3);
+        }
+    | K_BEGIN SEMICOLON transact_write_command K_ROLLBACK
+        {
+            std::get<ddbsh::engine::TransactCmd>($3).rollback = true;
+            $$ = std::move($3);
+        }
+    | K_BEGIN SEMICOLON K_ROLLBACK
+        {
+            /* Empty transaction (itxt-1): renders nothing. No empty-COMMIT
+             * production exists — `begin; commit;` stays a syntax error
+             * (D-2d-7). `access` is irrelevant for an empty no-op. */
+            ddbsh::engine::TransactCmd cmd;
+            cmd.access = ddbsh::engine::TransactCmd::Access::read;
+            cmd.rollback = true;
+            $$ = std::move(cmd);
+        }
+    ;
+
+transact_get_command:
+      get_command SEMICOLON
+        {
+            ddbsh::engine::TransactCmd cmd;
+            cmd.access = ddbsh::engine::TransactCmd::Access::read;
+            cmd.items.push_back(std::move($1));
+            $$ = std::move(cmd);
+        }
+    | transact_get_command get_command SEMICOLON
+        {
+            std::get<ddbsh::engine::TransactCmd>($1).items.push_back(std::move($2));
+            $$ = std::move($1);
+        }
+    ;
+
+transact_write_command:
+      write_command SEMICOLON
+        {
+            ddbsh::engine::TransactCmd cmd;
+            cmd.access = ddbsh::engine::TransactCmd::Access::write;
+            cmd.items.push_back(std::move($1));
+            $$ = std::move(cmd);
+        }
+    | transact_write_command write_command SEMICOLON
+        {
+            std::get<ddbsh::engine::TransactCmd>($1).items.push_back(std::move($2));
+            $$ = std::move($1);
+        }
+    ;
+
+/* EXISTS / NOT EXISTS <select> — a ConditionCheck inside a write transaction
+ * (arch §7). The flag is set on the SelectCmd; standalone it is ignored and the
+ * SELECT runs normally (D-2d-3). Guarded with get_if so the SELECT's own
+ * semantic-error path (which yields EmptyCmd) never triggers bad_variant_access
+ * (the engine never throws — D12). */
+exists_command:
+      K_EXISTS select_command
+        {
+            if (auto* s = std::get_if<ddbsh::engine::SelectCmd>(&$2)) {
+                s->exists_mode = ddbsh::engine::ExistsMode::exists;
+            }
+            $$ = std::move($2);
+        }
+    | K_NOT K_EXISTS select_command
+        {
+            if (auto* s = std::get_if<ddbsh::engine::SelectCmd>(&$3)) {
+                s->exists_mode = ddbsh::engine::ExistsMode::not_exists;
+            }
+            $$ = std::move($3);
         }
     ;
 

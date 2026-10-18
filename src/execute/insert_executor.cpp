@@ -12,11 +12,9 @@
 
 namespace ddbsh::engine {
 
-namespace {
-
 /// Validate that every row supplies exactly one value per named column
 /// (CInsertCommand::valid). Returns a descriptive Error on the first mismatch.
-Result<void> validate_rows(const InsertCmd& cmd) {
+Result<void> validate_insert_rows(const InsertCmd& cmd) {
     for (std::size_t row = 0; row < cmd.rows.size(); ++row) {
         if (cmd.rows[row].size() != cmd.columns.size()) {
             return fail(Errc::invalid_argument,
@@ -51,8 +49,6 @@ PutItemIn make_put_request(const InsertCmd& cmd, std::size_t row, const std::str
     return request;
 }
 
-}  // namespace
-
 Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
                                       const std::function<std::string()>& next_prefix,
                                       OutcomeSink& sink) {
@@ -62,7 +58,7 @@ Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
     }
     const std::string& pk = schema->pk;
 
-    if (auto valid = validate_rows(cmd); !valid.has_value()) {
+    if (auto valid = validate_insert_rows(cmd); !valid.has_value()) {
         return fail(valid.error());
     }
 
@@ -95,7 +91,7 @@ Result<ExecOutcome> execute_insert_explain(const InsertCmd& cmd, IDDBClient& cli
     }
     const std::string& pk = schema->pk;
 
-    if (auto valid = validate_rows(cmd); !valid.has_value()) {
+    if (auto valid = validate_insert_rows(cmd); !valid.has_value()) {
         return fail(valid.error());
     }
 

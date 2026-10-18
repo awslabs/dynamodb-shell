@@ -35,11 +35,18 @@ std::string serialize_set_element(const UpdateSetElement& elem, SymbolTable& st)
     return rv;
 }
 
-/// Build the UpdateItem request template (port of
-/// CUpdateCommand::make_update_request). The caller sets `.key` per item. `st`
-/// is the write SymbolTable (minted from the first prefix). `pk`/`rk` are the
-/// BASE-table key names (the condition and the residual predicate are always
-/// evaluated against the base table, as the original does).
+/// Convert an enumerated row (base-table keys) to a sorted item key, matching
+/// the SDK's std::map Key serialization order (byte-fidelity).
+ValueMap row_key(const ItemRow& item) {
+    KeyMap sorted;
+    for (const auto& [name, value] : item.attributes) {
+        sorted.emplace(name, value);
+    }
+    return key_of(sorted);
+}
+
+}  // namespace
+
 UpdateItemIn make_update_request(const UpdateCmd& cmd, const std::string& pk, const std::string& rk,
                                  SymbolTable& st) {
     UpdateItemIn request;
@@ -87,18 +94,6 @@ UpdateItemIn make_update_request(const UpdateCmd& cmd, const std::string& pk, co
     }
     return request;
 }
-
-/// Convert an enumerated row (base-table keys) to a sorted item key, matching
-/// the SDK's std::map Key serialization order (byte-fidelity).
-ValueMap row_key(const ItemRow& item) {
-    KeyMap sorted;
-    for (const auto& [name, value] : item.attributes) {
-        sorted.emplace(name, value);
-    }
-    return key_of(sorted);
-}
-
-}  // namespace
 
 Result<void> execute_update(const UpdateCmd& cmd, IDDBClient& client,
                             const std::function<std::string()>& next_prefix, bool explain,

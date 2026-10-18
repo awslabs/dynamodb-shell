@@ -42,3 +42,6 @@ build*
 # CTest scratch output
 /Testing/
 /ddbsh/tests/Testing/
+
+# examples build output (examples/Makefile compiles embed_demo in-tree)
+/examples/embed_demo
