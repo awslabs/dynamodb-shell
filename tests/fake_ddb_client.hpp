@@ -201,6 +201,49 @@ public:
         return DeleteItemOut{};
     }
 
+    Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn& in) override {
+        transact_get_requests_.push_back(in);
+        if (transact_get_error_.has_value()) {
+            return fail(*transact_get_error_);
+        }
+        TransactGetItemsOut out;
+        out.responses = transact_get_responses_;
+        return out;
+    }
+
+    Result<TransactWriteItemsOut> transact_write_items(const TransactWriteItemsIn& in) override {
+        transact_write_requests_.push_back(in);
+        if (transact_write_error_.has_value()) {
+            return fail(*transact_write_error_);
+        }
+        return TransactWriteItemsOut{};
+    }
+
+    /// Canned responses for the next transact_get_items (one per Get).
+    void set_transact_get_responses(std::vector<std::optional<ItemRow>> responses) {
+        transact_get_responses_ = std::move(responses);
+    }
+
+    /// Make transact_get_items fail with this Error. nullopt => succeed.
+    void set_transact_get_error(std::optional<Error> error) {
+        transact_get_error_ = std::move(error);
+    }
+
+    /// Make transact_write_items fail with this Error (e.g. a cancellation).
+    void set_transact_write_error(std::optional<Error> error) {
+        transact_write_error_ = std::move(error);
+    }
+
+    /// The TransactGetItems requests issued, in order (for shape assertions).
+    const std::vector<TransactGetItemsIn>& transact_get_requests() const {
+        return transact_get_requests_;
+    }
+
+    /// The TransactWriteItems requests issued, in order (for shape assertions).
+    const std::vector<TransactWriteItemsIn>& transact_write_requests() const {
+        return transact_write_requests_;
+    }
+
     Result<CreateTableOut> create_table(const CreateTableIn& in) override {
         create_requests_.push_back(in);
         if (create_error_.has_value()) {
@@ -353,6 +396,11 @@ private:
     std::optional<Error> update_error_;
     std::vector<DeleteItemIn> delete_item_requests_;
     std::optional<Error> delete_item_error_;
+    std::vector<TransactGetItemsIn> transact_get_requests_;
+    std::vector<std::optional<ItemRow>> transact_get_responses_;
+    std::optional<Error> transact_get_error_;
+    std::vector<TransactWriteItemsIn> transact_write_requests_;
+    std::optional<Error> transact_write_error_;
     std::optional<Error> delete_error_;
     std::vector<std::string> deleted_tables_;
     std::vector<std::string> waited_gone_;

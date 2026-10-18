@@ -21,6 +21,7 @@
 #include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
 #include "execute/show_tables_executor.hpp"
+#include "execute/transact_executor.hpp"
 #include "execute/update_executor.hpp"
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
@@ -201,6 +202,12 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
             const auto& del = std::get<engine::DeleteCmd>(statement.ast()->command);
             return engine::execute_delete(
                 del, impl_->client, [this] { return impl_->next_alias_prefix(); },
+                statement.ast()->explain, sink);
+        }
+        case StatementKind::transaction: {
+            const auto& txn = std::get<engine::TransactCmd>(statement.ast()->command);
+            return engine::execute_transact(
+                txn, impl_->client, [this] { return impl_->next_alias_prefix(); },
                 statement.ast()->explain, sink);
         }
         case StatementKind::create_table: {

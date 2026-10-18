@@ -48,6 +48,7 @@ enum class StatementKind {
     update_statement,  ///< UPDATE / UPSERT <table>[.<index>] SET|REMOVE ... [WHERE ...]
     del,               ///< DELETE FROM <table>[.<index>] [WHERE ...]
     help,              ///< HELP [topic ...] — print usage (no API call)
+    transaction,       ///< BEGIN; ... (COMMIT|ROLLBACK); — TransactGet/WriteItems
 };
 
 /// A self-contained parsed statement. Move-only: it owns the parsed AST via a

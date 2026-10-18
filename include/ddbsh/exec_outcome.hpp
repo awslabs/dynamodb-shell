@@ -119,12 +119,31 @@ struct BulkWriteOutcome {
 
 struct MultiOutcome;  // defined below (recursive variant member)
 
+/// A transaction that did NOT return items: a terminal status (`ABORT`) plus
+/// optional stderr diagnostics (D-2d-5/-6). Read-transaction SUCCESS renders
+/// items via SelectOutcome and write-transaction SUCCESS renders `COMMIT` via
+/// StatusOutcome — so this arm carries only the ABORT cases:
+///   * pre-flight abort (ROLLBACK terminator, a non-reducible inner SELECT, or
+///     an inner write lacking a full key): emitted as success data, exit 0; and
+///   * service cancellation: emitted via the sink THEN the executor returns the
+///     composed "Transaction failed. ..." Error (exit nonzero) — the ABORT
+///     token on stdout precedes the CLI's stderr error render.
+/// `diagnostics` are byte-exact messages the CLI writes to STDERR (the
+/// non-reducible-SELECT message, D-2d-6); the `token` (`ABORT`) goes to STDOUT.
+/// The golden harness captures both streams merged and -s sorts them, so
+/// itxt-2's two lines match while a real terminal still separates them.
+struct TransactOutcome {
+    std::string token = "ABORT";           ///< currently always ABORT
+    std::vector<std::string> diagnostics;  ///< stderr lines (may be empty)
+};
+
 /// Discriminated union over the observable shapes a command produces. Extended
 /// per sub-phase. `MultiOutcome` carries several fragments emitted by ONE
 /// statement (multi-row INSERT; future batched forms) in production order; it
 /// is the buffering form of the streaming OutcomeSink (D-2c-12).
-using ExecOutcome = std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome,
-                                 WriteOutcome, ExplainOutcome, BulkWriteOutcome, MultiOutcome>;
+using ExecOutcome =
+    std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome, WriteOutcome,
+                 ExplainOutcome, BulkWriteOutcome, TransactOutcome, MultiOutcome>;
 
 /// Carries >1 fragment produced by one statement, in production order (e.g. a
 /// multi-row INSERT emits one WriteOutcome per row). The buffering

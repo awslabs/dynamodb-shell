@@ -35,6 +35,8 @@
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
 #include <aws/dynamodb/model/ScanRequest.h>
+#include <aws/dynamodb/model/TransactGetItemsRequest.h>
+#include <aws/dynamodb/model/TransactWriteItemsRequest.h>
 #include <aws/dynamodb/model/UpdateItemRequest.h>
 
 namespace ddbsh::cli {
@@ -418,6 +420,112 @@ Aws::DynamoDB::Model::DeleteItemRequest build_delete_item(const DeleteItemIn& in
     return request;
 }
 
+// ---- Transaction request builders (shared by the execute ops + explain) ----
+// One Get / Put / Update / Delete / ConditionCheck per inner sub-item; no
+// ReturnValues are set on write sub-items (the original never set them in a
+// transaction, D-2d-10).
+
+Aws::DynamoDB::Model::TransactGetItemsRequest build_transact_get_items(
+    const TransactGetItemsIn& in) {
+    Aws::DynamoDB::Model::TransactGetItemsRequest request;
+    Aws::Vector<Aws::DynamoDB::Model::TransactGetItem> items;
+    items.reserve(in.items.size());
+    for (const auto& g : in.items) {
+        Aws::DynamoDB::Model::Get get;
+        get.SetTableName(g.table_name);
+        get.SetKey(to_sdk_item(g.key));
+        if (g.projection_expression.has_value()) {
+            get.SetProjectionExpression(Aws::String(g.projection_expression->c_str()));
+        }
+        if (!g.expression_attribute_names.empty()) {
+            get.SetExpressionAttributeNames(to_sdk_names(g.expression_attribute_names));
+        }
+        Aws::DynamoDB::Model::TransactGetItem item;
+        item.SetGet(get);
+        items.push_back(item);
+    }
+    request.SetTransactItems(items);
+    return request;
+}
+
+Aws::DynamoDB::Model::TransactWriteItemsRequest build_transact_write_items(
+    const TransactWriteItemsIn& in) {
+    Aws::DynamoDB::Model::TransactWriteItemsRequest request;
+    Aws::Vector<Aws::DynamoDB::Model::TransactWriteItem> items;
+    items.reserve(in.items.size());
+    for (const auto& sub : in.items) {
+        Aws::DynamoDB::Model::TransactWriteItem item;
+        std::visit(
+            [&](const auto& w) {
+                using T = std::decay_t<decltype(w)>;
+                if constexpr (std::is_same_v<T, TransactPut>) {
+                    Aws::DynamoDB::Model::Put put;
+                    put.SetTableName(w.table_name);
+                    put.SetItem(to_sdk_item(w.item));
+                    if (w.condition_expression.has_value()) {
+                        put.SetConditionExpression(Aws::String(w.condition_expression->c_str()));
+                    }
+                    if (!w.expression_attribute_names.empty()) {
+                        put.SetExpressionAttributeNames(to_sdk_names(w.expression_attribute_names));
+                    }
+                    if (!w.expression_attribute_values.empty()) {
+                        put.SetExpressionAttributeValues(
+                            to_sdk_item(w.expression_attribute_values));
+                    }
+                    item.SetPut(put);
+                } else if constexpr (std::is_same_v<T, TransactUpdate>) {
+                    Aws::DynamoDB::Model::Update update;
+                    update.SetTableName(w.table_name);
+                    update.SetKey(to_sdk_item(w.key));
+                    update.SetUpdateExpression(Aws::String(w.update_expression.c_str()));
+                    if (w.condition_expression.has_value()) {
+                        update.SetConditionExpression(Aws::String(w.condition_expression->c_str()));
+                    }
+                    if (!w.expression_attribute_names.empty()) {
+                        update.SetExpressionAttributeNames(
+                            to_sdk_names(w.expression_attribute_names));
+                    }
+                    if (!w.expression_attribute_values.empty()) {
+                        update.SetExpressionAttributeValues(
+                            to_sdk_item(w.expression_attribute_values));
+                    }
+                    item.SetUpdate(update);
+                } else if constexpr (std::is_same_v<T, TransactDelete>) {
+                    Aws::DynamoDB::Model::Delete del;
+                    del.SetTableName(w.table_name);
+                    del.SetKey(to_sdk_item(w.key));
+                    if (w.condition_expression.has_value()) {
+                        del.SetConditionExpression(Aws::String(w.condition_expression->c_str()));
+                    }
+                    if (!w.expression_attribute_names.empty()) {
+                        del.SetExpressionAttributeNames(to_sdk_names(w.expression_attribute_names));
+                    }
+                    if (!w.expression_attribute_values.empty()) {
+                        del.SetExpressionAttributeValues(
+                            to_sdk_item(w.expression_attribute_values));
+                    }
+                    item.SetDelete(del);
+                } else if constexpr (std::is_same_v<T, TransactConditionCheck>) {
+                    Aws::DynamoDB::Model::ConditionCheck cc;
+                    cc.SetTableName(w.table_name);
+                    cc.SetKey(to_sdk_item(w.key));
+                    cc.SetConditionExpression(Aws::String(w.condition_expression.c_str()));
+                    if (!w.expression_attribute_names.empty()) {
+                        cc.SetExpressionAttributeNames(to_sdk_names(w.expression_attribute_names));
+                    }
+                    if (!w.expression_attribute_values.empty()) {
+                        cc.SetExpressionAttributeValues(to_sdk_item(w.expression_attribute_values));
+                    }
+                    item.SetConditionCheck(cc);
+                }
+            },
+            sub);
+        items.push_back(item);
+    }
+    request.SetTransactItems(items);
+    return request;
+}
+
 }  // namespace
 
 AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint) {
@@ -532,6 +640,49 @@ Result<DeleteItemOut> AwsDDBClient::delete_item(const DeleteItemIn& in) {
     }
     out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
     return out;
+}
+
+namespace {
+
+// Compose the byte-exact transaction-failure message the original logged
+// (transact-read.hpp / transact-write.hpp): "Transaction failed. <name>.
+// <reqid>. <message>" (D-2d-9). itxt-11 asserts this via a regex. The Error is
+// Errc::service_error so the CLI exits nonzero (WILL_FAIL).
+Error transact_failed_error(const Aws::Client::AWSError<Aws::DynamoDB::DynamoDBErrors>& err) {
+    std::string name(err.GetExceptionName().c_str());
+    std::string reqid(err.GetRequestId().c_str());
+    std::string message(err.GetMessage().c_str());
+    std::string composed = "Transaction failed. " + name + ". " + reqid + ". " + message;
+    return Error{Errc::service_error, std::move(composed), std::move(name), std::move(reqid)};
+}
+
+}  // namespace
+
+Result<TransactGetItemsOut> AwsDDBClient::transact_get_items(const TransactGetItemsIn& in) {
+    auto request = build_transact_get_items(in);
+    auto outcome = client_->TransactGetItems(request);
+    if (!outcome.IsSuccess()) {
+        return fail(transact_failed_error(outcome.GetError()));
+    }
+    TransactGetItemsOut out;
+    for (const auto& response : outcome.GetResult().GetResponses()) {
+        const auto& item = response.GetItem();
+        if (item.empty()) {
+            out.responses.push_back(std::nullopt);
+        } else {
+            out.responses.push_back(ItemRow{from_sdk_item(item)});
+        }
+    }
+    return out;
+}
+
+Result<TransactWriteItemsOut> AwsDDBClient::transact_write_items(const TransactWriteItemsIn& in) {
+    auto request = build_transact_write_items(in);
+    auto outcome = client_->TransactWriteItems(request);
+    if (!outcome.IsSuccess()) {
+        return fail(transact_failed_error(outcome.GetError()));
+    }
+    return TransactWriteItemsOut{};
 }
 
 namespace {
@@ -1163,6 +1314,10 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                 Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingRequest r;
                 r.SetTableName(in.table_name);
                 return payload(r);
+            } else if constexpr (std::is_same_v<T, TransactGetItemsIn>) {
+                return payload(build_transact_get_items(in));
+            } else if constexpr (std::is_same_v<T, TransactWriteItemsIn>) {
+                return payload(build_transact_write_items(in));
             } else {
                 static_assert(sizeof(T) == 0, "unhandled ExplainRequest alternative");
             }

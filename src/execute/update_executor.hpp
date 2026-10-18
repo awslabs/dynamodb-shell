@@ -40,9 +40,21 @@
 #include "ddbsh/iddbclient.hpp"
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
+#include "expressions/symbol_table.hpp"
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
+
+/// Build the UpdateItem request TEMPLATE (port of
+/// CUpdateCommand::make_update_request): the UpdateExpression ("SET ..." |
+/// "REMOVE ..."), the ConditionExpression (attribute_exists(pk) unless UPSERT,
+/// AND the residual WHERE predicate), and the aliased ExpressionAttribute maps.
+/// The caller sets `.key` per item. `st` is the write SymbolTable (minted from
+/// the first prefix); `pk`/`rk` are the BASE-table key names. Shared with the
+/// transaction Update builder (2d) — the original's txwrite() builds the same
+/// way via this function.
+UpdateItemIn make_update_request(const UpdateCmd& cmd, const std::string& pk, const std::string& rk,
+                                 SymbolTable& st);
 
 /// Execute an UPDATE / UPSERT (both the direct and the bulk-enumeration paths),
 /// emitting its outcome to `sink`. `next_prefix` mints per-statement alias

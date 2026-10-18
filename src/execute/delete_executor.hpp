@@ -36,9 +36,19 @@
 #include "ddbsh/iddbclient.hpp"
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
+#include "expressions/symbol_table.hpp"
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
+
+/// Build the DeleteItem request TEMPLATE (port of
+/// CDeleteCommand::make_delete_request): the ConditionExpression (the residual
+/// WHERE predicate, if any) and the aliased ExpressionAttribute maps. The
+/// caller sets `.key` per item. `st` is the write SymbolTable (first prefix);
+/// `pk`/`rk` are the base-table key names. Shared with the transaction Delete
+/// builder (2d) — the original's txwrite() builds the same way via this.
+DeleteItemIn make_delete_request(const DeleteCmd& cmd, const std::string& pk, const std::string& rk,
+                                 SymbolTable& st);
 
 /// Execute a DELETE (direct or bulk-enumeration), emitting its outcome to
 /// `sink`. `next_prefix` mints per-statement alias prefixes (write template

@@ -218,6 +218,17 @@ struct InsertCmd {
 
 // ---- SELECT (W3 part 2) ----------------------------------------------------
 
+/// EXISTS / NOT EXISTS prefix on a SELECT (arch §7, the original's
+/// exists_command). Meaningful ONLY inside a write transaction, where an
+/// EXISTS/NOT-EXISTS SELECT becomes a TransactWriteItems ConditionCheck
+/// (attribute_exists / attribute_not_exists on the item's key or projected
+/// attributes). Standalone (outside a transaction), the original runs the
+/// SELECT normally and ignores this flag (select.cpp CSelectCommand::run never
+/// consults m_exists; only txwrite() does) — the reimplementation reproduces
+/// that: a SelectCmd with exists_mode != none executed as StatementKind::
+/// select_statement runs as an ordinary SELECT (D-2d-3).
+enum class ExistsMode { none, exists, not_exists };
+
 /// A SELECT target: a base table, optionally qualified by `.index` (arch §7,
 /// §8). The original carried this as a 1-or-2 element Aws::Vector<Aws::String>;
 /// a named struct makes the index-vs-no-index distinction explicit.
@@ -245,6 +256,7 @@ struct SelectCmd {
     std::unique_ptr<Where> where;  ///< null => no WHERE clause
     ReturnConsumedCapacity rcc = ReturnConsumedCapacity::none;
     std::optional<RateLimit> ratelimit;
+    ExistsMode exists_mode = ExistsMode::none;  ///< set by EXISTS/NOT EXISTS (write txn only)
 };
 
 // ---- UPDATE / UPSERT / DELETE (W5 / 2c) ------------------------------------
@@ -306,10 +318,33 @@ struct DeleteCmd {
     ReturnValue return_value = ReturnValue::none;
 };
 
+struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
+
 /// The parsed command. Grows one alternative per ported command family.
-using CommandNode =
-    std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
-                 DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd>;
+using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
+                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd,
+                                 UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+
+/// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
+/// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
+/// write-sequence are distinct non-terminals; a mixed body is a syntax error —
+/// there is no mixed production). `rollback` records the terminator (ROLLBACK =
+/// true, COMMIT = false). `items` are the inner command nodes in parse order:
+/// SelectCmd for a read transaction; InsertCmd / UpdateCmd / DeleteCmd /
+/// SelectCmd(exists_mode != none) for a write transaction. Empty `items` with
+/// `rollback == true` is the no-op `begin; rollback;` (renders nothing, itxt-1).
+///
+/// Recursion: `items` is a std::vector<CommandNode> where CommandNode is the
+/// variant that also lists TransactCmd — the same incomplete-type-in-std::vector
+/// allowance MultiOutcome relies on (D-2c assumption, gcc14/libstdc++ C++23).
+/// Move-only in practice because inner SelectCmd/UpdateCmd/DeleteCmd own a
+/// unique_ptr<Where>.
+struct TransactCmd {
+    enum class Access { read, write };
+    Access access = Access::read;
+    bool rollback = false;           ///< ROLLBACK terminator (vs COMMIT)
+    std::vector<CommandNode> items;  ///< inner commands, in parse order
+};
 
 /// Map a CommandNode to its public StatementKind. The variant alternative is
 /// the single source of truth; this keeps the public enum in lockstep.
@@ -343,6 +378,8 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::del;
             } else if constexpr (std::is_same_v<T, HelpCmd>) {
                 return StatementKind::help;
+            } else if constexpr (std::is_same_v<T, TransactCmd>) {
+                return StatementKind::transaction;
             } else {
                 static_assert(sizeof(T) == 0, "unhandled CommandNode alternative");
             }

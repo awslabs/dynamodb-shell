@@ -143,7 +143,7 @@ export AWS_REGION="$REGION"
 # as fidelity, matching the iut-ifne-* goldens). The step-2 exit gate empties
 # this (every family on the new engine, oracle wiring removed); it grows
 # family-by-family in 2c+ until then.
-ROUTED_RE="${DDBSH_ROUTED_RE:-^(ist-|isel-|iins-|iut-|ddbsh-delete-)}"
+ROUTED_RE="${DDBSH_ROUTED_RE:-^(ist-|isel-|iins-|iut-|ddbsh-delete-|itxt-)}"
 ENGINE_SRC="$REPO_DIR"
 ENGINE_BUILD="${DDBSH_ENGINE_BUILD_DIR:-$REPO_DIR/build-engine}"
 GOLDEN_SRC="$REPO_DIR/tests/golden"
@@ -292,6 +292,40 @@ counts() {
 read -r e_pass e_out < <(counts "$ENGINE_LOG")
 read -r o_pass o_out < <(counts "$ORACLE_LOG")
 
+# --- Native unit tests (AI-2d-B): offline GoogleTest suite ------------------
+# The native suite (GoogleTest, FakeDDBClient) is the deterministic, backend-
+# free fidelity signal (EXPLAIN alias numbering, request-shape assertions,
+# reentrancy). Before 2d it produced NO tracked artifact, which let the
+# f232b74 version-rot slip past artifact-based review (2c principal process
+# gap). It now builds + runs on every gate invocation and writes a HEAD-matched
+# artifact alongside the golden one, and a native failure propagates to the
+# gate exit code. It is offline (no AWS), so it runs regardless of the backend
+# target. Set DDBSH_SKIP_NATIVE=1 to skip (e.g. a golden-only -R filter run).
+NATIVE_PASS=0
+NATIVE_OUT=0
+RC_NATIVE=0
+if [ "${DDBSH_SKIP_NATIVE:-0}" -eq 0 ]; then
+    NATIVE_BUILD="${DDBSH_NATIVE_BUILD_DIR:-$REPO_DIR/build-unit}"
+    NATIVE_LOG="$DISCUSSIONS_DIR/test-native-${HASH}.log"
+    echo "=== Configuring + building native unit tests ($HASH) ===" | tee -a "$SUMMARY_FILE"
+    if [ ! -f "$NATIVE_BUILD/CMakeCache.txt" ]; then
+        cmake -S "$ENGINE_SRC" -B "$NATIVE_BUILD" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX" \
+            -DCMAKE_C_COMPILER="$DDBSH_CC" \
+            -DCMAKE_CXX_COMPILER="$DDBSH_CXX"
+    fi
+    cmake --build "$NATIVE_BUILD" --target ddbsh-tests
+    echo "=== Running native unit tests ($HASH) ===" | tee -a "$SUMMARY_FILE"
+    set +e
+    ctest --test-dir "$NATIVE_BUILD" --output-on-failure 2>&1 | tee "$NATIVE_LOG"
+    RC_NATIVE=${PIPESTATUS[0]}
+    set -e
+    read -r NATIVE_PASS NATIVE_OUT < <(counts "$NATIVE_LOG")
+    echo "=== Native unit tests: ${NATIVE_PASS}/${NATIVE_OUT} passed ===" | tee -a "$SUMMARY_FILE"
+    echo "  $NATIVE_LOG"
+fi
+
 # Combine the two logs into the canonical artifact.
 {
     echo "=== NEW-ENGINE (routed: $ROUTED_RE) ==="
@@ -312,6 +346,10 @@ RC=0
 benign() { [ "$1" -eq 0 ]; }
 benign "$RC_ENGINE" || RC=$RC_ENGINE
 benign "$RC_ORACLE" || RC=$RC_ORACLE
+# A native unit-test failure is a gate failure (AI-2d-B): the native suite is
+# the deterministic fidelity signal, so a regression there must not pass the
+# gate even if the golden families are green.
+benign "$RC_NATIVE" || RC=$RC_NATIVE
 # Full-engine exposure is a MEASUREMENT, not a gate: failures from
 # not-yet-implemented command families are expected, so the mode always exits 0
 # explicitly (the parity figure is read from the printed counts / artifact, not
@@ -323,10 +361,11 @@ benign "$RC_ORACLE" || RC=$RC_ORACLE
     echo "=== ctest summary ==="
     echo "  new engine (routed):  ${e_pass}/${e_out} passed"
     echo "  oracle (non-routed):  ${o_pass}/${o_out} passed"
+    echo "  native unit tests:    ${NATIVE_PASS}/${NATIVE_OUT} passed"
     echo "  combined:             $((e_pass + o_pass))/$((e_out + o_out)) passed"
     grep -E "Total Test time|Errors while running CTest" "$LOG_FILE" || true
     echo ""
-    echo "ctest exit codes: engine=$RC_ENGINE oracle=$RC_ORACLE (combined=$RC)"
+    echo "ctest exit codes: engine=$RC_ENGINE oracle=$RC_ORACLE native=$RC_NATIVE (combined=$RC)"
 } | tee -a "$SUMMARY_FILE"
 
 echo "=== Artifacts ==="

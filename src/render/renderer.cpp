@@ -230,6 +230,14 @@ std::string render_explain(const ExplainOutcome& e) {
     return out;
 }
 
+/// A transaction that did not return items renders its status token (`ABORT`)
+/// to STDOUT; its diagnostics go to STDERR via render_stderr (D-2d-6), not
+/// here. (Read-transaction success uses SelectOutcome; write success uses
+/// StatusOutcome{"COMMIT"}.)
+std::string render_transact(const TransactOutcome& t) {
+    return t.token + "\n";
+}
+
 /// Dispatch one ExecOutcome to its formatter. A free function (not the member)
 /// so MultiOutcome can recurse into it for each of its parts.
 std::string render_outcome(const ExecOutcome& outcome) {
@@ -250,6 +258,8 @@ std::string render_outcome(const ExecOutcome& outcome) {
                 return render_explain(payload);
             } else if constexpr (std::is_same_v<T, BulkWriteOutcome>) {
                 return render_bulk_write(payload);
+            } else if constexpr (std::is_same_v<T, TransactOutcome>) {
+                return render_transact(payload);
             } else if constexpr (std::is_same_v<T, MultiOutcome>) {
                 std::string out;
                 for (const auto& part : payload.parts) {
@@ -263,10 +273,43 @@ std::string render_outcome(const ExecOutcome& outcome) {
         outcome);
 }
 
+/// The STDERR portion of an outcome. Only a TransactOutcome carries stderr
+/// data (its diagnostics, D-2d-6); every other arm returns the empty string.
+/// MultiOutcome recurses so a buffered multi-fragment statement still routes
+/// each fragment's diagnostics. Keeping this in the Renderer (not the CLI)
+/// keeps all formatting in one place and the CLI thin (tenet 3).
+std::string render_outcome_stderr(const ExecOutcome& outcome) {
+    return std::visit(
+        [](const auto& payload) -> std::string {
+            using T = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<T, TransactOutcome>) {
+                std::string out;
+                for (const auto& line : payload.diagnostics) {
+                    out += line;
+                    out += '\n';
+                }
+                return out;
+            } else if constexpr (std::is_same_v<T, MultiOutcome>) {
+                std::string out;
+                for (const auto& part : payload.parts) {
+                    out += render_outcome_stderr(part);
+                }
+                return out;
+            } else {
+                return {};
+            }
+        },
+        outcome);
+}
+
 }  // namespace
 
 std::string Renderer::render(const ExecOutcome& outcome) const {
     return render_outcome(outcome);
+}
+
+std::string Renderer::render_stderr(const ExecOutcome& outcome) const {
+    return render_outcome_stderr(outcome);
 }
 
 std::string Renderer::render_error(const Error& error) const {
