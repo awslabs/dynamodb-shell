@@ -121,10 +121,51 @@ public:
         return ddbsh::TimeToLiveOut{"DISABLED", ""};
     }
 
-    // --- Ops this offline demo does not exercise -----------------------------
-    ddbsh::Result<ddbsh::PutItemOut> put_item(const ddbsh::PutItemIn&) override {
-        return not_impl<ddbsh::PutItemOut>("put_item");
+    // --- Mutating ops (2c): a trivially simple vector-backed implementation --
+    // These let the demo exercise a WRITE end to end (INSERT / UPDATE / DELETE),
+    // proving goal 3 for a mutating command offline. A real embedder translates
+    // these to Aws::DynamoDB::Model::{PutItem,UpdateItem,DeleteItem} (see
+    // cli/aws_ddb_client.cpp); here the fake keeps an in-memory table.
+    ddbsh::Result<ddbsh::PutItemOut> put_item(const ddbsh::PutItemIn& in) override {
+        // Derive the key from the item by the table's schema; INSERT carries a
+        // `attribute_not_exists(...)` condition that must fail on an existing
+        // key (the ccf path), REPLACE (no condition) is unconditional.
+        ddbsh::ValueMap key = key_of_item(in.item);
+        const std::optional<std::size_t> existing = find_by_key(key);
+        if (in.condition_expression.has_value() && existing.has_value()) {
+            return conditional_failed<ddbsh::PutItemOut>();
+        }
+        if (existing.has_value()) {
+            items_[*existing] = ddbsh::ItemRow{in.item};
+        } else {
+            items_.push_back(ddbsh::ItemRow{in.item});
+        }
+        return ddbsh::PutItemOut{};
     }
+
+    ddbsh::Result<ddbsh::UpdateItemOut> update_item(const ddbsh::UpdateItemIn& in) override {
+        const std::optional<std::size_t> existing = find_by_key(in.key);
+        // UPDATE carries attribute_exists(pk); a missing row fails the
+        // condition (ccf). A matched row is "modified" (the demo does not parse
+        // the UpdateExpression — that is the service's job).
+        if (in.condition_expression.has_value() && !existing.has_value()) {
+            return conditional_failed<ddbsh::UpdateItemOut>();
+        }
+        return ddbsh::UpdateItemOut{};
+    }
+
+    ddbsh::Result<ddbsh::DeleteItemOut> delete_item(const ddbsh::DeleteItemIn& in) override {
+        const std::optional<std::size_t> existing = find_by_key(in.key);
+        if (in.condition_expression.has_value() && !existing.has_value()) {
+            return conditional_failed<ddbsh::DeleteItemOut>();
+        }
+        if (existing.has_value()) {
+            items_.erase(items_.begin() + static_cast<std::ptrdiff_t>(*existing));
+        }
+        return ddbsh::DeleteItemOut{};
+    }
+
+    // --- Ops this offline demo does not exercise -----------------------------
     ddbsh::Result<ddbsh::CreateTableOut> create_table(const ddbsh::CreateTableIn&) override {
         return not_impl<ddbsh::CreateTableOut>("create_table");
     }
@@ -150,6 +191,41 @@ private:
     static ddbsh::Result<T> not_impl(std::string_view op) {
         return ddbsh::fail(ddbsh::Errc::not_implemented,
                            "offline demo client does not implement " + std::string(op));
+    }
+
+    // The service's own ConditionalCheckFailed message (arch §9); tagged with
+    // Errc::conditional_check_failed so the UPDATE/DELETE executors count it as
+    // a ccf rather than aborting (D-2c-7).
+    template <class T>
+    static ddbsh::Result<T> conditional_failed() {
+        return ddbsh::fail(ddbsh::Errc::conditional_check_failed, "The conditional request failed");
+    }
+
+    // Extract the table's key attributes (year, title) from a full item.
+    ddbsh::ValueMap key_of_item(const ddbsh::ValueMap& item) const {
+        ddbsh::ValueMap key;
+        for (const auto& want : {schema_.key_schema.hash_key, schema_.key_schema.range_key}) {
+            if (want.empty()) {
+                continue;
+            }
+            for (const auto& [name, val] : item) {
+                if (name == want) {
+                    key.emplace_back(name, val);
+                    break;
+                }
+            }
+        }
+        return key;
+    }
+
+    // Index of the row matching every attribute of `key`, if any.
+    std::optional<std::size_t> find_by_key(const ddbsh::ValueMap& key) const {
+        for (std::size_t i = 0; i < items_.size(); ++i) {
+            if (key_matches(items_[i], key)) {
+                return i;
+            }
+        }
+        return std::nullopt;
     }
 
     static ddbsh::ItemRow make_movie(std::string year, std::string title, std::string rating) {
@@ -286,6 +362,25 @@ int main() {
 
     // A projection: only selected attributes come back.
     demo(session, renderer, "SELECT title, rating FROM Movies;");
+    std::puts("");
+
+    // --- Mutating commands (2c): INSERT / UPDATE / DELETE, offline ----------
+    // INSERT a new movie (conditional attribute_not_exists on the key).
+    demo(session, renderer,
+         "INSERT INTO Movies ( year, title, rating ) VALUES ( 2019, \"Parasite\", 8.6 );");
+    std::puts("");
+
+    // UPDATE by full key -> one conditional UpdateItem (0 read, 1 modified).
+    demo(session, renderer,
+         "UPDATE Movies SET rating = 9.0 WHERE year = 2014 AND title = \"Interstellar\";");
+    std::puts("");
+
+    // DELETE by full key -> one conditional DeleteItem (0 read, 1 modified).
+    demo(session, renderer, "DELETE FROM Movies WHERE year = 2010 AND title = \"Inception\";");
+    std::puts("");
+
+    // The table now reflects the writes (Parasite added, Inception gone).
+    demo(session, renderer, "SELECT title FROM Movies;");
 
     return 0;
 }

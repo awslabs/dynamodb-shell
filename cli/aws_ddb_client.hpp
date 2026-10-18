@@ -39,6 +39,8 @@ public:
     Result<QueryOut> query(const QueryIn&) override;
     Result<ScanOut> scan(const ScanIn&) override;
     Result<PutItemOut> put_item(const PutItemIn&) override;
+    Result<UpdateItemOut> update_item(const UpdateItemIn&) override;
+    Result<DeleteItemOut> delete_item(const DeleteItemIn&) override;
     Result<CreateTableOut> create_table(const CreateTableIn&) override;
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;

@@ -24,6 +24,7 @@
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
+#include <aws/dynamodb/model/DeleteItemRequest.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
@@ -34,6 +35,7 @@
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
 #include <aws/dynamodb/model/ScanRequest.h>
+#include <aws/dynamodb/model/UpdateItemRequest.h>
 
 namespace ddbsh::cli {
 
@@ -44,10 +46,16 @@ using SdkValueType = Aws::DynamoDB::Model::ValueType;
 
 // Turn a service error into the library Error (byte-exact message carried
 // through to the Renderer; a ConditionalCheckFailedException's message is the
-// service's own "The conditional request failed", arch §9).
+// service's own "The conditional request failed", arch §9). A
+// ConditionalCheckFailed is tagged with Errc::conditional_check_failed so the
+// UPDATE/DELETE executors can intercept it and count it as a ccf (D-2c-7)
+// rather than aborting; INSERT/PutItem still surfaces it as a hard error (the
+// executor does not intercept it there), preserving the original's behavior.
 Error from_sdk_error(const Aws::Client::AWSError<Aws::DynamoDB::DynamoDBErrors>& err) {
-    return Error{Errc::service_error, err.GetMessage().c_str(),
-                 std::string(err.GetExceptionName().c_str()),
+    const Errc code = err.GetErrorType() == Aws::DynamoDB::DynamoDBErrors::CONDITIONAL_CHECK_FAILED
+                          ? Errc::conditional_check_failed
+                          : Errc::service_error;
+    return Error{code, err.GetMessage().c_str(), std::string(err.GetExceptionName().c_str()),
                  std::string(err.GetRequestId().c_str())};
 }
 
@@ -347,6 +355,69 @@ Aws::DynamoDB::Model::PutItemRequest build_put_item(const PutItemIn& in) {
     return request;
 }
 
+// RETURN VALUES selector -> SDK enum. Threaded into UpdateItem/DeleteItem for
+// EXPLAIN fidelity; the returned-item display is deferred to 2g (D-2c-13).
+Aws::DynamoDB::Model::ReturnValue to_sdk_return_value(ReturnValue rv) {
+    switch (rv) {
+        case ReturnValue::all_old:
+            return Aws::DynamoDB::Model::ReturnValue::ALL_OLD;
+        case ReturnValue::all_new:
+            return Aws::DynamoDB::Model::ReturnValue::ALL_NEW;
+        case ReturnValue::updated_old:
+            return Aws::DynamoDB::Model::ReturnValue::UPDATED_OLD;
+        case ReturnValue::updated_new:
+            return Aws::DynamoDB::Model::ReturnValue::UPDATED_NEW;
+        case ReturnValue::none:
+            break;
+    }
+    return Aws::DynamoDB::Model::ReturnValue::NONE;
+}
+
+Aws::DynamoDB::Model::UpdateItemRequest build_update_item(const UpdateItemIn& in) {
+    Aws::DynamoDB::Model::UpdateItemRequest request;
+    request.SetTableName(in.table_name);
+    request.SetKey(to_sdk_item(in.key));
+    request.SetUpdateExpression(Aws::String(in.update_expression.c_str()));
+    if (in.condition_expression.has_value()) {
+        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    if (in.return_values != ReturnValue::none) {
+        request.SetReturnValues(to_sdk_return_value(in.return_values));
+    }
+    if (in.return_consumed_capacity != ReturnConsumedCapacity::none) {
+        request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+    }
+    return request;
+}
+
+Aws::DynamoDB::Model::DeleteItemRequest build_delete_item(const DeleteItemIn& in) {
+    Aws::DynamoDB::Model::DeleteItemRequest request;
+    request.SetTableName(in.table_name);
+    request.SetKey(to_sdk_item(in.key));
+    if (in.condition_expression.has_value()) {
+        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    if (in.return_values != ReturnValue::none) {
+        request.SetReturnValues(to_sdk_return_value(in.return_values));
+    }
+    if (in.return_consumed_capacity != ReturnConsumedCapacity::none) {
+        request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+    }
+    return request;
+}
+
 }  // namespace
 
 AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint) {
@@ -427,6 +498,40 @@ Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn& in) {
         return fail(from_sdk_error(outcome.GetError()));
     }
     return PutItemOut{};
+}
+
+Result<UpdateItemOut> AwsDDBClient::update_item(const UpdateItemIn& in) {
+    auto request = build_update_item(in);
+
+    auto outcome = client_->UpdateItem(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    UpdateItemOut out;
+    const auto& attrs = result.GetAttributes();
+    if (!attrs.empty()) {
+        out.attributes = ItemRow{from_sdk_item(attrs)};
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
+}
+
+Result<DeleteItemOut> AwsDDBClient::delete_item(const DeleteItemIn& in) {
+    auto request = build_delete_item(in);
+
+    auto outcome = client_->DeleteItem(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    DeleteItemOut out;
+    const auto& attrs = result.GetAttributes();
+    if (!attrs.empty()) {
+        out.attributes = ItemRow{from_sdk_item(attrs)};
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
 }
 
 namespace {
@@ -1034,6 +1139,10 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                 return payload(build_scan(in));
             } else if constexpr (std::is_same_v<T, PutItemIn>) {
                 return payload(build_put_item(in));
+            } else if constexpr (std::is_same_v<T, UpdateItemIn>) {
+                return payload(build_update_item(in));
+            } else if constexpr (std::is_same_v<T, DeleteItemIn>) {
+                return payload(build_delete_item(in));
             } else if constexpr (std::is_same_v<T, CreateTableIn>) {
                 return payload(build_create_table(in));
             } else if constexpr (std::is_same_v<T, DeleteTableIn>) {

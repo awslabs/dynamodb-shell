@@ -247,10 +247,69 @@ struct SelectCmd {
     std::optional<RateLimit> ratelimit;
 };
 
+// ---- UPDATE / UPSERT / DELETE (W5 / 2c) ------------------------------------
+
+/// One UPDATE SET assignment (port of CUpdateSetElement). A value type with
+/// ordinary move semantics. Serialized through the engine SymbolTable to the
+/// `#lhs = <rhs>` forms (arch §6):
+///   * plain value:        `#lhs = :v`         (rhs_value set, rhs_attribute "")
+///   * attribute copy:     `#lhs = #b`         (rhs_attribute set)
+///   * arithmetic:         `#lhs = #b +/- :v`  (rhs_attribute + op + rhs_value)
+///   * if_not_exists:      `#lhs = if_not_exists(#p, :v)`  (if_not_exists_*)
+/// NOTE on if_not_exists (fidelity correction): arch §12 #5 claims
+/// `if_not_exists` is a dead token (not in the keyword table). That is FALSE —
+/// it is in both the original's keyword table (oracle/parser/keywords.cpp) and
+/// ours (src/parser/lexer.l), the original grammar wires it, and the golden
+/// `iut-ifne-*.exp` prove the original emits `SET #a = if_not_exists(#a,:v)`.
+/// Supporting it is therefore FIDELITY (tenet 1/6), not the human-gated
+/// divergence D-2c-15 assumed; it is implemented here so the iut- family
+/// matches the golden byte-for-byte.
+struct UpdateSetElement {
+    std::string lhs;                           ///< lee_lhs path (dotted/subscripted ok)
+    std::string op;                            ///< "" | "+" | "-" (arithmetic operator)
+    std::optional<Value> rhs_value;            ///< `= :v` and the arithmetic operand
+    std::string rhs_attribute;                 ///< `= #b` (attribute copy; empty if none)
+    std::string if_not_exists_lhs;             ///< if_not_exists(#p, :v): the path #p
+    std::optional<Value> if_not_exists_value;  ///< if_not_exists(#p, :v): the :v
+};
+
+/// UPDATE/UPSERT mutation kind. SET and REMOVE are grammar-exclusive.
+enum class Mutation { set, remove };
+
+/// UPDATE / UPSERT (one node, `upsert` flag — mirrors the original's single
+/// CUpdateCommand). UPDATE prepends `attribute_exists(pk)` to the write
+/// condition; UPSERT does not (and can create). SET xor REMOVE. `where` is null
+/// when there is no WHERE clause (UPSERT always carries a full-key WHERE; a
+/// bare UPDATE with no WHERE enumerates every item). Move-only (owns a
+/// unique_ptr<Where>).
+struct UpdateCmd {
+    std::string table;
+    std::optional<std::string> index;  ///< `table.index` read-routing form
+    Mutation mutation = Mutation::set;
+    std::vector<UpdateSetElement> set;  ///< when mutation == set
+    std::vector<std::string> remove;    ///< when mutation == remove (paths)
+    std::unique_ptr<Where> where;       ///< null => no WHERE (update all)
+    bool upsert = false;                ///< UPSERT omits attribute_exists(pk)
+    std::optional<RateLimit> ratelimit;
+    ReturnValue return_value = ReturnValue::none;
+};
+
+/// DELETE FROM <table>[.<index>] [WHERE ...]. No WHERE => delete all (full scan
+/// + per-item DeleteItem). `.index` routes the enumeration read through the
+/// index; the per-item writes hit the base table. Move-only (owns a
+/// unique_ptr<Where>).
+struct DeleteCmd {
+    std::string table;
+    std::optional<std::string> index;
+    std::unique_ptr<Where> where;  ///< null => delete all
+    std::optional<RateLimit> ratelimit;
+    ReturnValue return_value = ReturnValue::none;
+};
+
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode =
     std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
-                 DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd, HelpCmd>;
+                 DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd>;
 
 /// Map a CommandNode to its public StatementKind. The variant alternative is
 /// the single source of truth; this keeps the public enum in lockstep.
@@ -278,6 +337,10 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::insert;
             } else if constexpr (std::is_same_v<T, SelectCmd>) {
                 return StatementKind::select_statement;
+            } else if constexpr (std::is_same_v<T, UpdateCmd>) {
+                return StatementKind::update_statement;
+            } else if constexpr (std::is_same_v<T, DeleteCmd>) {
+                return StatementKind::del;
             } else if constexpr (std::is_same_v<T, HelpCmd>) {
                 return StatementKind::help;
             } else {

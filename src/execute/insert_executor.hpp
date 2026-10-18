@@ -31,6 +31,7 @@
 
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/iddbclient.hpp"
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
 #include "parser/ast.hpp"
 
@@ -41,8 +42,22 @@ namespace ddbsh::engine {
 /// called once per INSERT row for the condition's SymbolTable (never for
 /// REPLACE), matching the original's per-row prefix consumption. Returns a
 /// WriteOutcome carrying one status token per row written.
+///
+/// NOTE: this buffering form stops at the first failing row and returns the
+/// Error WITHOUT the tokens for the rows that already succeeded. For the
+/// original's partial-output-then-error fidelity use execute_insert_streaming.
 Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
                                    const std::function<std::string()>& next_prefix);
+
+/// Execute a (non-EXPLAIN) INSERT or REPLACE, emitting one WriteOutcome per
+/// written row to `sink` BEFORE a failing row's Error is returned (AI-4 /
+/// D-2c-12). This reproduces the original, which printed each row's status
+/// token as it wrote and the error after the already-printed tokens
+/// (insert.cpp). Returns success when all rows wrote, or the Error of the first
+/// failing row (the successful rows are already emitted to the sink).
+Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
+                                      const std::function<std::string()>& next_prefix,
+                                      OutcomeSink& sink);
 
 /// EXPLAIN an INSERT/REPLACE: build the same per-row PutItem request(s) and
 /// serialize each into an ExplainOutcome (one PutItem block per row), without

@@ -76,19 +76,48 @@ Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
         auto result = client.put_item(request);
         if (!result.has_value()) {
             // A failed row (e.g. a conditional-check failure on INSERT) stops
-            // the batch, exactly as the original (which prints the error and
-            // returns on the first failure).
-            // TODO(fidelity): the original prints the status tokens for the
-            // rows that already succeeded before this failure, interleaved with
-            // the error on stderr; the Result<ExecOutcome> contract cannot carry
-            // both a partial outcome and an error. Revisit if a multi-row
-            // partial-failure golden requires the interleaved output.
+            // the batch, exactly as the original. This buffering form cannot
+            // carry both the already-succeeded tokens and the Error, so it
+            // returns the Error alone; the streaming form
+            // (execute_insert_streaming) preserves the original's
+            // partial-output-then-error behavior.
             return fail(result.error());
         }
         outcome.tokens.push_back(token);
     }
 
     return ExecOutcome{std::move(outcome)};
+}
+
+Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
+                                      const std::function<std::string()>& next_prefix,
+                                      OutcomeSink& sink) {
+    auto schema = get_key_schema(client, cmd.table_name, "");
+    if (!schema.has_value()) {
+        return fail(schema.error());
+    }
+    const std::string& pk = schema->pk;
+
+    if (auto valid = validate_rows(cmd); !valid.has_value()) {
+        return fail(valid.error());
+    }
+
+    const std::string token = cmd.insert ? "INSERT" : "REPLACE";
+
+    for (std::size_t row = 0; row < cmd.rows.size(); ++row) {
+        PutItemIn request = make_put_request(cmd, row, pk, next_prefix);
+        auto result = client.put_item(request);
+        if (!result.has_value()) {
+            // Emit nothing for the failing row; the rows before it are already
+            // emitted. Returning the Error lets the embedder render it after
+            // the partial output (the original's interleave — insert.cpp).
+            return fail(result.error());
+        }
+        // One status token per written row, emitted as it succeeds (AI-4).
+        sink.emit(ExecOutcome{WriteOutcome{{token}}});
+    }
+
+    return {};
 }
 
 Result<ExecOutcome> execute_insert_explain(const InsertCmd& cmd, IDDBClient& client,

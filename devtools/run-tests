@@ -138,9 +138,12 @@ export AWS_REGION="$REGION"
 #
 # ROUTED_RE is the CTest name regex for the families currently on the new
 # engine. 2b (D24): symbol-table (ist-*), select (isel-*), insert (iins-*).
-# The step-2 exit gate empties this (every family on the new engine, oracle
-# wiring removed); it grows family-by-family in 2c+ until then.
-ROUTED_RE="${DDBSH_ROUTED_RE:-^(ist-|isel-|iins-)}"
+# 2c adds UPDATE (iut-*) and DELETE (ddbsh-delete-*) — both families are fully
+# in 2c scope (no ratelimit/return-values cases; if_not_exists is implemented
+# as fidelity, matching the iut-ifne-* goldens). The step-2 exit gate empties
+# this (every family on the new engine, oracle wiring removed); it grows
+# family-by-family in 2c+ until then.
+ROUTED_RE="${DDBSH_ROUTED_RE:-^(ist-|isel-|iins-|iut-|ddbsh-delete-)}"
 ENGINE_SRC="$REPO_DIR"
 ENGINE_BUILD="${DDBSH_ENGINE_BUILD_DIR:-$REPO_DIR/build-engine}"
 GOLDEN_SRC="$REPO_DIR/tests/golden"
@@ -300,15 +303,13 @@ read -r o_pass o_out < <(counts "$ORACLE_LOG")
 rm -f "$ENGINE_LOG" "$ORACLE_LOG"
 
 RC=0
-# ctest exit code 8 historically treated here as "no tests were found" and
-# benign. NOTE (found 2026-10-15, AI-2a-A): empirically `ctest -R <no-match>`
-# returns 0, not 8 — exit 8 actually means a test FAILED. So this benign(8)
-# masks real failures in the DEFAULT gate's exit code (the printed counts below
-# stay accurate, which is what reviewers read). Left as-is to preserve the
-# established default-gate exit contract; flagged for a focused follow-up
-# decision (see the discussion entry) rather than changed under this tooling
-# sub-phase.
-benign() { [ "$1" -eq 0 ] || [ "$1" -eq 8 ]; }
+# ctest exit code 8 was historically treated here as "no tests were found" and
+# benign. EMPIRICAL CORRECTION (AI-2c-B, 2026-10-18): `ctest -R <no-match>`
+# returns 0, not 8 — exit 8 actually means a test FAILED. The old benign(8)
+# therefore MASKED real failures in the default gate's exit code. Fixed: only 0
+# is success, so a real failure propagates to the process exit code (the printed
+# counts below remain the human-readable source of truth either way).
+benign() { [ "$1" -eq 0 ]; }
 benign "$RC_ENGINE" || RC=$RC_ENGINE
 benign "$RC_ORACLE" || RC=$RC_ORACLE
 # Full-engine exposure is a MEASUREMENT, not a gate: failures from

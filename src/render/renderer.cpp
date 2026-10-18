@@ -178,6 +178,18 @@ std::string render_write(const WriteOutcome& w) {
     return out;
 }
 
+/// A bulk UPDATE/UPSERT/DELETE renders the `(n read, m modified, k ccf)`
+/// accounting line (arch §7 — the original
+/// printf("%s (%d read, %d modified, %d ccf)\n", verb, ...)). The verb string
+/// matches the original: UPDATE / UPSERT / DELETE.
+std::string render_bulk_write(const BulkWriteOutcome& b) {
+    const char* verb = b.verb == BulkWriteOutcome::Verb::update   ? "UPDATE"
+                       : b.verb == BulkWriteOutcome::Verb::upsert ? "UPSERT"
+                                                                  : "DELETE";
+    return std::string(verb) + " (" + std::to_string(b.read) + " read, " +
+           std::to_string(b.modified) + " modified, " + std::to_string(b.ccf) + " ccf)\n";
+}
+
 // ---- EXPLAIN block formatting (port of util/strip_newlines.cpp) ------------
 
 /// explain_string: each tab -> 3 spaces. The AWS SDK's SerializePayload()
@@ -218,9 +230,9 @@ std::string render_explain(const ExplainOutcome& e) {
     return out;
 }
 
-}  // namespace
-
-std::string Renderer::render(const ExecOutcome& outcome) const {
+/// Dispatch one ExecOutcome to its formatter. A free function (not the member)
+/// so MultiOutcome can recurse into it for each of its parts.
+std::string render_outcome(const ExecOutcome& outcome) {
     return std::visit(
         [](const auto& payload) -> std::string {
             using T = std::decay_t<decltype(payload)>;
@@ -236,11 +248,25 @@ std::string Renderer::render(const ExecOutcome& outcome) const {
                 return render_write(payload);
             } else if constexpr (std::is_same_v<T, ExplainOutcome>) {
                 return render_explain(payload);
+            } else if constexpr (std::is_same_v<T, BulkWriteOutcome>) {
+                return render_bulk_write(payload);
+            } else if constexpr (std::is_same_v<T, MultiOutcome>) {
+                std::string out;
+                for (const auto& part : payload.parts) {
+                    out += render_outcome(part);
+                }
+                return out;
             } else {
                 static_assert(sizeof(T) == 0, "unhandled ExecOutcome arm");
             }
         },
         outcome);
+}
+
+}  // namespace
+
+std::string Renderer::render(const ExecOutcome& outcome) const {
+    return render_outcome(outcome);
 }
 
 std::string Renderer::render_error(const Error& error) const {

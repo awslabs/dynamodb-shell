@@ -101,6 +101,28 @@ public:
     /// failure for INSERT-on-existing). nullopt => succeed.
     void set_put_error(std::optional<Error> error) { put_error_ = std::move(error); }
 
+    /// Make ONLY the put_item call at 0-based `index` fail with `error` (the
+    /// others succeed) — drives the streaming multi-row partial-output path.
+    void set_put_error_at(std::size_t index, Error error) {
+        put_error_ = std::move(error);
+        put_error_at_ = index;
+    }
+
+    /// Make the next update_item(s) fail with this Error (e.g. a
+    /// conditional-check failure). nullopt => succeed.
+    void set_update_error(std::optional<Error> error) { update_error_ = std::move(error); }
+
+    /// Make the next delete_item(s) fail with this Error. nullopt => succeed.
+    void set_delete_item_error(std::optional<Error> error) {
+        delete_item_error_ = std::move(error);
+    }
+
+    /// The UpdateItem requests issued, in order (for request-shape assertions).
+    const std::vector<UpdateItemIn>& update_requests() const { return update_requests_; }
+
+    /// The DeleteItem requests issued, in order (for request-shape assertions).
+    const std::vector<DeleteItemIn>& delete_item_requests() const { return delete_item_requests_; }
+
     /// Make delete_table fail with this Error. nullopt => succeed.
     void set_delete_error(std::optional<Error> error) { delete_error_ = std::move(error); }
 
@@ -155,11 +177,28 @@ public:
     }
 
     Result<PutItemOut> put_item(const PutItemIn& in) override {
+        const std::size_t call = put_requests_.size();
         put_requests_.push_back(in);
-        if (put_error_.has_value()) {
+        if (put_error_.has_value() && (!put_error_at_.has_value() || call == *put_error_at_)) {
             return fail(*put_error_);
         }
         return PutItemOut{};
+    }
+
+    Result<UpdateItemOut> update_item(const UpdateItemIn& in) override {
+        update_requests_.push_back(in);
+        if (update_error_.has_value()) {
+            return fail(*update_error_);
+        }
+        return UpdateItemOut{};
+    }
+
+    Result<DeleteItemOut> delete_item(const DeleteItemIn& in) override {
+        delete_item_requests_.push_back(in);
+        if (delete_item_error_.has_value()) {
+            return fail(*delete_item_error_);
+        }
+        return DeleteItemOut{};
     }
 
     Result<CreateTableOut> create_table(const CreateTableIn& in) override {
@@ -309,6 +348,11 @@ private:
     int read_calls_ = 0;
     std::vector<PutItemIn> put_requests_;
     std::optional<Error> put_error_;
+    std::optional<std::size_t> put_error_at_;
+    std::vector<UpdateItemIn> update_requests_;
+    std::optional<Error> update_error_;
+    std::vector<DeleteItemIn> delete_item_requests_;
+    std::optional<Error> delete_item_error_;
     std::optional<Error> delete_error_;
     std::vector<std::string> deleted_tables_;
     std::vector<std::string> waited_gone_;

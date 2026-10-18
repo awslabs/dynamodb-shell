@@ -15,11 +15,13 @@
 
 #include "ddbsh/version.hpp"
 #include "execute/create_table_executor.hpp"
+#include "execute/delete_executor.hpp"
 #include "execute/describe_executor.hpp"
 #include "execute/drop_table_executor.hpp"
 #include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
 #include "execute/show_tables_executor.hpp"
+#include "execute/update_executor.hpp"
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
 #include "parser/help_text.hpp"
@@ -85,9 +87,43 @@ ParsedBatch Session::parse_batch(std::string_view text) {
 }
 
 Result<ExecOutcome> Session::execute(const Statement& statement) {
+    // Buffering convenience: collect every emitted fragment, then fold them
+    // into a single ExecOutcome (0 -> the command's natural single outcome,
+    // 1 -> that fragment, >1 -> MultiOutcome). On failure the Error is returned
+    // and buffered fragments are discarded (D-2c-12). The streaming overload is
+    // the primary; this wraps it with a collecting sink.
+    struct BufferingSink : OutcomeSink {
+        std::vector<ExecOutcome> parts;
+        void emit(const ExecOutcome& fragment) override { parts.push_back(fragment); }
+    } sink;
+
+    auto streamed = execute(statement, sink);
+    if (!streamed.has_value()) {
+        return fail(streamed.error());
+    }
+    if (sink.parts.empty()) {
+        return ExecOutcome{EmptyOutcome{}};
+    }
+    if (sink.parts.size() == 1) {
+        return std::move(sink.parts.front());
+    }
+    return ExecOutcome{MultiOutcome{std::move(sink.parts)}};
+}
+
+Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
+    // Emit a single buffered outcome (the common case for every command that
+    // does not stream per-row), or propagate its Error unemitted.
+    auto emit_single = [&sink](Result<ExecOutcome> outcome) -> Result<void> {
+        if (!outcome.has_value()) {
+            return fail(outcome.error());
+        }
+        sink.emit(*outcome);
+        return {};
+    };
+
     switch (statement.kind()) {
         case StatementKind::empty:
-            return ExecOutcome{EmptyOutcome{}};
+            return emit_single(ExecOutcome{EmptyOutcome{}});
         case StatementKind::show_version:
             // Faithful to the original: SHOW VERSION prints "ddbsh - version
             // <v>\n". In the original this happens inside the parser ACTION for
@@ -97,16 +133,17 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             // that side effect out of the parser into execute() and carry the
             // line as data (ReportOutcome) so the engine never writes to a
             // stream (P2a-03); the Renderer emits the identical bytes.
-            return ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}};
+            return emit_single(ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}});
         case StatementKind::quit:
-            return ExecOutcome{StatusOutcome{"QUIT"}};
+            return emit_single(ExecOutcome{StatusOutcome{"QUIT"}});
         case StatementKind::help: {
             // HELP contacts no API (arch §7). The original printed the usage
             // text during the parse (parser.y help_command); we carry the topic
             // on the AST and emit the identical bytes here as a ReportOutcome,
             // keeping the engine terminal-free (same pattern as SHOW VERSION).
             const auto& help = std::get<engine::HelpCmd>(statement.ast()->command);
-            return ExecOutcome{ReportOutcome{engine::help_lines(engine::help_text(help.topic))}};
+            return emit_single(
+                ExecOutcome{ReportOutcome{engine::help_lines(engine::help_text(help.topic))}});
         }
         case StatementKind::connect: {
             // CONNECT contacts no API (arch §7): it updates the session's
@@ -117,7 +154,7 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
             const auto& connect = std::get<engine::ConnectCmd>(statement.ast()->command);
             impl_->config.region = connect.region;
             impl_->config.endpoint = connect.endpoint;
-            return ExecOutcome{StatusOutcome{"CONNECT"}};
+            return emit_single(ExecOutcome{StatusOutcome{"CONNECT"}});
         }
         case StatementKind::select_statement: {
             const auto& select = std::get<engine::SelectCmd>(statement.ast()->command);
@@ -125,57 +162,73 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
                 // EXPLAIN renders the serialized GetItem/Query/Scan request
                 // (the planner still resolves the key schema; it does not read
                 // data). W6.
-                return engine::execute_select_explain(select, impl_->client,
-                                                      impl_->next_alias_prefix());
+                return emit_single(engine::execute_select_explain(select, impl_->client,
+                                                                  impl_->next_alias_prefix()));
             }
-            return engine::execute_select(select, impl_->client, impl_->next_alias_prefix());
+            return emit_single(
+                engine::execute_select(select, impl_->client, impl_->next_alias_prefix()));
         }
         case StatementKind::drop_table: {
             const auto& drop = std::get<engine::DropTableCmd>(statement.ast()->command);
             if (statement.ast()->explain) {
                 // EXPLAIN renders the serialized DeleteTable request (IF EXISTS
                 // still probes existence; a missing table emits nothing). W6.
-                return engine::execute_drop_table_explain(drop, impl_->client);
+                return emit_single(engine::execute_drop_table_explain(drop, impl_->client));
             }
-            return engine::execute_drop_table(drop, impl_->client);
+            return emit_single(engine::execute_drop_table(drop, impl_->client));
         }
         case StatementKind::insert: {
             const auto& insert = std::get<engine::InsertCmd>(statement.ast()->command);
             if (statement.ast()->explain) {
                 // EXPLAIN renders the serialized PutItem request(s), one per
                 // row (the key schema is still resolved for the condition). W6.
-                return engine::execute_insert_explain(
-                    insert, impl_->client, [this] { return impl_->next_alias_prefix(); });
+                return emit_single(engine::execute_insert_explain(
+                    insert, impl_->client, [this] { return impl_->next_alias_prefix(); }));
             }
-            return engine::execute_insert(insert, impl_->client,
-                                          [this] { return impl_->next_alias_prefix(); });
+            // Streaming: emit one WriteOutcome per written row BEFORE a failing
+            // row's Error, so partial output survives the failure (AI-4 /
+            // D-2c-12) — the original printed each row's token then the error.
+            return engine::execute_insert_streaming(
+                insert, impl_->client, [this] { return impl_->next_alias_prefix(); }, sink);
+        }
+        case StatementKind::update_statement: {
+            const auto& update = std::get<engine::UpdateCmd>(statement.ast()->command);
+            return engine::execute_update(
+                update, impl_->client, [this] { return impl_->next_alias_prefix(); },
+                statement.ast()->explain, sink);
+        }
+        case StatementKind::del: {
+            const auto& del = std::get<engine::DeleteCmd>(statement.ast()->command);
+            return engine::execute_delete(
+                del, impl_->client, [this] { return impl_->next_alias_prefix(); },
+                statement.ast()->explain, sink);
         }
         case StatementKind::create_table: {
             const auto& create = std::get<engine::CreateTableCmd>(statement.ast()->command);
             if (statement.ast()->explain) {
                 // EXPLAIN renders the serialized CreateTable request plus the
                 // CREATE token the original prints even when explaining. W6.
-                return engine::execute_create_table_explain(create, impl_->client);
+                return emit_single(engine::execute_create_table_explain(create, impl_->client));
             }
-            return engine::execute_create_table(create, impl_->client);
+            return emit_single(engine::execute_create_table(create, impl_->client));
         }
         case StatementKind::show_tables: {
             // SHOW TABLES is not explainable (it is a show_command, not in the
             // grammar's `explainable` set — SHOW/CONNECT/QUIT never carry the
             // EXPLAIN flag), so there is no explain path to guard here.
             const auto& show = std::get<engine::ShowTablesCmd>(statement.ast()->command);
-            return engine::execute_show_tables(show, impl_->client);
+            return emit_single(engine::execute_show_tables(show, impl_->client));
         }
         case StatementKind::describe:
             if (statement.ast()->explain) {
                 // EXPLAIN renders the four serialized DescribeTable/
                 // DescribeTimeToLive/DescribeContinuousBackups/
                 // DescribeTableReplicaAutoScaling requests; no service call. W6.
-                return engine::execute_describe_explain(
-                    std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client);
+                return emit_single(engine::execute_describe_explain(
+                    std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client));
             }
-            return engine::execute_describe(std::get<engine::DescribeCmd>(statement.ast()->command),
-                                            impl_->client);
+            return emit_single(engine::execute_describe(
+                std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client));
     }
     return fail(Errc::internal_error, "unhandled statement kind");
 }
@@ -186,6 +239,14 @@ Result<ExecOutcome> Session::run(std::string_view text) {
         return fail(stmt.error());
     }
     return execute(*stmt);
+}
+
+Result<void> Session::run(std::string_view text, OutcomeSink& sink) {
+    auto stmt = parse(text);
+    if (!stmt.has_value()) {
+        return fail(stmt.error());
+    }
+    return execute(*stmt, sink);
 }
 
 }  // namespace ddbsh
