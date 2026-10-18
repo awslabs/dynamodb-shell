@@ -18,6 +18,7 @@
 
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
+#include "ddbsh/version.hpp"
 
 #include "fake_ddb_client.hpp"
 
@@ -28,6 +29,10 @@ TEST(Reentrancy, ManySessionsAcrossThreads) {
     constexpr int kIterations = 200;
 
     ddbsh::test::FakeDDBClient shared_client;  // shared across all sessions
+
+    // Derive the expected banner from the project version so this does not rot
+    // when the developer bumps the patch per merge (shared.md Versioning).
+    const std::string expected = "ddbsh - version " + ddbsh::version() + "\n";
 
     std::vector<std::thread> threads;
     std::vector<int> failures(kThreads, 0);
@@ -41,8 +46,7 @@ TEST(Reentrancy, ManySessionsAcrossThreads) {
                 // NOT the contract.
                 ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, shared_client);
                 auto outcome = session.run("show version;");
-                if (!outcome.has_value() ||
-                    renderer.render(*outcome) != "ddbsh - version 0.9.6\n") {
+                if (!outcome.has_value() || renderer.render(*outcome) != expected) {
                     ++failures[t];
                 }
             }

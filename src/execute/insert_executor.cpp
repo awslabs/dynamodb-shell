@@ -53,42 +53,6 @@ PutItemIn make_put_request(const InsertCmd& cmd, std::size_t row, const std::str
 
 }  // namespace
 
-Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
-                                   const std::function<std::string()>& next_prefix) {
-    // Resolve the partition key (needed only for the INSERT condition, but the
-    // original resolves it unconditionally — a missing table fails here too).
-    auto schema = get_key_schema(client, cmd.table_name, "");
-    if (!schema.has_value()) {
-        return fail(schema.error());
-    }
-    const std::string& pk = schema->pk;
-
-    if (auto valid = validate_rows(cmd); !valid.has_value()) {
-        return fail(valid.error());
-    }
-
-    const std::string token = cmd.insert ? "INSERT" : "REPLACE";
-
-    WriteOutcome outcome;
-    outcome.tokens.reserve(cmd.rows.size());
-    for (std::size_t row = 0; row < cmd.rows.size(); ++row) {
-        PutItemIn request = make_put_request(cmd, row, pk, next_prefix);
-        auto result = client.put_item(request);
-        if (!result.has_value()) {
-            // A failed row (e.g. a conditional-check failure on INSERT) stops
-            // the batch, exactly as the original. This buffering form cannot
-            // carry both the already-succeeded tokens and the Error, so it
-            // returns the Error alone; the streaming form
-            // (execute_insert_streaming) preserves the original's
-            // partial-output-then-error behavior.
-            return fail(result.error());
-        }
-        outcome.tokens.push_back(token);
-    }
-
-    return ExecOutcome{std::move(outcome)};
-}
-
 Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
                                       const std::function<std::string()>& next_prefix,
                                       OutcomeSink& sink) {
