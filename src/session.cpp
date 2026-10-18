@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "execute/alter_table_executor.hpp"
 #include "execute/create_table_executor.hpp"
 #include "execute/delete_executor.hpp"
 #include "execute/describe_executor.hpp"
@@ -218,6 +219,20 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 return emit_single(engine::execute_create_table_explain(create, impl_->client));
             }
             return emit_single(engine::execute_create_table(create, impl_->client));
+        }
+        case StatementKind::alter_table: {
+            // ALTER TABLE SET ... -> UpdateTable (2e-1). The four ALTER AST
+            // nodes share one StatementKind::alter_table (D-2e-1); so far only
+            // AlterTableCmd (UpdateTable) exists — the TTL/PITR/REPLICA nodes
+            // land in later sub-phases, at which point this dispatch gains an
+            // inner visit over the node alternatives.
+            const auto& alter = std::get<engine::AlterTableCmd>(statement.ast()->command);
+            if (statement.ast()->explain) {
+                // EXPLAIN renders the serialized UpdateTable request with NO
+                // trailing status token (contrast CREATE) — D-2e-11.
+                return emit_single(engine::execute_alter_table_explain(alter, impl_->client));
+            }
+            return emit_single(engine::execute_alter_table(alter, impl_->client));
         }
         case StatementKind::show_tables: {
             // SHOW TABLES is not explainable (it is a show_command, not in the

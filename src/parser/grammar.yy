@@ -213,6 +213,7 @@
 %type <ddbsh::engine::CommandNode> drop_table_command describe_command
 %type <ddbsh::engine::CommandNode> show_tables_command show_version_command
 %type <ddbsh::engine::CommandNode> create_table_command
+%type <ddbsh::engine::CommandNode> alter_table_command
 %type <ddbsh::engine::CommandNode> dml_command write_command
 %type <ddbsh::engine::CommandNode> insert_command replace_command
 %type <ddbsh::engine::CommandNode> update_command upsert_command delete_command
@@ -377,6 +378,7 @@ ddl_command:
       drop_table_command { $$ = std::move($1); }
     | describe_command   { $$ = std::move($1); }
     | create_table_command { $$ = std::move($1); }
+    | alter_table_command  { $$ = std::move($1); }
     ;
 
 /* dml for the write family (INSERT/REPLACE) and the read family (SELECT via
@@ -539,6 +541,64 @@ create_table_command:
             cmd.table_class = $16;
             cmd.deletion_protection = $17;
             cmd.tags = std::move($18);
+            $$ = std::move(cmd);
+        }
+    ;
+
+/* ---- ALTER TABLE (2e-1: SET non-GSI -> UpdateTable) ----------------------
+ * Faithful port of the original alter_table_command SET forms that map to one
+ * CUpdateTableCommand -> UpdateTable (parser.y). The trailing ';' is consumed
+ * by `input`, so each form omits it. Each alternative builds ONE AlterTableCmd
+ * and fills only the field(s) the clause provided (D-2e-2); the executor
+ * copies them into an UpdateTableIn and the adapter sets only the present
+ * fields on the UpdateTableRequest, matching the original's "leave the rest
+ * unset" behavior. The billing+warm form fills both `billing` and `warm`; the
+ * standalone warm form fills only `warm` (arch §8, D-2e-3/-4). The GSI
+ * create/update/drop and REPLICA/TTL/PITR forms land in 2e-2..2e-5. The first
+ * tokens after K_SET are all distinct (K_BILLING / K_WARM / K_SSE / K_TABLE /
+ * K_STREAM / K_DELETION), so these alternatives are LALR(1)-clean. */
+alter_table_command:
+      K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.billing = std::move($5);
+            cmd.warm = std::move($6);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET warm_throughput
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.warm = std::move($5);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET sse_specification
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.sse = std::move($5);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET table_class
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.table_class = $5;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET stream_specification
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.stream = std::move($5);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET deletion_protection
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.deletion_protection = $5;
             $$ = std::move(cmd);
         }
     ;

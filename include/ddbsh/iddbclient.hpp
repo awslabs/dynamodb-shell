@@ -207,6 +207,35 @@ struct CreateTableIn {
 };
 struct CreateTableOut {};
 
+// ---- UpdateTable -----------------------------------------------------------
+// ALTER TABLE SET ... issues UpdateTable (arch §7, the original
+// CUpdateTableCommand). Unlike CreateTable, every field is OPTIONAL and set
+// only when the clause provided it: the original built one UpdateTableRequest
+// and set exactly the attributes the clause selected, leaving the rest unset so
+// the SDK omits them from the payload. The request carries SDK-free value
+// types (ddbsh/table_schema.hpp) shared with the parse result, keeping the
+// public seam AWS-type-free (D11); the CLI adapter translates it to
+// Aws::DynamoDB::Model::UpdateTableRequest, setting only the present fields.
+//
+// Billing fidelity (arch §8): a present `billing` always sets BOTH BillingMode
+// and the matching throughput (provisioned => ProvisionedThroughput;
+// on-demand => OnDemandThroughput with the -1 clear-one / UNLIMITED clear-both
+// sentinels). `table_class` / `deletion_protection` are optional<> (NOT a
+// defaulted value) so "clause absent" serializes to NO TableClass /
+// DeletionProtectionEnabled in the request, matching the original's unset
+// fields. GSI updates and the replica ReplicationGroupUpdate land in later
+// sub-phases (2e-2 / 2e-5); this 2e-1 struct carries the non-GSI SET fields.
+struct UpdateTableIn {
+    std::string table_name;
+    std::optional<BillingModeAndThroughput> billing;  ///< SET billing_mode_and_throughput
+    std::optional<WarmThroughput> warm;               ///< SET warm_throughput
+    std::optional<SseSpec> sse;                       ///< SET sse_specification
+    std::optional<StreamSpec> stream;                 ///< SET stream_specification
+    std::optional<TableClass> table_class;            ///< SET table_class (nullopt => unset)
+    std::optional<bool> deletion_protection;  ///< SET deletion protection (nullopt => unset)
+};
+struct UpdateTableOut {};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -442,7 +471,7 @@ struct TransactWriteItemsOut {};
 /// raw SerializePayload() string; the engine never sees an Aws:: type. One
 /// alternative per in-scope API the EXPLAIN paths can emit (arch §7/§8).
 using ExplainRequest =
-    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, DeleteTableIn,
+    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, UpdateTableIn, DeleteTableIn,
                  DescribeTableIn, DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
                  DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
                  TransactWriteItemsIn>;
@@ -458,6 +487,14 @@ public:
     virtual Result<ScanOut> scan(const ScanIn&) = 0;
     virtual Result<PutItemOut> put_item(const PutItemIn&) = 0;
     virtual Result<CreateTableOut> create_table(const CreateTableIn&) = 0;
+
+    /// UpdateTable for an ALTER TABLE SET ... (arch §7, the original
+    /// CUpdateTableCommand). Sets only the fields the request carries; on
+    /// success the executor emits the `ALTER` status token. A service failure
+    /// is returned as an Error (the adapter composes the byte-exact
+    /// "Update Table failed. ..." message the original logged, D-2e-13).
+    virtual Result<UpdateTableOut> update_table(const UpdateTableIn&) = 0;
+
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;

@@ -252,6 +252,24 @@ public:
         return CreateTableOut{};
     }
 
+    /// Make update_table fail with this Error. nullopt => succeed.
+    void set_update_table_error(std::optional<Error> error) {
+        update_table_error_ = std::move(error);
+    }
+
+    /// The UpdateTable requests issued, in order (for request-shape assertions).
+    const std::vector<UpdateTableIn>& update_table_requests() const {
+        return update_table_requests_;
+    }
+
+    Result<UpdateTableOut> update_table(const UpdateTableIn& in) override {
+        update_table_requests_.push_back(in);
+        if (update_table_error_.has_value()) {
+            return fail(*update_table_error_);
+        }
+        return UpdateTableOut{};
+    }
+
     Result<void> wait_for_table_active(const std::string& table_name) override {
         waited_active_.push_back(table_name);
         return {};
@@ -406,6 +424,8 @@ private:
     std::vector<std::string> waited_gone_;
     std::vector<CreateTableIn> create_requests_;
     std::optional<Error> create_error_;
+    std::vector<UpdateTableIn> update_table_requests_;
+    std::optional<Error> update_table_error_;
     std::vector<std::string> waited_active_;
     std::vector<ExplainRequest> explain_requests_;
     std::string explain_body_ = "{\n\t\"stub\":\t\"explain\"\n}";

@@ -318,12 +318,33 @@ struct DeleteCmd {
     ReturnValue return_value = ReturnValue::none;
 };
 
+// ---- ALTER TABLE (2e) ------------------------------------------------------
+
+/// ALTER TABLE <table> SET ... (UpdateTable; the original CUpdateTableCommand).
+/// An all-optional-fields model: the grammar fills ONLY the field(s) the clause
+/// provided and leaves the rest nullopt, mirroring the original (which set
+/// exactly the clause's attributes on one UpdateTableRequest). `table_class`
+/// and `deletion_protection` are optional (NOT defaulted) so "clause absent"
+/// serializes to no field in the request (arch §8, D-2e-2). The four oracle
+/// command classes split into four AST nodes sharing one StatementKind::
+/// alter_table (D-2e-1); this is the UpdateTable node. GSI-update and replica
+/// payloads land in later sub-phases (2e-2 / 2e-5).
+struct AlterTableCmd {
+    std::string table;
+    std::optional<BillingModeAndThroughput> billing;  ///< SET billing_mode_and_throughput
+    std::optional<WarmThroughput> warm;               ///< SET warm_throughput
+    std::optional<SseSpec> sse;                       ///< SET sse_specification
+    std::optional<StreamSpec> stream;                 ///< SET stream_specification
+    std::optional<TableClass> table_class;            ///< SET table_class
+    std::optional<bool> deletion_protection;          ///< SET deletion protection enabled|disabled
+};
+
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
 
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
-                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd,
-                                 UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+                                 DescribeCmd, DropTableCmd, CreateTableCmd, AlterTableCmd,
+                                 InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -368,6 +389,8 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::drop_table;
             } else if constexpr (std::is_same_v<T, CreateTableCmd>) {
                 return StatementKind::create_table;
+            } else if constexpr (std::is_same_v<T, AlterTableCmd>) {
+                return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, InsertCmd>) {
                 return StatementKind::insert;
             } else if constexpr (std::is_same_v<T, SelectCmd>) {
