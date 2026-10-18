@@ -21,7 +21,10 @@ It demonstrates the full embedding path end to end, offline:
    bytes with `ddbsh::render::Renderer`.
 
 The engine does the SQL→API planning (GetItem vs Query vs Scan) and all output
-formatting; the sample's `IDDBClient` supplies the "service" responses.
+formatting; the sample's `IDDBClient` supplies the "service" responses. The
+in-memory client also implements the write ops, so the demo exercises a
+**mutating command path** end to end — `INSERT`, `UPDATE ... WHERE <full key>`,
+and `DELETE ... WHERE <full key>` — alongside the read commands, all offline.
 
 ## Build and run
 

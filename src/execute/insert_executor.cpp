@@ -53,10 +53,9 @@ PutItemIn make_put_request(const InsertCmd& cmd, std::size_t row, const std::str
 
 }  // namespace
 
-Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
-                                   const std::function<std::string()>& next_prefix) {
-    // Resolve the partition key (needed only for the INSERT condition, but the
-    // original resolves it unconditionally — a missing table fails here too).
+Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
+                                      const std::function<std::string()>& next_prefix,
+                                      OutcomeSink& sink) {
     auto schema = get_key_schema(client, cmd.table_name, "");
     if (!schema.has_value()) {
         return fail(schema.error());
@@ -69,26 +68,20 @@ Result<ExecOutcome> execute_insert(const InsertCmd& cmd, IDDBClient& client,
 
     const std::string token = cmd.insert ? "INSERT" : "REPLACE";
 
-    WriteOutcome outcome;
-    outcome.tokens.reserve(cmd.rows.size());
     for (std::size_t row = 0; row < cmd.rows.size(); ++row) {
         PutItemIn request = make_put_request(cmd, row, pk, next_prefix);
         auto result = client.put_item(request);
         if (!result.has_value()) {
-            // A failed row (e.g. a conditional-check failure on INSERT) stops
-            // the batch, exactly as the original (which prints the error and
-            // returns on the first failure).
-            // TODO(fidelity): the original prints the status tokens for the
-            // rows that already succeeded before this failure, interleaved with
-            // the error on stderr; the Result<ExecOutcome> contract cannot carry
-            // both a partial outcome and an error. Revisit if a multi-row
-            // partial-failure golden requires the interleaved output.
+            // Emit nothing for the failing row; the rows before it are already
+            // emitted. Returning the Error lets the embedder render it after
+            // the partial output (the original's interleave — insert.cpp).
             return fail(result.error());
         }
-        outcome.tokens.push_back(token);
+        // One status token per written row, emitted as it succeeds (AI-4).
+        sink.emit(ExecOutcome{WriteOutcome{{token}}});
     }
 
-    return ExecOutcome{std::move(outcome)};
+    return {};
 }
 
 Result<ExecOutcome> execute_insert_explain(const InsertCmd& cmd, IDDBClient& client,

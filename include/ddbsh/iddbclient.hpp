@@ -126,6 +126,49 @@ struct PutItemIn {
 };
 struct PutItemOut {};
 
+// ---- UpdateItem / DeleteItem ----------------------------------------------
+// UPDATE/UPSERT and DELETE issue one UpdateItem/DeleteItem per addressed item
+// (arch §7). The engine builds the UpdateExpression / ConditionExpression and
+// aliases every attribute/value through a SymbolTable, so the request carries
+// the serialized strings plus the matching ExpressionAttribute* maps (not raw
+// column lists) — identical aliasing to the Query/Scan/Put paths for
+// byte-exact EXPLAIN (arch §6/§8). `key` is the literal item key (get_gud_key
+// on the single-write path, or an enumerated row's key on the bulk path).
+
+/// RETURN VALUES selector (public seam mirror of engine::ReturnValue). Threaded
+/// into UpdateItem/DeleteItem for EXPLAIN fidelity; the returned-item DISPLAY
+/// is deferred to 2g (the ddbsh-rv suite owns it). Default `none`.
+enum class ReturnValue { none, all_old, all_new, updated_old, updated_new };
+
+struct UpdateItemIn {
+    std::string table_name;
+    ValueMap key;
+    std::string update_expression;  ///< "SET ..." | "REMOVE ..."
+    std::optional<std::string> condition_expression;
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+    ReturnValue return_values = ReturnValue::none;
+    ReturnConsumedCapacity return_consumed_capacity = ReturnConsumedCapacity::none;
+};
+struct UpdateItemOut {
+    std::optional<ItemRow> attributes;  ///< RETURN VALUES payload (ignored until 2g)
+    std::optional<ConsumedCapacity> consumed_capacity;
+};
+
+struct DeleteItemIn {
+    std::string table_name;
+    ValueMap key;
+    std::optional<std::string> condition_expression;
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+    ReturnValue return_values = ReturnValue::none;
+    ReturnConsumedCapacity return_consumed_capacity = ReturnConsumedCapacity::none;
+};
+struct DeleteItemOut {
+    std::optional<ItemRow> attributes;
+    std::optional<ConsumedCapacity> consumed_capacity;
+};
+
 // ---- DeleteTable -----------------------------------------------------------
 // DROP TABLE issues DeleteTable then (unless NOWAIT) waits for the table to be
 // gone (arch §7/§10). The request carries only the table name; the SDK-free
@@ -328,9 +371,10 @@ struct TableReplicaAutoScalingOut {
 /// adapter translates the active alternative to its SDK request and returns the
 /// raw SerializePayload() string; the engine never sees an Aws:: type. One
 /// alternative per in-scope API the EXPLAIN paths can emit (arch §7/§8).
-using ExplainRequest = std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn,
-                                    DeleteTableIn, DescribeTableIn, DescribeTimeToLiveIn,
-                                    DescribeContinuousBackupsIn, DescribeTableReplicaAutoScalingIn>;
+using ExplainRequest =
+    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, DeleteTableIn,
+                 DescribeTableIn, DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
+                 DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn>;
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
@@ -346,6 +390,17 @@ public:
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;
+
+    /// UpdateItem for a single addressed item (UPDATE/UPSERT; arch §7). A
+    /// ConditionalCheckFailedException is mapped by the adapter to
+    /// `Error{Errc::conditional_check_failed, "The conditional request failed"}`
+    /// so the UPDATE executor can intercept it and count it as a ccf (D-2c-7)
+    /// rather than aborting; any other service error maps to Errc::service_error.
+    virtual Result<UpdateItemOut> update_item(const UpdateItemIn&) = 0;
+
+    /// DeleteItem for a single addressed item (DELETE; arch §7). Same ccf
+    /// mapping as update_item (D-2c-7).
+    virtual Result<DeleteItemOut> delete_item(const DeleteItemIn&) = 0;
 
     /// DescribeTimeToLive for a table (arch §7/§10). SHOW TABLES / DESCRIBE pair
     /// it with describe_table; a failure here makes a non-brief SHOW TABLES row

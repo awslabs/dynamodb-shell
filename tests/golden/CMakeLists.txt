@@ -122,8 +122,17 @@ if(DDBSH_GOLDEN_ALL_FAMILIES)
     include("${ORACLE_TESTS_DIR}/test-cleanup.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
 else()
-    # Route only the cleanly-in-scope 2b families (D24).
+    # Route the 2b families plus the 2c families (UPDATE/DELETE) to the new
+    # engine (D24 + 2c). The update/delete family files reference
+    # ${CMAKE_SOURCE_DIR}/tests/*.sql for their `-f` seed loads (resolved
+    # against the oracle root in the oracle master include); shadow
+    # CMAKE_SOURCE_DIR with the oracle root so those paths resolve here too
+    # (the 2b families use no such load, so this is harmless for them).
+    get_filename_component(_oracle_root "${ORACLE_TESTS_DIR}" DIRECTORY)
+    set(CMAKE_SOURCE_DIR "${_oracle_root}")
     include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-insert-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-update-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-delete-tests.txt")
 endif()

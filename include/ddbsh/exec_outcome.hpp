@@ -100,10 +100,42 @@ struct ExplainOutcome {
     std::optional<std::string> trailing_status;
 };
 
+/// The result of a bulk UPDATE / UPSERT / DELETE: the `(n read, m modified,
+/// k ccf)` accounting line the original prints for every such command (arch §7,
+/// update.cpp / delete.cpp). `read` counts items enumerated by the Query/Scan
+/// (0 on the single-conditional-write path), `modified` counts successful
+/// writes, and `ccf` counts conditional-check failures (a mismatch is DATA, not
+/// an error — D-2c-7/-8). `consumed_capacity` is populated with ratelimit /
+/// RETURN CONSUMED CAPACITY support (2g); nullopt for now. The Renderer emits
+/// `"<VERB> (<read> read, <modified> modified, <ccf> ccf)\n"`.
+struct BulkWriteOutcome {
+    enum class Verb { update, upsert, del };
+    Verb verb = Verb::update;
+    long read = 0;
+    long modified = 0;
+    long ccf = 0;
+    std::optional<ConsumedCapacity> consumed_capacity;
+};
+
+struct MultiOutcome;  // defined below (recursive variant member)
+
 /// Discriminated union over the observable shapes a command produces. Extended
-/// per sub-phase (BulkWriteOutcome, ...).
+/// per sub-phase. `MultiOutcome` carries several fragments emitted by ONE
+/// statement (multi-row INSERT; future batched forms) in production order; it
+/// is the buffering form of the streaming OutcomeSink (D-2c-12).
 using ExecOutcome = std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome,
-                                 WriteOutcome, ExplainOutcome>;
+                                 WriteOutcome, ExplainOutcome, BulkWriteOutcome, MultiOutcome>;
+
+/// Carries >1 fragment produced by one statement, in production order (e.g. a
+/// multi-row INSERT emits one WriteOutcome per row). The buffering
+/// Session::execute(stmt) wraps multiple sink-emitted fragments in a
+/// MultiOutcome; the Renderer concatenates render(part) in order. The
+/// `std::vector<ExecOutcome>` member is legal while ExecOutcome is incomplete
+/// (the std::vector incomplete-type allowance — D-2c-14 assumption 1,
+/// gcc/libstdc++ C++23).
+struct MultiOutcome {
+    std::vector<ExecOutcome> parts;
+};
 
 }  // namespace ddbsh
 

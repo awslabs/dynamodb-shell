@@ -237,10 +237,24 @@ struct BatchStatus {
 // `!retval || !abort_on_error()` guard, arch §3).
 BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
                            std::string_view text, bool abort_on_error) {
+    // Render each outcome fragment to stdout as the engine emits it, so a
+    // multi-row INSERT (or any future streaming write) interleaves its
+    // already-written status tokens with a mid-batch error exactly as the
+    // original did (AI-4 / D-2c-12).
+    struct RenderingSink : ddbsh::OutcomeSink {
+        const ddbsh::render::Renderer& renderer;
+        explicit RenderingSink(const ddbsh::render::Renderer& r) : renderer(r) {}
+        void emit(const ddbsh::ExecOutcome& fragment) override {
+            std::fputs(renderer.render(fragment).c_str(), stdout);
+            std::fflush(stdout);
+        }
+    };
+
     BatchStatus status;
     ddbsh::ParsedBatch batch = session.parse_batch(text);
     for (const auto& stmt : batch.statements) {
-        auto outcome = session.execute(stmt);
+        RenderingSink sink(renderer);
+        auto outcome = session.execute(stmt, sink);
         if (!outcome.has_value()) {
             std::fputs(renderer.render_error(outcome.error()).c_str(), stderr);
             std::fflush(stderr);
@@ -250,8 +264,6 @@ BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Rendere
             }
             continue;
         }
-        std::fputs(renderer.render(*outcome).c_str(), stdout);
-        std::fflush(stdout);
         if (stmt.kind() == ddbsh::StatementKind::quit) {
             status.quit = true;
             return status;

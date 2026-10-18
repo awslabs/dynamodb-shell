@@ -73,6 +73,14 @@ DynamoDB:
 - `DESCRIBE <table>`, `SHOW TABLES` — introspection.
 - `INSERT` / `REPLACE` — PutItem (INSERT conditional on
   `attribute_not_exists(pk)`; REPLACE unconditional).
+- `UPDATE` / `UPSERT` — UpdateItem: a single conditional write when the full
+  base-table key is given (UPDATE prepends `attribute_exists(pk)`, UPSERT does
+  not), else a Query/Scan enumeration + per-item write. `SET` (plain value,
+  attribute copy, arithmetic `+`/`-`, `if_not_exists(path, value)`) and
+  `REMOVE`. Reports `(n read, m modified, k ccf)`; a conditional-check failure
+  is counted as a `ccf`, not an error.
+- `DELETE` — DeleteItem with the same single-vs-enumerate dispatch; no `WHERE`
+  deletes every item. Reports `(n read, m modified, k ccf)`.
 - `SELECT` — the full SQL→API decision matrix (GetItem vs Query vs Scan, base
   table and `.index`), the WHERE expression tree, `CONSISTENT`, projections, and
   `RETURN CONSUMED CAPACITY`.
@@ -80,11 +88,14 @@ DynamoDB:
 - `EXPLAIN <any supported command>` — prints the serialized API request(s)
   instead of executing.
 
-**Deferred to later phases:** `UPDATE`/`UPSERT`, `DELETE`, transactions
+**Deferred to later phases:** transactions
 (`BEGIN..COMMIT`), `ALTER TABLE`, backups (`BACKUP`/`DROP BACKUP`/
 `DESCRIBE BACKUP`/`RESTORE`), `SHOW LIMITS`/`SHOW BACKUPS`/`SHOW CREATE TABLE`,
-return-values nuances, and rate-limiting. The parser may recognize these and
-return a clear "not implemented in this build" error rather than a parse error.
+return-values display, and rate-limiting (a `WITH RATELIMIT` clause is parsed
+and forces `ReturnConsumedCapacity=TOTAL` on the request for EXPLAIN fidelity,
+but no token-bucket throttling runs yet). The parser may recognize other
+deferred commands and return a clear "not implemented in this build" error
+rather than a parse error.
 
 ## isql-mode input
 

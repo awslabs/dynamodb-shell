@@ -23,9 +23,13 @@ ddbsh::Session make_session(ddbsh::test::FakeDDBClient& client) {
     return ddbsh::Session(ddbsh::SessionConfig{"us-east-1", ""}, client);
 }
 
-TEST(WalkingPath, VersionIs096) {
-    // D15: the reimplementation version starts at 0.9.1; bumped per merge.
-    EXPECT_EQ(ddbsh::version(), "0.9.6");
+TEST(WalkingPath, VersionIsSemantic) {
+    // D15: the reimplementation version starts at 0.9.1; bumped per merge. The
+    // exact value lives in CMake project(VERSION ...); assert it is present and
+    // dotted rather than hard-coding a literal that rots on every patch bump.
+    const std::string v = ddbsh::version();
+    EXPECT_FALSE(v.empty());
+    EXPECT_NE(v.find('.'), std::string::npos);
 }
 
 TEST(WalkingPath, ShowVersionRendersBanner) {
@@ -33,9 +37,12 @@ TEST(WalkingPath, ShowVersionRendersBanner) {
     ddbsh::Session session = make_session(client);
     ddbsh::render::Renderer renderer;
 
+    // Derive the expected banner from the project version so this does not rot
+    // when the developer bumps the patch per merge (shared.md Versioning).
+    const std::string expected = "ddbsh - version " + ddbsh::version() + "\n";
     auto outcome = session.run("show version;");
     ASSERT_TRUE(outcome.has_value()) << outcome.error().message;
-    EXPECT_EQ(renderer.render(*outcome), "ddbsh - version 0.9.6\n");
+    EXPECT_EQ(renderer.render(*outcome), expected);
 }
 
 TEST(WalkingPath, ShowVersionIsCaseInsensitive) {
@@ -44,9 +51,10 @@ TEST(WalkingPath, ShowVersionIsCaseInsensitive) {
     ddbsh::Session session = make_session(client);
     ddbsh::render::Renderer renderer;
 
+    const std::string expected = "ddbsh - version " + ddbsh::version() + "\n";
     auto outcome = session.run("SHOW VERSION;");
     ASSERT_TRUE(outcome.has_value()) << outcome.error().message;
-    EXPECT_EQ(renderer.render(*outcome), "ddbsh - version 0.9.6\n");
+    EXPECT_EQ(renderer.render(*outcome), expected);
 }
 
 TEST(WalkingPath, QuitRendersStatusToken) {

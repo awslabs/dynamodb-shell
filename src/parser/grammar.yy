@@ -215,6 +215,7 @@
 %type <ddbsh::engine::CommandNode> create_table_command
 %type <ddbsh::engine::CommandNode> dml_command write_command
 %type <ddbsh::engine::CommandNode> insert_command replace_command
+%type <ddbsh::engine::CommandNode> update_command upsert_command delete_command
 %type <ddbsh::engine::CommandNode> help_command
 
 %type <std::string> string region_name connect_endpoint like_clause
@@ -262,6 +263,14 @@
 %type <std::vector<ddbsh::ValueList>> value_list
 %type <std::optional<ddbsh::engine::RateLimit>> optional_ratelimit ratelimit
 %type <ddbsh::engine::ReturnValue> optional_return_value
+
+/* ---- UPDATE / UPSERT / DELETE SET-REMOVE value types (W5 / 2c) -----------
+ * The SET clause builds a vector of engine::UpdateSetElement; REMOVE a vector
+ * of attribute paths; use_lhs is the attribute-copy operand (a plain name).
+ * Values are MOVED up the productions (no NEW/FREE). */
+%type <ddbsh::engine::UpdateSetElement> set_element use_lhs
+%type <std::vector<ddbsh::engine::UpdateSetElement>> set_list
+%type <std::vector<std::string>> remove_list
 
 /* ---- SELECT + WHERE expression tree (W3 part 2) --------------------------
  * The original built a CSelectCommand plus a CWhere/CLogicalExpression tree in
@@ -378,6 +387,9 @@ get_command:
 write_command:
       insert_command     { $$ = std::move($1); }
     | replace_command    { $$ = std::move($1); }
+    | update_command     { $$ = std::move($1); }
+    | upsert_command     { $$ = std::move($1); }
+    | delete_command     { $$ = std::move($1); }
     ;
 
 show_command:
@@ -809,6 +821,149 @@ replace_command:
             cmd.ratelimit = std::move($9);
             cmd.return_value = $10;
             $$ = std::move(cmd);
+        }
+    ;
+
+/* ---- UPDATE / UPSERT / DELETE (W5 / 2c) ----------------------------------
+ * Faithful ports of the original update_command / upsert_command /
+ * delete_command (parser.y). The trailing ';' is consumed by `input`, so each
+ * form omits it. One UpdateCmd backs UPDATE and UPSERT (the `upsert` flag);
+ * UPDATE has both SET and REMOVE forms, UPSERT only SET (original parity).
+ * table_optional_index_name, optional_where_clause, optional_ratelimit, and
+ * optional_return_value are reused from SELECT/INSERT. */
+update_command:
+      K_UPDATE table_optional_index_name K_SET set_list
+      optional_where_clause optional_ratelimit optional_return_value
+        {
+            ddbsh::engine::UpdateCmd cmd;
+            cmd.table = std::move($2.table);
+            cmd.index = std::move($2.index);
+            cmd.mutation = ddbsh::engine::Mutation::set;
+            cmd.set = std::move($4);
+            cmd.where = std::move($5);
+            cmd.ratelimit = std::move($6);
+            cmd.return_value = $7;
+            cmd.upsert = false;
+            $$ = std::move(cmd);
+        }
+    | K_UPDATE table_optional_index_name K_REMOVE remove_list
+      optional_where_clause optional_ratelimit optional_return_value
+        {
+            ddbsh::engine::UpdateCmd cmd;
+            cmd.table = std::move($2.table);
+            cmd.index = std::move($2.index);
+            cmd.mutation = ddbsh::engine::Mutation::remove;
+            cmd.remove = std::move($4);
+            cmd.where = std::move($5);
+            cmd.ratelimit = std::move($6);
+            cmd.return_value = $7;
+            cmd.upsert = false;
+            $$ = std::move(cmd);
+        }
+    ;
+
+upsert_command:
+      K_UPSERT table_optional_index_name K_SET set_list
+      optional_where_clause optional_ratelimit optional_return_value
+        {
+            ddbsh::engine::UpdateCmd cmd;
+            cmd.table = std::move($2.table);
+            cmd.index = std::move($2.index);
+            cmd.mutation = ddbsh::engine::Mutation::set;
+            cmd.set = std::move($4);
+            cmd.where = std::move($5);
+            cmd.ratelimit = std::move($6);
+            cmd.return_value = $7;
+            cmd.upsert = true;
+            $$ = std::move(cmd);
+        }
+    ;
+
+delete_command:
+      K_DELETE K_FROM table_optional_index_name
+      optional_where_clause optional_ratelimit optional_return_value
+        {
+            ddbsh::engine::DeleteCmd cmd;
+            cmd.table = std::move($3.table);
+            cmd.index = std::move($3.index);
+            cmd.where = std::move($4);
+            cmd.ratelimit = std::move($5);
+            cmd.return_value = $6;
+            $$ = std::move(cmd);
+        }
+    ;
+
+set_list:
+      set_element
+        {
+            $$ = std::vector<ddbsh::engine::UpdateSetElement>{};
+            $$.push_back(std::move($1));
+        }
+    | set_list ',' set_element
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+remove_list:
+      lee_lhs
+        {
+            $$ = std::vector<std::string>{};
+            $$.push_back(std::move($1));
+        }
+    | remove_list ',' lee_lhs
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+/* The four SET assignment forms (arch §6): plain value, attribute copy,
+ * arithmetic (+/-), and if_not_exists(path,value). The if_not_exists form is
+ * FIDELITY (not a divergence): it is in the original's keyword table and
+ * grammar and the golden iut-ifne-* .exp require it (see UpdateSetElement in
+ * ast.hpp — this corrects arch §12 #5 / D-2c-15). */
+set_element:
+      lee_lhs T_EQUAL lee_rhs
+        {
+            ddbsh::engine::UpdateSetElement e;
+            e.lhs = std::move($1);
+            e.rhs_value = std::move($3);
+            $$ = std::move(e);
+        }
+    | lee_lhs T_EQUAL use_lhs '+' lee_rhs
+        {
+            $3.lhs = std::move($1);
+            $3.op = "+";
+            $3.rhs_value = std::move($5);
+            $$ = std::move($3);
+        }
+    | lee_lhs T_EQUAL use_lhs '-' lee_rhs
+        {
+            $3.lhs = std::move($1);
+            $3.op = "-";
+            $3.rhs_value = std::move($5);
+            $$ = std::move($3);
+        }
+    | lee_lhs T_EQUAL use_lhs
+        {
+            $3.lhs = std::move($1);
+            $$ = std::move($3);
+        }
+    ;
+
+/* use_lhs is the RHS operand that is NOT a plain value: either an
+ * attribute-copy name (`#b`) or an `if_not_exists(#p, :v)` call. It builds a
+ * partial UpdateSetElement (lhs filled in by set_element above), mirroring the
+ * original's use_lhs production. */
+use_lhs:
+      T_UNQUOTED_STRING
+        {
+            ddbsh::engine::UpdateSetElement e;
+            e.rhs_attribute = std::move($1);
+            $$ = std::move(e);
+        }
+    | K_IF_NOT_EXISTS '(' lee_lhs ',' lee_rhs ')'
+        {
+            ddbsh::engine::UpdateSetElement e;
+            e.if_not_exists_lhs = std::move($3);
+            e.if_not_exists_value = std::move($5);
+            $$ = std::move(e);
         }
     ;
 

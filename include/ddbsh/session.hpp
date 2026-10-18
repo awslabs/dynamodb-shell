@@ -27,6 +27,7 @@
 #include "ddbsh/config.hpp"
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/iddbclient.hpp"
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
 #include "ddbsh/statement.hpp"
 
@@ -80,10 +81,31 @@ public:
 
     /// Execute a parsed Statement, driving the IDDBClient as needed. Returns
     /// structured data; the engine writes nothing.
+    ///
+    /// This BUFFERING overload collects every fragment the statement emits into
+    /// one ExecOutcome: zero fragments yield the command's natural single
+    /// outcome (e.g. EmptyOutcome), exactly one yields that fragment, and more
+    /// than one yields a MultiOutcome carrying them in order (e.g. a multi-row
+    /// INSERT). On failure it returns the Error and the fragments produced
+    /// before the failure are discarded; an embedder that needs the original's
+    /// partial-output-then-error behavior (the CLI) uses the streaming overload
+    /// below. (D-2c-12.)
     Result<ExecOutcome> execute(const Statement& statement);
 
-    /// Convenience: parse then execute.
+    /// Execute a parsed Statement, emitting each outcome fragment to `sink` in
+    /// production order as it is produced, then returning success or the Error
+    /// that stopped execution. Fragments already emitted to the sink before a
+    /// failure are the command's partial output (e.g. a multi-row INSERT that
+    /// writes k rows then fails emits k WriteOutcome fragments and returns the
+    /// Error). The engine writes to no stream; the sink is the embedder's
+    /// (D-2c-12).
+    Result<void> execute(const Statement& statement, OutcomeSink& sink);
+
+    /// Convenience: parse then execute (buffering).
     Result<ExecOutcome> run(std::string_view text);
+
+    /// Convenience: parse then execute (streaming to `sink`).
+    Result<void> run(std::string_view text, OutcomeSink& sink);
 
 private:
     struct Impl;
