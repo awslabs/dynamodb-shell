@@ -563,8 +563,9 @@ create_table_command:
  * a list of update GsiUpdates. The combined `SET billing ... UPDATE GSI` form
  * applies the D-2e-6 on-demand gate in its action: when the table billing mode
  * is on-demand the GSI updates are dropped (the index throughput is implied)
- * and a flag records the (unpinned) informational diagnostic. The REPLICA / TTL
- * / PITR forms land in 2e-3..2e-5.
+ * and a flag records the (unpinned) informational diagnostic. SET TTL (2e-3)
+ * builds an AlterTtlCmd (DescribeTimeToLive + UpdateTimeToLive); the REPLICA /
+ * PITR forms land in 2e-4..2e-5.
  *
  * LALR(1): the first tokens after K_SET are all distinct (K_BILLING / K_WARM /
  * K_SSE / K_TABLE / K_STREAM / K_DELETION / K_TTL / K_PITR). The shared prefix
@@ -654,6 +655,26 @@ alter_table_command:
             ddbsh::engine::AlterTableCmd cmd;
             cmd.table = std::move($3);
             cmd.gsi_updates = std::move($7);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_TTL K_DISABLED
+        {
+            /* SET TTL DISABLED: builds an AlterTtlCmd (DescribeTTL +
+             * UpdateTimeToLive, D-2e-7), a distinct ALTER node sharing the one
+             * StatementKind::alter_table. No attribute on disable — the executor
+             * reuses the existing TTL attribute name from the probe. */
+            ddbsh::engine::AlterTtlCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = false;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_TTL '(' string ')'
+        {
+            /* SET TTL ( attr ): enable TTL on the named attribute. */
+            ddbsh::engine::AlterTtlCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = true;
+            cmd.attribute = std::move($7);
             $$ = std::move(cmd);
         }
     ;

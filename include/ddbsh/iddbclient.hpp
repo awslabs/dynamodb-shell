@@ -238,6 +238,22 @@ struct UpdateTableIn {
 };
 struct UpdateTableOut {};
 
+// ---- UpdateTimeToLive ------------------------------------------------------
+// ALTER TABLE SET TTL ( attr ) / SET TTL DISABLED issues UpdateTimeToLive after
+// a DescribeTimeToLive probe (arch §7, the original CUpdateTableTTLCommand).
+// `enabled` sets TimeToLiveSpecification.Enabled; `attribute_name` is the TTL
+// attribute — the user-supplied name on enable, or the existing name (read back
+// from DescribeTimeToLive) on disable. The SDK-free struct keeps the seam
+// AWS-type-free (D11); the CLI adapter translates it to
+// Aws::DynamoDB::Model::UpdateTimeToLiveRequest and composes the byte-exact
+// "Error updating TTL. ..." failure message the original logged (D-2e-13).
+struct UpdateTimeToLiveIn {
+    std::string table_name;
+    bool enabled = false;
+    std::string attribute_name;
+};
+struct UpdateTimeToLiveOut {};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -473,10 +489,10 @@ struct TransactWriteItemsOut {};
 /// raw SerializePayload() string; the engine never sees an Aws:: type. One
 /// alternative per in-scope API the EXPLAIN paths can emit (arch §7/§8).
 using ExplainRequest =
-    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, UpdateTableIn, DeleteTableIn,
-                 DescribeTableIn, DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
-                 DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
-                 TransactWriteItemsIn>;
+    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, UpdateTableIn,
+                 UpdateTimeToLiveIn, DeleteTableIn, DescribeTableIn, DescribeTimeToLiveIn,
+                 DescribeContinuousBackupsIn, DescribeTableReplicaAutoScalingIn, UpdateItemIn,
+                 DeleteItemIn, TransactGetItemsIn, TransactWriteItemsIn>;
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
@@ -496,6 +512,13 @@ public:
     /// is returned as an Error (the adapter composes the byte-exact
     /// "Update Table failed. ..." message the original logged, D-2e-13).
     virtual Result<UpdateTableOut> update_table(const UpdateTableIn&) = 0;
+
+    /// UpdateTimeToLive for an ALTER TABLE SET TTL ... (arch §7, the original
+    /// CUpdateTableTTLCommand). The executor probes DescribeTimeToLive first,
+    /// then calls this (skipping it when disabling an already-disabled table —
+    /// D-2e-7). A service failure is returned as an Error (the adapter composes
+    /// the byte-exact "Error updating TTL. ..." message, D-2e-13).
+    virtual Result<UpdateTimeToLiveOut> update_time_to_live(const UpdateTimeToLiveIn&) = 0;
 
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;

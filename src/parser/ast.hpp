@@ -348,12 +348,26 @@ struct AlterTableCmd {
     bool ignored_gsi_on_demand = false;
 };
 
+/// ALTER TABLE <table> SET TTL ( attr ) | SET TTL DISABLED (DescribeTimeToLive
+/// + UpdateTimeToLive; the original CUpdateTableTTLCommand). A second ALTER AST
+/// node sharing the one StatementKind::alter_table (D-2e-1). `enabled` is true
+/// for `SET TTL ( attr )` (the attribute carries the user-supplied name); false
+/// for `SET TTL DISABLED` (the attribute is empty — on disable the executor
+/// reuses the existing TTL attribute name from the DescribeTimeToLive response,
+/// exactly as the original did). D-2e-7.
+struct AlterTtlCmd {
+    std::string table;
+    bool enabled = false;
+    std::string attribute;  ///< the TTL attribute name; set only when enabled
+};
+
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
 
 /// The parsed command. Grows one alternative per ported command family.
-using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
-                                 DescribeCmd, DropTableCmd, CreateTableCmd, AlterTableCmd,
-                                 InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+using CommandNode =
+    std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
+                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, InsertCmd, SelectCmd,
+                 UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -399,6 +413,8 @@ inline StatementKind kind_of(const CommandNode& command) {
             } else if constexpr (std::is_same_v<T, CreateTableCmd>) {
                 return StatementKind::create_table;
             } else if constexpr (std::is_same_v<T, AlterTableCmd>) {
+                return StatementKind::alter_table;
+            } else if constexpr (std::is_same_v<T, AlterTtlCmd>) {
                 return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, InsertCmd>) {
                 return StatementKind::insert;

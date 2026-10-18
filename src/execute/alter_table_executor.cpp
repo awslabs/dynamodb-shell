@@ -62,4 +62,48 @@ Result<ExecOutcome> execute_alter_table_explain(const AlterTableCmd& cmd, IDDBCl
     return ExecOutcome{std::move(outcome)};
 }
 
+Result<ExecOutcome> execute_alter_ttl(const AlterTtlCmd& cmd, IDDBClient& client, bool explain) {
+    // (1) DescribeTimeToLive is ALWAYS called first — even under EXPLAIN — and a
+    // failure ends the command with no output (the original's has_ttl()==false
+    // -> return -1 path). D-2e-7.
+    auto probe = client.describe_time_to_live(DescribeTimeToLiveIn{cmd.table});
+    if (!probe.has_value()) {
+        return fail(probe.error());
+    }
+
+    // (2) Disabling an already-disabled table short-circuits to ALTER with NO
+    // UpdateTimeToLive call. The original performs this check BEFORE its
+    // explaining() branch, so it fires even when explaining — reproduced here
+    // (so EXPLAIN of a redundant disable emits the ALTER token, not a block).
+    if (probe->status == "DISABLED" && !cmd.enabled) {
+        return ExecOutcome{StatusOutcome{"ALTER"}};
+    }
+
+    // (3) Build the UpdateTimeToLive request: enable uses the user-supplied
+    // attribute; disable reuses the existing attribute name from the probe.
+    UpdateTimeToLiveIn request;
+    request.table_name = cmd.table;
+    request.enabled = cmd.enabled;
+    request.attribute_name = cmd.enabled ? cmd.attribute : probe->attribute_name;
+
+    if (explain) {
+        // EXPLAIN serializes ONLY the UpdateTimeToLive request (the live probe
+        // above is not serialized), with NO trailing status — D-2e-11.
+        auto body = client.explain_request(request);
+        if (!body.has_value()) {
+            return fail(body.error());
+        }
+        ExplainOutcome outcome;
+        outcome.blocks.push_back(
+            ExplainBlock{"UpdateTimeToLive", std::move(*body), ExplainBlock::Format::pretty});
+        return ExecOutcome{std::move(outcome)};
+    }
+
+    auto updated = client.update_time_to_live(request);
+    if (!updated.has_value()) {
+        return fail(updated.error());
+    }
+    return ExecOutcome{StatusOutcome{"ALTER"}};
+}
+
 }  // namespace ddbsh::engine

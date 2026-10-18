@@ -1,7 +1,8 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// alter_table_exec_test.cpp — 2e-1 ALTER TABLE SET (non-GSI) execution tests.
+// alter_table_exec_test.cpp — ALTER TABLE execution tests (2e-1 SET non-GSI,
+// 2e-2 GSI create/update/drop, 2e-3 SET TTL).
 //
 // Exercises the UpdateTable path offline via FakeDDBClient:
 //   * each SET clause (billing/throughput, warm, sse, stream, table class,
@@ -385,6 +386,112 @@ TEST(AlterTableExec, ExplainCreateGsiEmitsUpdateTableBlockNoTrailingStatus) {
     ASSERT_EQ(req->attribute_definitions.size(), 1u);
     EXPECT_EQ(req->attribute_definitions[0].name, "b");
     EXPECT_TRUE(client.update_table_requests().empty());
+}
+
+// ---- 2e-3: SET TTL (DescribeTimeToLive + UpdateTimeToLive, D-2e-7) ----------
+
+TEST(AlterTableExec, SetTtlEnableUsesUserAttribute) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // Default probe status is DISABLED; enabling issues UpdateTimeToLive with
+    // Enabled=true and the user-supplied attribute name.
+    auto out = session.run("alter table t set ttl ( expiry );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    ASSERT_EQ(client.update_ttl_requests().size(), 1u);
+    const auto& req = client.update_ttl_requests()[0];
+    EXPECT_EQ(req.table_name, "t");
+    EXPECT_TRUE(req.enabled);
+    EXPECT_EQ(req.attribute_name, "expiry");
+}
+
+TEST(AlterTableExec, SetTtlDisableReusesExistingAttribute) {
+    ddbsh::test::FakeDDBClient client;
+    // The table has TTL ENABLED on attribute "ttlattr"; disabling must reuse
+    // that existing name from the probe (the original sets AttributeName from
+    // the DescribeTimeToLive response on disable).
+    client.set_ttl("t", ddbsh::TimeToLiveOut{"ENABLED", "ttlattr"});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set ttl disabled;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+
+    ASSERT_EQ(client.update_ttl_requests().size(), 1u);
+    const auto& req = client.update_ttl_requests()[0];
+    EXPECT_FALSE(req.enabled);
+    EXPECT_EQ(req.attribute_name, "ttlattr");
+}
+
+TEST(AlterTableExec, SetTtlDisableWhenAlreadyDisabledShortCircuits) {
+    ddbsh::test::FakeDDBClient client;
+    // Default probe status is DISABLED; disabling an already-disabled table
+    // short-circuits to ALTER with NO UpdateTimeToLive call (D-2e-7 #2).
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set ttl disabled;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+    EXPECT_TRUE(client.update_ttl_requests().empty());
+}
+
+TEST(AlterTableExec, SetTtlDescribeFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    // A failed DescribeTimeToLive probe ends the command with an Error and no
+    // UpdateTimeToLive call (the original's has_ttl()==false -> return -1).
+    client.set_ttl_error(
+        "t", Error{Errc::service_error, "describe ttl failed", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set ttl ( expiry );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_TRUE(client.update_ttl_requests().empty());
+}
+
+TEST(AlterTableExec, SetTtlUpdateFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_update_ttl_error(
+        Error{Errc::service_error, "update ttl failed", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t set ttl ( expiry );");
+    ASSERT_FALSE(out.has_value());
+    // The probe succeeded, so UpdateTimeToLive was attempted before failing.
+    EXPECT_EQ(client.update_ttl_requests().size(), 1u);
+}
+
+TEST(AlterTableExec, ExplainSetTtlEmitsUpdateTimeToLiveBlockNoTrailingStatus) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("explain alter table t set ttl ( expiry );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "UpdateTimeToLive({\n   \"stub\":   \"explain\"\n})\n");
+
+    // EXPLAIN serializes only the UpdateTimeToLive request (the live probe is
+    // NOT serialized) and issues no mutation.
+    ASSERT_EQ(client.explain_requests().size(), 1u);
+    const auto* req = std::get_if<ddbsh::UpdateTimeToLiveIn>(&client.explain_requests()[0]);
+    ASSERT_NE(req, nullptr);
+    EXPECT_TRUE(req->enabled);
+    EXPECT_EQ(req->attribute_name, "expiry");
+    EXPECT_TRUE(client.update_ttl_requests().empty());
+}
+
+TEST(AlterTableExec, ExplainSetTtlDisableWhenAlreadyDisabledEmitsAlterToken) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // The original performs the already-disabled short-circuit BEFORE its
+    // explaining() branch, so EXPLAIN of a redundant disable emits the ALTER
+    // token (not an UpdateTimeToLive block) — reproduced for fidelity.
+    auto out = session.run("explain alter table t set ttl disabled;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "ALTER\n");
+    EXPECT_TRUE(client.explain_requests().empty());
+    EXPECT_TRUE(client.update_ttl_requests().empty());
 }
 
 }  // namespace

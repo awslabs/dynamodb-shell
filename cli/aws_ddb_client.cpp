@@ -38,11 +38,13 @@
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
 #include <aws/dynamodb/model/ScanRequest.h>
+#include <aws/dynamodb/model/TimeToLiveSpecification.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
 #include <aws/dynamodb/model/TransactWriteItemsRequest.h>
 #include <aws/dynamodb/model/UpdateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/UpdateItemRequest.h>
 #include <aws/dynamodb/model/UpdateTableRequest.h>
+#include <aws/dynamodb/model/UpdateTimeToLiveRequest.h>
 
 namespace ddbsh::cli {
 
@@ -1032,6 +1034,21 @@ Aws::DynamoDB::Model::DeleteTableRequest build_delete_table(const DeleteTableIn&
     return request;
 }
 
+// Mirrors the original CUpdateTableTTLCommand (arch §7): one
+// UpdateTimeToLiveRequest carrying a TimeToLiveSpecification{Enabled,
+// AttributeName}. The executor supplies the effective attribute name (the
+// user's on enable, the existing one on disable), so this is a flat translation.
+Aws::DynamoDB::Model::UpdateTimeToLiveRequest build_update_time_to_live(
+    const UpdateTimeToLiveIn& in) {
+    Aws::DynamoDB::Model::UpdateTimeToLiveRequest request;
+    request.SetTableName(in.table_name);
+    Aws::DynamoDB::Model::TimeToLiveSpecification spec;
+    spec.SetEnabled(in.enabled);
+    spec.SetAttributeName(in.attribute_name);
+    request.SetTimeToLiveSpecification(spec);
+    return request;
+}
+
 }  // namespace
 
 Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
@@ -1064,6 +1081,25 @@ Result<UpdateTableOut> AwsDDBClient::update_table(const UpdateTableIn& in) {
                           std::string(err.GetRequestId().c_str())});
     }
     return UpdateTableOut{};
+}
+
+Result<UpdateTimeToLiveOut> AwsDDBClient::update_time_to_live(const UpdateTimeToLiveIn& in) {
+    auto request = build_update_time_to_live(in);
+    auto outcome = client_->UpdateTimeToLive(request);
+    if (!outcome.IsSuccess()) {
+        // Compose the byte-exact message the original logged on an
+        // UpdateTimeToLive failure: "Error updating TTL. <ExceptionName>.
+        // <RequestId>.\n\t<Message>" (update_table_ttl.cpp logerror). Unpinned
+        // by golden (ipt/icd assert success paths), D-2e-13.
+        const auto& err = outcome.GetError();
+        std::string message = "Error updating TTL. " + std::string(err.GetExceptionName().c_str()) +
+                              ". " + std::string(err.GetRequestId().c_str()) + ".\n\t" +
+                              std::string(err.GetMessage().c_str());
+        return fail(Error{Errc::service_error, std::move(message),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return UpdateTimeToLiveOut{};
 }
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
@@ -1453,6 +1489,8 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                 return payload(build_create_table(in));
             } else if constexpr (std::is_same_v<T, UpdateTableIn>) {
                 return payload(build_update_table(in));
+            } else if constexpr (std::is_same_v<T, UpdateTimeToLiveIn>) {
+                return payload(build_update_time_to_live(in));
             } else if constexpr (std::is_same_v<T, DeleteTableIn>) {
                 return payload(build_delete_table(in));
             } else if constexpr (std::is_same_v<T, DescribeTableIn>) {

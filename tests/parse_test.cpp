@@ -657,4 +657,67 @@ TEST(Parse, ExplainSelectSetsFlag) {
     EXPECT_TRUE(stmt.explain());
 }
 
+// ---- ALTER TABLE combined `SET billing ... UPDATE GSI` gate (D-2e-6) --------
+// The one piece of logic unique to 2e-2 lives in the grammar action: a combined
+// `SET billing ... UPDATE GSI (...)` whose table billing mode is PROVISIONED
+// keeps the GSI updates; on-demand drops them (the index throughput is implied)
+// and records the informational diagnostic. The only prior coverage set the
+// flag on a hand-built node, bypassing the grammar — these tests drive the
+// decision through the parser itself (Should-fix, 2e-2 review).
+
+TEST(Parse, AlterTableCombinedProvisionedKeepsGsiUpdates) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "alter table t set billing mode provisioned ( 100 rcu, 200 wcu ) "
+                         "update gsi ( g1 set billing mode provisioned ( 10 rcu, 20 wcu ) );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& alter = node_of<ddbsh::engine::AlterTableCmd>(stmt);
+    ASSERT_TRUE(alter.billing.has_value());
+    EXPECT_EQ(alter.billing->mode, ddbsh::engine::BillingMode::provisioned);
+    EXPECT_FALSE(alter.ignored_gsi_on_demand);
+    ASSERT_EQ(alter.gsi_updates.size(), 1u);
+    EXPECT_EQ(alter.gsi_updates[0].action, ddbsh::engine::GsiUpdate::Action::update);
+    EXPECT_EQ(alter.gsi_updates[0].index_name, "g1");
+}
+
+TEST(Parse, AlterTableCombinedOnDemandDropsGsiUpdates) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt =
+        parse_ok(session,
+                 "alter table t set billing mode on demand "
+                 "update gsi ( g1 set billing mode on demand throughput (10 rcu, 20 wcu) );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& alter = node_of<ddbsh::engine::AlterTableCmd>(stmt);
+    ASSERT_TRUE(alter.billing.has_value());
+    EXPECT_EQ(alter.billing->mode, ddbsh::engine::BillingMode::pay_per_request);
+    EXPECT_TRUE(alter.ignored_gsi_on_demand);  // gate fired
+    EXPECT_TRUE(alter.gsi_updates.empty());    // dropped by the gate
+}
+
+// ---- ALTER TABLE SET TTL (2e-3) builds an AlterTtlCmd -----------------------
+
+TEST(Parse, AlterTableSetTtlEnableBuildsTtlNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set ttl ( expiry );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& ttl = node_of<ddbsh::engine::AlterTtlCmd>(stmt);
+    EXPECT_EQ(ttl.table, "t");
+    EXPECT_TRUE(ttl.enabled);
+    EXPECT_EQ(ttl.attribute, "expiry");
+}
+
+TEST(Parse, AlterTableSetTtlDisableBuildsTtlNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set ttl disabled;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& ttl = node_of<ddbsh::engine::AlterTtlCmd>(stmt);
+    EXPECT_EQ(ttl.table, "t");
+    EXPECT_FALSE(ttl.enabled);
+    EXPECT_TRUE(ttl.attribute.empty());
+}
+
 }  // namespace
