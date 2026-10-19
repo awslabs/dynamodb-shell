@@ -23,25 +23,35 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
+#include <aws/dynamodb/model/BackupStatus.h>
+#include <aws/dynamodb/model/BackupType.h>
+#include <aws/dynamodb/model/BackupTypeFilter.h>
+#include <aws/dynamodb/model/CreateBackupRequest.h>
 #include <aws/dynamodb/model/CreateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/CreateReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
+#include <aws/dynamodb/model/DeleteBackupRequest.h>
 #include <aws/dynamodb/model/DeleteGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/DeleteItemRequest.h>
 #include <aws/dynamodb/model/DeleteReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
+#include <aws/dynamodb/model/DescribeBackupRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
+#include <aws/dynamodb/model/DescribeLimitsRequest.h>
 #include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/DescribeTimeToLiveRequest.h>
 #include <aws/dynamodb/model/GetItemRequest.h>
 #include <aws/dynamodb/model/GlobalSecondaryIndexUpdate.h>
+#include <aws/dynamodb/model/ListBackupsRequest.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
 #include <aws/dynamodb/model/ProvisionedThroughputOverride.h>
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
 #include <aws/dynamodb/model/ReplicaGlobalSecondaryIndex.h>
 #include <aws/dynamodb/model/ReplicationGroupUpdate.h>
+#include <aws/dynamodb/model/RestoreTableFromBackupRequest.h>
+#include <aws/dynamodb/model/RestoreTableToPointInTimeRequest.h>
 #include <aws/dynamodb/model/ScanRequest.h>
 #include <aws/dynamodb/model/TimeToLiveSpecification.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
@@ -1146,6 +1156,73 @@ Aws::DynamoDB::Model::UpdateContinuousBackupsRequest build_update_continuous_bac
     return request;
 }
 
+// ---- Backup / Restore request builders (2f) --------------------------------
+
+Aws::DynamoDB::Model::CreateBackupRequest build_create_backup(const CreateBackupIn& in) {
+    Aws::DynamoDB::Model::CreateBackupRequest request;
+    request.SetTableName(in.table_name);
+    request.SetBackupName(in.backup_name);
+    return request;
+}
+
+Aws::DynamoDB::Model::DeleteBackupRequest build_delete_backup(const DeleteBackupIn& in) {
+    Aws::DynamoDB::Model::DeleteBackupRequest request;
+    request.SetBackupArn(in.backup_arn);
+    return request;
+}
+
+Aws::DynamoDB::Model::DescribeBackupRequest build_describe_backup(const DescribeBackupIn& in) {
+    Aws::DynamoDB::Model::DescribeBackupRequest request;
+    request.SetBackupArn(in.backup_arn);
+    return request;
+}
+
+Aws::DynamoDB::Model::RestoreTableFromBackupRequest build_restore_from_backup(
+    const RestoreFromBackupIn& in) {
+    Aws::DynamoDB::Model::RestoreTableFromBackupRequest request;
+    request.SetTargetTableName(in.target_table_name);
+    request.SetBackupArn(in.backup_arn);
+    return request;
+}
+
+// Build the RestoreTableToPointInTime request. The restore timestamp is parsed
+// from ISO-8601 (the original restore_pitr.cpp ctor did the same via
+// Aws::Utils::DateTime). `ok` reports whether the parse succeeded so the caller
+// can surface a malformed timestamp as an Error (D-2f-4) rather than silently
+// sending an invalid DateTime.
+Aws::DynamoDB::Model::RestoreTableToPointInTimeRequest build_restore_to_pitr(
+    const RestoreToPitrIn& in, bool& ok) {
+    Aws::DynamoDB::Model::RestoreTableToPointInTimeRequest request;
+    request.SetSourceTableName(in.source_table_name);
+    request.SetTargetTableName(in.target_table_name);
+    const Aws::Utils::DateTime when(Aws::String(in.restore_datetime.c_str()),
+                                    Aws::Utils::DateFormat::ISO_8601);
+    ok = when.WasParseSuccessful();
+    request.SetRestoreDateTime(when);
+    return request;
+}
+
+Aws::DynamoDB::Model::DescribeLimitsRequest build_describe_limits(const DescribeLimitsIn&) {
+    return Aws::DynamoDB::Model::DescribeLimitsRequest{};
+}
+
+Aws::DynamoDB::Model::ListBackupsRequest build_list_backups(const ListBackupsIn& in) {
+    Aws::DynamoDB::Model::ListBackupsRequest request;
+    if (in.table_name.has_value()) {
+        request.SetTableName(*in.table_name);
+    }
+    if (in.backup_type.has_value()) {
+        request.SetBackupType(
+            Aws::DynamoDB::Model::BackupTypeFilterMapper::GetBackupTypeFilterForName(
+                *in.backup_type));
+    }
+    request.SetLimit(in.limit);
+    if (in.exclusive_start_backup_arn.has_value()) {
+        request.SetExclusiveStartBackupArn(*in.exclusive_start_backup_arn);
+    }
+    return request;
+}
+
 }  // namespace
 
 Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
@@ -1218,6 +1295,157 @@ Result<UpdateContinuousBackupsOut> AwsDDBClient::update_continuous_backups(
                           std::string(err.GetRequestId().c_str())});
     }
     return UpdateContinuousBackupsOut{};
+}
+
+// ---- Backup / Restore ops (2f) ---------------------------------------------
+
+Result<CreateBackupOut> AwsDDBClient::create_backup(const CreateBackupIn& in) {
+    auto request = build_create_backup(in);
+    auto outcome = client_->CreateBackup(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return CreateBackupOut{};
+}
+
+Result<DeleteBackupOut> AwsDDBClient::delete_backup(const DeleteBackupIn& in) {
+    auto request = build_delete_backup(in);
+    auto outcome = client_->DeleteBackup(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return DeleteBackupOut{};
+}
+
+Result<DescribeBackupOut> AwsDDBClient::describe_backup(const DescribeBackupIn& in) {
+    auto request = build_describe_backup(in);
+    auto outcome = client_->DescribeBackup(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& bd = outcome.GetResult().GetBackupDescription();
+    const auto& std_ = bd.GetSourceTableDetails();
+    DescribeBackupOut out;
+    out.source_table_name = std_.GetTableName().c_str();
+    out.source_table_id = std_.GetTableId().c_str();
+    out.source_table_arn = std_.GetTableArn().c_str();
+    out.table_size_bytes = std_.GetTableSizeBytes();
+    out.item_count = std_.GetItemCount();
+    for (const auto& kse : std_.GetKeySchema()) {
+        out.key_schema.push_back(BackupKeySchemaElement{
+            Aws::DynamoDB::Model::KeyTypeMapper::GetNameForKeyType(kse.GetKeyType()).c_str(),
+            kse.GetAttributeName().c_str()});
+    }
+    out.table_creation_datetime =
+        std_.GetTableCreationDateTime().ToGmtString(Aws::Utils::DateFormat::ISO_8601).c_str();
+    if (std_.BillingModeHasBeenSet()) {
+        out.billing_mode =
+            Aws::DynamoDB::Model::BillingModeMapper::GetNameForBillingMode(std_.GetBillingMode())
+                .c_str();
+    }
+    if (std_.ProvisionedThroughputHasBeenSet()) {
+        out.provisioned = std::make_pair(std_.GetProvisionedThroughput().GetReadCapacityUnits(),
+                                         std_.GetProvisionedThroughput().GetWriteCapacityUnits());
+    }
+    const auto& bdet = bd.GetBackupDetails();
+    out.backup_name = bdet.GetBackupName().c_str();
+    out.backup_arn = bdet.GetBackupArn().c_str();
+    out.backup_size_bytes = bdet.GetBackupSizeBytes();
+    out.backup_status =
+        Aws::DynamoDB::Model::BackupStatusMapper::GetNameForBackupStatus(bdet.GetBackupStatus())
+            .c_str();
+    out.backup_type =
+        Aws::DynamoDB::Model::BackupTypeMapper::GetNameForBackupType(bdet.GetBackupType()).c_str();
+    out.backup_creation_datetime =
+        bdet.GetBackupCreationDateTime().ToGmtString(Aws::Utils::DateFormat::ISO_8601).c_str();
+    out.backup_expiry_datetime =
+        bdet.GetBackupExpiryDateTime().ToGmtString(Aws::Utils::DateFormat::ISO_8601).c_str();
+    return out;
+}
+
+Result<RestoreFromBackupOut> AwsDDBClient::restore_table_from_backup(
+    const RestoreFromBackupIn& in) {
+    auto request = build_restore_from_backup(in);
+    auto outcome = client_->RestoreTableFromBackup(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return RestoreFromBackupOut{};
+}
+
+Result<RestoreToPitrOut> AwsDDBClient::restore_table_to_point_in_time(const RestoreToPitrIn& in) {
+    bool parsed = true;
+    auto request = build_restore_to_pitr(in, parsed);
+    if (!parsed) {
+        // A malformed restore timestamp never reaches the service — surface it
+        // as an Error (D-2f-4); the library never aborts on user input (D12).
+        return fail(Errc::invalid_argument, "Invalid restore timestamp: " + in.restore_datetime);
+    }
+    auto outcome = client_->RestoreTableToPointInTime(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return RestoreToPitrOut{};
+}
+
+Result<DescribeLimitsOut> AwsDDBClient::describe_limits(const DescribeLimitsIn& in) {
+    auto request = build_describe_limits(in);
+    auto outcome = client_->DescribeLimits(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& result = outcome.GetResult();
+    DescribeLimitsOut out;
+    out.account_max_rcu = result.GetAccountMaxReadCapacityUnits();
+    out.account_max_wcu = result.GetAccountMaxWriteCapacityUnits();
+    out.table_max_rcu = result.GetTableMaxReadCapacityUnits();
+    out.table_max_wcu = result.GetTableMaxWriteCapacityUnits();
+    return out;
+}
+
+Result<ListBackupsOut> AwsDDBClient::list_backups(const ListBackupsIn& in) {
+    auto request = build_list_backups(in);
+    auto outcome = client_->ListBackups(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& result = outcome.GetResult();
+    ListBackupsOut out;
+    for (const auto& s : result.GetBackupSummaries()) {
+        out.summaries.push_back(BackupSummaryRow{
+            s.GetTableName().c_str(), s.GetBackupName().c_str(),
+            Aws::DynamoDB::Model::BackupStatusMapper::GetNameForBackupStatus(s.GetBackupStatus())
+                .c_str(),
+            s.GetBackupArn().c_str(),
+            s.GetBackupCreationDateTime().ToGmtString(Aws::Utils::DateFormat::ISO_8601).c_str(),
+            s.GetBackupExpiryDateTime().ToGmtString(Aws::Utils::DateFormat::ISO_8601).c_str()});
+    }
+    const std::string cursor = result.GetLastEvaluatedBackupArn().c_str();
+    if (!cursor.empty()) {
+        out.last_evaluated_backup_arn = cursor;
+    }
+    return out;
 }
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
@@ -1426,6 +1654,7 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
                                    table.GetStreamSpecification().GetStreamViewType())
                                    .c_str();
     }
+    out.stream_specification_set = table.StreamSpecificationHasBeenSet();
     if (table.SSEDescriptionHasBeenSet()) {
         out.sse_status = Aws::DynamoDB::Model::SSEStatusMapper::GetNameForSSEStatus(
                              table.GetSSEDescription().GetStatus())
@@ -1633,6 +1862,22 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                 return payload(build_transact_get_items(in));
             } else if constexpr (std::is_same_v<T, TransactWriteItemsIn>) {
                 return payload(build_transact_write_items(in));
+            } else if constexpr (std::is_same_v<T, CreateBackupIn>) {
+                return payload(build_create_backup(in));
+            } else if constexpr (std::is_same_v<T, DeleteBackupIn>) {
+                return payload(build_delete_backup(in));
+            } else if constexpr (std::is_same_v<T, DescribeBackupIn>) {
+                return payload(build_describe_backup(in));
+            } else if constexpr (std::is_same_v<T, RestoreFromBackupIn>) {
+                return payload(build_restore_from_backup(in));
+            } else if constexpr (std::is_same_v<T, RestoreToPitrIn>) {
+                bool parsed = true;
+                auto request = build_restore_to_pitr(in, parsed);
+                if (!parsed) {
+                    return fail(Errc::invalid_argument,
+                                "Invalid restore timestamp: " + in.restore_datetime);
+                }
+                return payload(request);
             } else {
                 static_assert(sizeof(T) == 0, "unhandled ExplainRequest alternative");
             }

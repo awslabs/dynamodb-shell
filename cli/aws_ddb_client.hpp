@@ -48,6 +48,13 @@ public:
     Result<UpdateTimeToLiveOut> update_time_to_live(const UpdateTimeToLiveIn&) override;
     Result<UpdateContinuousBackupsOut> update_continuous_backups(
         const UpdateContinuousBackupsIn&) override;
+    Result<CreateBackupOut> create_backup(const CreateBackupIn&) override;
+    Result<DeleteBackupOut> delete_backup(const DeleteBackupIn&) override;
+    Result<DescribeBackupOut> describe_backup(const DescribeBackupIn&) override;
+    Result<RestoreFromBackupOut> restore_table_from_backup(const RestoreFromBackupIn&) override;
+    Result<RestoreToPitrOut> restore_table_to_point_in_time(const RestoreToPitrIn&) override;
+    Result<DescribeLimitsOut> describe_limits(const DescribeLimitsIn&) override;
+    Result<ListBackupsOut> list_backups(const ListBackupsIn&) override;
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;

@@ -15,12 +15,14 @@
 
 #include "ddbsh/version.hpp"
 #include "execute/alter_table_executor.hpp"
+#include "execute/backup_restore_executor.hpp"
 #include "execute/create_table_executor.hpp"
 #include "execute/delete_executor.hpp"
 #include "execute/describe_executor.hpp"
 #include "execute/drop_table_executor.hpp"
 #include "execute/insert_executor.hpp"
 #include "execute/select_executor.hpp"
+#include "execute/show_commands_executor.hpp"
 #include "execute/show_tables_executor.hpp"
 #include "execute/transact_executor.hpp"
 #include "execute/update_executor.hpp"
@@ -271,6 +273,38 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
             }
             return emit_single(engine::execute_describe(
                 std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client));
+        case StatementKind::create_backup:
+            // BACKUP TABLE ... CALLED ... — a ddl command, so explainable.
+            return emit_single(engine::execute_create_backup(
+                std::get<engine::CreateBackupCmd>(statement.ast()->command), impl_->client,
+                statement.ast()->explain));
+        case StatementKind::drop_backup:
+            return emit_single(engine::execute_drop_backup(
+                std::get<engine::DropBackupCmd>(statement.ast()->command), impl_->client,
+                statement.ast()->explain));
+        case StatementKind::describe_backup:
+            return emit_single(engine::execute_describe_backup(
+                std::get<engine::DescribeBackupCmd>(statement.ast()->command), impl_->client,
+                statement.ast()->explain));
+        case StatementKind::restore:
+            return emit_single(
+                engine::execute_restore(std::get<engine::RestoreCmd>(statement.ast()->command),
+                                        impl_->client, statement.ast()->explain));
+        case StatementKind::show_backups:
+            // SHOW commands are not explainable (grammar: show_command is not in
+            // the explainable set, matching the oracle — EXPLAIN SHOW ... is a
+            // syntax error), so there is no explain path here.
+            return emit_single(engine::execute_show_backups(
+                std::get<engine::ShowBackupsCmd>(statement.ast()->command), impl_->client));
+        case StatementKind::show_limits:
+            // The `Region:` line is sourced from the session's current region
+            // (D-2f-9), threaded as a parameter — not from the client seam.
+            return emit_single(engine::execute_show_limits(
+                std::get<engine::ShowLimitsCmd>(statement.ast()->command), impl_->client,
+                impl_->config.region));
+        case StatementKind::show_create_table:
+            return emit_single(engine::execute_show_create_table(
+                std::get<engine::ShowCreateTableCmd>(statement.ast()->command), impl_->client));
     }
     return fail(Errc::internal_error, "unhandled statement kind");
 }

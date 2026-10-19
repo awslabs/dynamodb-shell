@@ -397,13 +397,75 @@ struct AlterReplicaCmd {
     ReplicaUpdate replica;
 };
 
+// ---- BACKUP / RESTORE / SHOW (2f) ------------------------------------------
+
+/// BACKUP TABLE <table> CALLED <backup_name> (CreateBackup; the original
+/// create_backup.cpp). On success -> StatusOutcome{"BACKUP"}.
+struct CreateBackupCmd {
+    std::string table;
+    std::string backup_name;
+};
+
+/// DROP BACKUP <arn> (DeleteBackup; the original drop_backup.cpp). On success
+/// -> StatusOutcome{"DROP BACKUP"}. EXPLAIN emits `DeleteBackup(...)` (the stale
+/// arch §12 #1 "DescribeBackup" claim is wrong — D-2f-7).
+struct DropBackupCmd {
+    std::string backup_arn;
+};
+
+/// DESCRIBE BACKUP <arn> (DescribeBackup; the original describe_backup.cpp).
+/// A multi-line ReportOutcome (§5); the label is `Table Id:` (the stale arch
+/// §12 #2 `Tabld Id` typo is wrong — D-2f-7).
+struct DescribeBackupCmd {
+    std::string backup_arn;
+};
+
+/// RESTORE TABLE <target> FROM BACKUP <arn>  (kind == from_backup), or
+/// RESTORE TABLE <target> FROM <source> TO PITR <ts>  (kind == to_pitr).
+/// One node covers both forms; the executor dispatches on `kind` to the two
+/// distinct APIs (D-2f-1). Slot order (N1): `target` is the table being
+/// created; `source` is the backup ARN (from_backup) or the source table name
+/// (to_pitr). `timestamp` is the unquoted ISO-8601 literal (to_pitr only).
+struct RestoreCmd {
+    enum class Kind { from_backup, to_pitr };
+    Kind kind = Kind::from_backup;
+    std::string target;
+    std::string source;
+    std::string timestamp;
+};
+
+/// SHOW [backup_type] BACKUPS [table] (ListBackups, paginated; the original
+/// show_backups.cpp). Both fields may be "" (N3: the backup_type filter is
+/// passed through unvalidated; an empty table name sets no TableName).
+struct ShowBackupsCmd {
+    std::string backup_type;
+    std::string table;
+};
+
+/// SHOW LIMITS (DescribeLimits + paged ListTables/DescribeTable; the original
+/// show_limits.cpp). Carries no fields; the executor sources the `Region:` line
+/// from the session's current region (D-2f-9).
+struct ShowLimitsCmd {};
+
+/// SHOW CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> (DescribeTable +
+/// DescribeTimeToLive; the original show_create_table.cpp). Reconstructs the
+/// CREATE TABLE DDL. `if_not_exists`/`nowait` are echoed verbatim into the
+/// reconstructed DDL (they do not change the API calls).
+struct ShowCreateTableCmd {
+    bool if_not_exists = false;
+    bool nowait = false;
+    std::string table;
+};
+
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
 
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode =
     std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
                  DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, AlterPitrCmd,
-                 AlterReplicaCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+                 AlterReplicaCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd,
+                 CreateBackupCmd, DropBackupCmd, DescribeBackupCmd, RestoreCmd, ShowBackupsCmd,
+                 ShowLimitsCmd, ShowCreateTableCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -468,6 +530,20 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::help;
             } else if constexpr (std::is_same_v<T, TransactCmd>) {
                 return StatementKind::transaction;
+            } else if constexpr (std::is_same_v<T, CreateBackupCmd>) {
+                return StatementKind::create_backup;
+            } else if constexpr (std::is_same_v<T, DropBackupCmd>) {
+                return StatementKind::drop_backup;
+            } else if constexpr (std::is_same_v<T, DescribeBackupCmd>) {
+                return StatementKind::describe_backup;
+            } else if constexpr (std::is_same_v<T, RestoreCmd>) {
+                return StatementKind::restore;
+            } else if constexpr (std::is_same_v<T, ShowBackupsCmd>) {
+                return StatementKind::show_backups;
+            } else if constexpr (std::is_same_v<T, ShowLimitsCmd>) {
+                return StatementKind::show_limits;
+            } else if constexpr (std::is_same_v<T, ShowCreateTableCmd>) {
+                return StatementKind::show_create_table;
             } else {
                 static_assert(sizeof(T) == 0, "unhandled CommandNode alternative");
             }

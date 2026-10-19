@@ -212,6 +212,11 @@
 %type <ddbsh::engine::CommandNode> connect_command quit_command
 %type <ddbsh::engine::CommandNode> drop_table_command describe_command
 %type <ddbsh::engine::CommandNode> show_tables_command show_version_command
+%type <ddbsh::engine::CommandNode> create_backup_command drop_backup_command
+%type <ddbsh::engine::CommandNode> describe_backup_command restore_command
+%type <ddbsh::engine::CommandNode> show_backups_command show_limits_command
+%type <ddbsh::engine::CommandNode> show_create_table_command
+%type <std::string> optional_backup_type optional_table_name
 %type <ddbsh::engine::CommandNode> create_table_command
 %type <ddbsh::engine::CommandNode> alter_table_command
 %type <ddbsh::engine::CommandNode> dml_command write_command
@@ -386,6 +391,10 @@ ddl_command:
     | describe_command   { $$ = std::move($1); }
     | create_table_command { $$ = std::move($1); }
     | alter_table_command  { $$ = std::move($1); }
+    | create_backup_command   { $$ = std::move($1); }
+    | drop_backup_command     { $$ = std::move($1); }
+    | describe_backup_command { $$ = std::move($1); }
+    | restore_command         { $$ = std::move($1); }
     ;
 
 /* dml for the write family (INSERT/REPLACE) and the read family (SELECT via
@@ -411,6 +420,9 @@ write_command:
 show_command:
       show_tables_command   { $$ = std::move($1); }
     | show_version_command  { $$ = std::move($1); }
+    | show_backups_command      { $$ = std::move($1); }
+    | show_limits_command       { $$ = std::move($1); }
+    | show_create_table_command { $$ = std::move($1); }
     ;
 
 quit_command:
@@ -511,6 +523,91 @@ drop_table_command:
 describe_command:
       K_DESCRIBE string
         { $$ = ddbsh::engine::DescribeCmd{std::move($2)}; }
+    ;
+
+/* ---- BACKUP / RESTORE / SHOW (2f) ----------------------------------------
+ * Faithful ports of the original create_backup/drop_backup/describe_backup/
+ * restore_backup/restore_pitr/show_backups/show_limits/show_create_table
+ * productions (parser.y). The trailing ';' is consumed by `input`, so each form
+ * omits it. All referenced tokens already exist (added as HELP topics earlier).
+ * N1 (RESTORE slot order): in BOTH restore forms the string after K_TABLE is
+ * the TARGET (new table); the string after K_FROM is the SOURCE (backup ARN, or
+ * source table for PITR). N2: ARNs/timestamps are double-quoted at the prompt;
+ * the PITR timestamp is a T_TIMESTAMP literal, unquoted here. */
+create_backup_command:
+      K_BACKUP K_TABLE string K_CALLED string
+        {
+            ddbsh::engine::CreateBackupCmd cmd;
+            cmd.table = std::move($3);
+            cmd.backup_name = std::move($5);
+            $$ = std::move(cmd);
+        }
+    ;
+
+drop_backup_command:
+      K_DROP K_BACKUP string
+        { $$ = ddbsh::engine::DropBackupCmd{std::move($3)}; }
+    ;
+
+describe_backup_command:
+      K_DESCRIBE K_BACKUP string
+        { $$ = ddbsh::engine::DescribeBackupCmd{std::move($3)}; }
+    ;
+
+restore_command:
+      K_RESTORE K_TABLE string K_FROM K_BACKUP string
+        {
+            ddbsh::engine::RestoreCmd cmd;
+            cmd.kind = ddbsh::engine::RestoreCmd::Kind::from_backup;
+            cmd.target = std::move($3);
+            cmd.source = std::move($6);
+            $$ = std::move(cmd);
+        }
+    | K_RESTORE K_TABLE string K_FROM string K_TO K_PITR T_TIMESTAMP
+        {
+            ddbsh::engine::RestoreCmd cmd;
+            cmd.kind = ddbsh::engine::RestoreCmd::Kind::to_pitr;
+            cmd.target = std::move($3);
+            cmd.source = std::move($5);
+            cmd.timestamp = ddbsh::engine::unquote($8);
+            $$ = std::move(cmd);
+        }
+    ;
+
+show_backups_command:
+      K_SHOW optional_backup_type K_BACKUPS optional_table_name
+        {
+            ddbsh::engine::ShowBackupsCmd cmd;
+            cmd.backup_type = std::move($2);
+            cmd.table = std::move($4);
+            $$ = std::move(cmd);
+        }
+    ;
+
+optional_backup_type:
+      %empty    { $$ = std::string{}; }
+    | string    { $$ = std::move($1); }
+    ;
+
+optional_table_name:
+      %empty    { $$ = std::string{}; }
+    | string    { $$ = std::move($1); }
+    ;
+
+show_limits_command:
+      K_SHOW K_LIMITS
+        { $$ = ddbsh::engine::ShowLimitsCmd{}; }
+    ;
+
+show_create_table_command:
+      K_SHOW K_CREATE K_TABLE if_not_exists_clause nowait_clause string
+        {
+            ddbsh::engine::ShowCreateTableCmd cmd;
+            cmd.if_not_exists = $4;
+            cmd.nowait = $5;
+            cmd.table = std::move($6);
+            $$ = std::move(cmd);
+        }
     ;
 
 show_tables_command:
