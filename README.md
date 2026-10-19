@@ -137,7 +137,11 @@ Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
 - `-f <file>` — run a file, then exit (mutually exclusive with `-c`).
 - `-q` — quiet: suppress the startup banner.
 - `-e` — abort on the first error.
-- `-d` — debug (accepted; the engine logging subsystem is not yet ported).
+- `-d` — debug. Accepted for flag-surface parity with the original `ddbsh`, but
+  currently a no-op/reserved: the engine has no logging subsystem yet, so the
+  flag sets nothing. It is retained so scripts that pass `-d` keep working and
+  so the behavior is wired in a future phase without a CLI surface change
+  (`TODO(phase-N)`).
 - `-t[STR]` / `--terminator[=STR]` — set the batch terminator (see above).
 
 At startup the CLI loads a config file (`DDBSH_CONFIG_FILE`, else
@@ -162,14 +166,24 @@ make DDBSH_PREFIX=/path/to/prefix
 make run DDBSH_PREFIX=/path/to/prefix
 ```
 
+The sample doubles as a verified, external-consumer smoke test: configure with
+`-DDDBSH_TEST_EMBED_SAMPLE=ON` and the build registers a CTest (`embed_sample`)
+that installs the library to a throwaway prefix, builds the sample through its
+standalone Makefile against that install, runs it, and diffs its stdout against
+the committed golden `examples/embed_demo.expected.txt`. It is OFF by default
+(it needs an install step and a second compiler invocation) and offline (no AWS
+account), so it never touches the real-DDB gate.
+
 ## Tests
 
-Run the test suite via `devtools/run-tests` from the orchestration repo. It
-builds both the new engine and the original (the fidelity oracle), then runs
-each golden family against the appropriate one — the ported families
-(`ist-*`, `isel-*`, `iins-*` today) against the new engine, the rest against the
-oracle — so the suite stays whole as families port family-by-family. The native
-GoogleTest unit tests build with the project (`ddbsh-tests`).
+Run the test suite via `devtools/run-tests` from the orchestration repo. Since
+the Step-2 exit gate, every non-global-tables golden family runs against the
+new engine (the shipping `ddbsh` binary driven through the external harness in
+`tests/golden/`); the gate exit propagates. The original C++11 sources under
+`oracle/` are retained as the golden/`.exp`/`ddbsh-wait` source but are no
+longer built or run. The native GoogleTest unit tests (offline, `FakeDDBClient`)
+build with the project (`ddbsh-tests`) and run alongside as the deterministic
+backend-free fidelity signal.
 
 ---
 

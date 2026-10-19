@@ -180,6 +180,50 @@ public:
         const ddbsh::DescribeTableReplicaAutoScalingIn&) override {
         return not_impl<ddbsh::TableReplicaAutoScalingOut>("describe_table_replica_auto_scaling");
     }
+    ddbsh::Result<ddbsh::UpdateTableOut> update_table(const ddbsh::UpdateTableIn&) override {
+        return not_impl<ddbsh::UpdateTableOut>("update_table");
+    }
+    ddbsh::Result<ddbsh::UpdateTimeToLiveOut> update_time_to_live(
+        const ddbsh::UpdateTimeToLiveIn&) override {
+        return not_impl<ddbsh::UpdateTimeToLiveOut>("update_time_to_live");
+    }
+    ddbsh::Result<ddbsh::UpdateContinuousBackupsOut> update_continuous_backups(
+        const ddbsh::UpdateContinuousBackupsIn&) override {
+        return not_impl<ddbsh::UpdateContinuousBackupsOut>("update_continuous_backups");
+    }
+    ddbsh::Result<ddbsh::CreateBackupOut> create_backup(const ddbsh::CreateBackupIn&) override {
+        return not_impl<ddbsh::CreateBackupOut>("create_backup");
+    }
+    ddbsh::Result<ddbsh::DeleteBackupOut> delete_backup(const ddbsh::DeleteBackupIn&) override {
+        return not_impl<ddbsh::DeleteBackupOut>("delete_backup");
+    }
+    ddbsh::Result<ddbsh::DescribeBackupOut> describe_backup(
+        const ddbsh::DescribeBackupIn&) override {
+        return not_impl<ddbsh::DescribeBackupOut>("describe_backup");
+    }
+    ddbsh::Result<ddbsh::RestoreFromBackupOut> restore_table_from_backup(
+        const ddbsh::RestoreFromBackupIn&) override {
+        return not_impl<ddbsh::RestoreFromBackupOut>("restore_table_from_backup");
+    }
+    ddbsh::Result<ddbsh::RestoreToPitrOut> restore_table_to_point_in_time(
+        const ddbsh::RestoreToPitrIn&) override {
+        return not_impl<ddbsh::RestoreToPitrOut>("restore_table_to_point_in_time");
+    }
+    ddbsh::Result<ddbsh::DescribeLimitsOut> describe_limits(
+        const ddbsh::DescribeLimitsIn&) override {
+        return not_impl<ddbsh::DescribeLimitsOut>("describe_limits");
+    }
+    ddbsh::Result<ddbsh::ListBackupsOut> list_backups(const ddbsh::ListBackupsIn&) override {
+        return not_impl<ddbsh::ListBackupsOut>("list_backups");
+    }
+    ddbsh::Result<ddbsh::TransactGetItemsOut> transact_get_items(
+        const ddbsh::TransactGetItemsIn&) override {
+        return not_impl<ddbsh::TransactGetItemsOut>("transact_get_items");
+    }
+    ddbsh::Result<ddbsh::TransactWriteItemsOut> transact_write_items(
+        const ddbsh::TransactWriteItemsIn&) override {
+        return not_impl<ddbsh::TransactWriteItemsOut>("transact_write_items");
+    }
     ddbsh::Result<void> wait_for_table_active(const std::string&) override { return {}; }
     ddbsh::Result<void> wait_for_table_gone(const std::string&) override { return {}; }
     ddbsh::Result<std::string> explain_request(const ddbsh::ExplainRequest&) override {

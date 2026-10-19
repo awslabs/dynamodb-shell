@@ -32,6 +32,8 @@ namespace {
 using ddbsh::BackupSummaryRow;
 using ddbsh::DescribeLimitsOut;
 using ddbsh::DescribeTableOut;
+using ddbsh::Errc;
+using ddbsh::Error;
 using ddbsh::ProjectionType;
 using ddbsh::ScalarType;
 using ddbsh::SecondaryIndexSchema;
@@ -127,6 +129,17 @@ TEST(ShowBackupsExec, ParsesToKind) {
     EXPECT_EQ(stmt->kind(), StatementKind::show_backups);
 }
 
+TEST(ShowBackupsExec, ListBackupsFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_list_backups_error(
+        Error{Errc::service_error, "list backups failed", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+    auto out = session.run("show backups;");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::service_error);
+    EXPECT_EQ(out.error().message, "list backups failed");
+}
+
 // ---- SHOW LIMITS -----------------------------------------------------------
 
 DescribeTableOut provisioned_table_with_gsi(const std::string& name) {
@@ -186,6 +199,17 @@ TEST(ShowLimitsExec, ParsesToKind) {
     auto stmt = session.parse("show limits;");
     ASSERT_TRUE(stmt.has_value());
     EXPECT_EQ(stmt->kind(), StatementKind::show_limits);
+}
+
+TEST(ShowLimitsExec, DescribeLimitsFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_describe_limits_error(
+        Error{Errc::service_error, "describe limits failed", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+    auto out = session.run("show limits;");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::service_error);
+    EXPECT_EQ(out.error().message, "describe limits failed");
 }
 
 // ---- SHOW CREATE TABLE -----------------------------------------------------

@@ -25,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.16
+        VERSION 0.9.17
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -131,6 +131,16 @@ set_source_files_properties(
 find_package(AWSSDK REQUIRED COMPONENTS dynamodb iam sts)
 find_package(ZLIB REQUIRED)
 
+# The terminal-free CLI driver (isql batch assembly + execute/exit loop) lives
+# in its own static lib so it can be linked by BOTH the CLI binary and the
+# native unit tests (the tests drive it offline against a FakeDDBClient-backed
+# Session, closing the carried isql-assembly test gap, 2h-3). It depends only on
+# the engine library — no readline, no AWS SDK — so the library/CLI boundary and
+# the no-terminal-dependency invariant hold (tenet 3 / D6).
+add_library(ddbsh-cli-core STATIC cli/repl.cpp)
+target_include_directories(ddbsh-cli-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cli")
+target_link_libraries(ddbsh-cli-core PUBLIC ddbsh::ddbsh PRIVATE ddbsh_warnings)
+
 # Target name `ddbsh-cli` is distinct from the `ddbsh` library target; the
 # OUTPUT_NAME makes the installed executable `ddbsh` (the shipping binary name,
 # human decision 2026-10-14). No file collision: the library file is
@@ -141,7 +151,7 @@ add_executable(ddbsh-cli
 set_target_properties(ddbsh-cli PROPERTIES OUTPUT_NAME ddbsh)
 target_include_directories(ddbsh-cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
 target_link_libraries(ddbsh-cli
-    PRIVATE ddbsh::ddbsh ddbsh_warnings readline ${AWSSDK_LINK_LIBRARIES})
+    PRIVATE ddbsh::ddbsh ddbsh-cli-core ddbsh_warnings readline ${AWSSDK_LINK_LIBRARIES})
 
 # --- tests -------------------------------------------------------------------
 if(DDBSH_BUILD_TESTS)
@@ -174,12 +184,14 @@ if(DDBSH_BUILD_TESTS)
                    tests/show_commands_exec_test.cpp
                    tests/show_tables_exec_test.cpp
                    tests/describe_exec_test.cpp
-                   tests/explain_exec_test.cpp)
+                   tests/explain_exec_test.cpp
+                   tests/cli_exit_code_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-                "${CMAKE_CURRENT_SOURCE_DIR}/src")
+                "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                "${CMAKE_CURRENT_SOURCE_DIR}/cli")
     target_link_libraries(ddbsh-tests
-        PRIVATE ddbsh::ddbsh ddbsh_warnings GTest::gtest_main)
+        PRIVATE ddbsh::ddbsh ddbsh-cli-core ddbsh_warnings GTest::gtest_main)
 
     include(GoogleTest)
     # PRE_TEST discovery enumerates tests at ctest time (not build time), so the
@@ -191,6 +203,25 @@ if(DDBSH_BUILD_TESTS)
     add_test(NAME engine_boundary_check
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # Opt-in verification of the library-embedding sample as an EXTERNAL
+    # consumer (2h-4, D-2h-4): install the library to a temp prefix, build
+    # examples/embed_demo via its standalone Makefile against that install, run
+    # it, and diff its stdout against the committed golden. OFF by default
+    # because it needs an install step + a second compiler invocation (the
+    # sample itself is offline — no AWS). Enable with -DDDBSH_TEST_EMBED_SAMPLE=ON.
+    option(DDBSH_TEST_EMBED_SAMPLE
+        "Build + run the examples/ embedding sample against an install as a CTest."
+        OFF)
+    if(DDBSH_TEST_EMBED_SAMPLE)
+        add_test(NAME embed_sample
+                 COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_embed_test.sh"
+                         "${CMAKE_COMMAND}"
+                         "${CMAKE_BINARY_DIR}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/examples"
+                         "${CMAKE_CXX_COMPILER}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/embed_demo.expected.txt")
+    endif()
 endif()
 
 install(TARGETS ddbsh ddbsh-cli
