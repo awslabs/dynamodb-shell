@@ -44,6 +44,13 @@ using ExpressionAttributeNames = std::vector<std::pair<std::string, std::string>
 /// ratelimit forces TOTAL at plan time.
 enum class ReturnConsumedCapacity { none, total, indexes };
 
+/// RETURN VALUES selector (public seam mirror of engine::ReturnValue). Threaded
+/// into PutItem (REPLACE) and UpdateItem/DeleteItem; the returned-item DISPLAY
+/// is rendered from the matching *Out::attributes (2g — the ddbsh-rv suite).
+/// Default `none`. Declared here (before the request structs) so PutItemIn can
+/// carry it.
+enum class ReturnValue { none, all_old, all_new, updated_old, updated_new };
+
 /// Consumed-capacity figures a read/write returns when ReturnConsumedCapacity
 /// is not NONE. Each field is optional because the SDK sets them independently
 /// (a TableName plus any of CapacityUnits / ReadCapacityUnits /
@@ -123,8 +130,17 @@ struct PutItemIn {
     std::optional<std::string> condition_expression;
     std::vector<std::pair<std::string, std::string>> expression_attribute_names;
     ValueMap expression_attribute_values;
+    ReturnValue return_values = ReturnValue::none;
+    ReturnConsumedCapacity return_consumed_capacity = ReturnConsumedCapacity::none;
 };
-struct PutItemOut {};
+/// REPLACE may request RETURN VALUES (ALL_OLD) and a ratelimit forces
+/// ReturnConsumedCapacity=TOTAL, so the PutItem response can carry both
+/// (mirrors UpdateItemOut/DeleteItemOut). INSERT forces ReturnValue::none
+/// (grammar) so an INSERT's PutItemOut never carries attributes.
+struct PutItemOut {
+    std::optional<ItemRow> attributes;
+    std::optional<ConsumedCapacity> consumed_capacity;
+};
 
 // ---- UpdateItem / DeleteItem ----------------------------------------------
 // UPDATE/UPSERT and DELETE issue one UpdateItem/DeleteItem per addressed item
@@ -133,12 +149,9 @@ struct PutItemOut {};
 // the serialized strings plus the matching ExpressionAttribute* maps (not raw
 // column lists) — identical aliasing to the Query/Scan/Put paths for
 // byte-exact EXPLAIN (arch §6/§8). `key` is the literal item key (get_gud_key
-// on the single-write path, or an enumerated row's key on the bulk path).
-
-/// RETURN VALUES selector (public seam mirror of engine::ReturnValue). Threaded
-/// into UpdateItem/DeleteItem for EXPLAIN fidelity; the returned-item DISPLAY
-/// is deferred to 2g (the ddbsh-rv suite owns it). Default `none`.
-enum class ReturnValue { none, all_old, all_new, updated_old, updated_new };
+// on the single-write path, or an enumerated row's key on the bulk path). The
+// RETURN VALUES selector (ddbsh::ReturnValue) is declared near the top of this
+// header, before the request structs.
 
 struct UpdateItemIn {
     std::string table_name;

@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "execute/rate_limiter.hpp"
 #include "planner/select_planner.hpp"
 
 namespace ddbsh::engine {
@@ -65,6 +66,15 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
     SelectOutcome outcome;
     ConsumedCapacityTotalizer totalizer;
 
+    // A WITH RATELIMIT clause meters the read bucket across pages (select.cpp
+    // do_query/do_scan: consume_reads per page, readlimit before the next). The
+    // GetItem path never constructs a limiter (one request, nothing to
+    // paginate — the original's select path builds no limiter for GetItem).
+    std::optional<RateLimiter> limiter;
+    if (cmd.ratelimit.has_value()) {
+        limiter.emplace(cmd.ratelimit->rcu, cmd.ratelimit->wcu);
+    }
+
     switch (plan.api) {
         case SelectApi::get_item: {
             auto result = client.get_item(plan.get_item);
@@ -88,14 +98,19 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
                     outcome.items.push_back(std::move(item));
                 }
                 totalizer.add(result->consumed_capacity);
+                if (limiter.has_value()) {
+                    limiter->consume_reads(result->consumed_capacity);
+                }
                 if (!result->last_evaluated_key.has_value() ||
                     result->last_evaluated_key->empty()) {
                     break;
                 }
                 request.exclusive_start_key = std::move(result->last_evaluated_key);
-                // NOTE: ratelimit throttling (consume_reads/readlimit) is
-                // deferred to a later sub-phase (D19); pagination itself is
-                // honored here so multi-page result sets are complete.
+                // Throttle before fetching the next page (do_query: readlimit()
+                // after setting the next ExclusiveStartKey). Output is unchanged.
+                if (limiter.has_value()) {
+                    limiter->readlimit();
+                }
             }
             break;
         }
@@ -110,11 +125,17 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
                     outcome.items.push_back(std::move(item));
                 }
                 totalizer.add(result->consumed_capacity);
+                if (limiter.has_value()) {
+                    limiter->consume_reads(result->consumed_capacity);
+                }
                 if (!result->last_evaluated_key.has_value() ||
                     result->last_evaluated_key->empty()) {
                     break;
                 }
                 request.exclusive_start_key = std::move(result->last_evaluated_key);
+                if (limiter.has_value()) {
+                    limiter->readlimit();
+                }
             }
             break;
         }

@@ -7,6 +7,8 @@
 
 #include <utility>
 
+#include "execute/rate_limiter.hpp"
+#include "execute/write_common.hpp"
 #include "expressions/symbol_table.hpp"
 #include "planner/get_key_schema.hpp"
 
@@ -37,6 +39,14 @@ PutItemIn make_put_request(const InsertCmd& cmd, std::size_t row, const std::str
         request.item.emplace_back(cmd.columns[col], cmd.rows[row][col]);
     }
 
+    // RETURN VALUES (REPLACE may request ALL_OLD; INSERT forces none via the
+    // grammar). A ratelimit forces ReturnConsumedCapacity=TOTAL so the response
+    // carries CapacityUnits to meter (insert.cpp make_put_request).
+    request.return_values = to_client_return_value(cmd.return_value);
+    if (cmd.ratelimit.has_value()) {
+        request.return_consumed_capacity = ddbsh::ReturnConsumedCapacity::total;
+    }
+
     if (cmd.insert) {
         SymbolTable st(next_prefix());
         std::string pk_token = st.new_attribute(pk);
@@ -63,6 +73,16 @@ Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
     }
 
     const std::string token = cmd.insert ? "INSERT" : "REPLACE";
+    const bool want_rv = cmd.return_value != ReturnValue::none;
+
+    // A WITH RATELIMIT clause meters each write with its own token bucket
+    // (insert.cpp: after a successful PutItem, consume_writes THEN writelimit —
+    // note the consume-then-limit order, the REVERSE of the update/delete write
+    // path; reproduce this site's own order). Output is unchanged.
+    std::optional<RateLimiter> limiter;
+    if (cmd.ratelimit.has_value()) {
+        limiter.emplace(cmd.ratelimit->rcu, cmd.ratelimit->wcu);
+    }
 
     for (std::size_t row = 0; row < cmd.rows.size(); ++row) {
         PutItemIn request = make_put_request(cmd, row, pk, next_prefix);
@@ -73,8 +93,22 @@ Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
             // the partial output (the original's interleave — insert.cpp).
             return fail(result.error());
         }
-        // One status token per written row, emitted as it succeeds (AI-4).
-        sink.emit(ExecOutcome{WriteOutcome{{token}}});
+        // One status token per written row, emitted as it succeeds (AI-4). With
+        // RETURN VALUES (REPLACE ALL_OLD), the row carries the returned item so
+        // the Renderer emits `REPLACE: {item}` instead of `REPLACE` (insert.cpp
+        // prints `%s: %s` when a return value was requested, even if the item
+        // is empty — so request-but-empty yields a present, empty ItemRow).
+        WriteOutcome out;
+        out.tokens.push_back(token);
+        if (want_rv) {
+            out.items.push_back(result->attributes.value_or(ItemRow{}));
+        }
+        sink.emit(ExecOutcome{std::move(out)});
+
+        if (limiter.has_value()) {
+            limiter->consume_writes(result->consumed_capacity);
+            limiter->writelimit();
+        }
     }
 
     return {};

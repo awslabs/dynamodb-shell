@@ -168,26 +168,41 @@ std::string render_select(const SelectOutcome& s) {
 }
 
 /// INSERT / REPLACE render one status token per row written, each on its own
-/// line (arch §7 — the original printf("%s\n", op) per PutItem).
+/// line (arch §7 — the original printf("%s\n", op) per PutItem). With RETURN
+/// VALUES, the row's line becomes `op: show_item(item)` instead — the status
+/// token is REPLACED by the verb+payload form, not supplemented (insert.cpp:
+/// `printf("%s: %s\n", op, i)`). `items` is either empty (no RV, the common
+/// case) or parallel to `tokens`.
 std::string render_write(const WriteOutcome& w) {
     std::string out;
-    for (const auto& token : w.tokens) {
-        out += token;
-        out += '\n';
+    for (std::size_t i = 0; i < w.tokens.size(); ++i) {
+        if (i < w.items.size() && w.items[i].has_value()) {
+            out += w.tokens[i] + ": " + show_item(*w.items[i]) + "\n";
+        } else {
+            out += w.tokens[i] + "\n";
+        }
     }
     return out;
 }
 
-/// A bulk UPDATE/UPSERT/DELETE renders the `(n read, m modified, k ccf)`
-/// accounting line (arch §7 — the original
-/// printf("%s (%d read, %d modified, %d ccf)\n", verb, ...)). The verb string
-/// matches the original: UPDATE / UPSERT / DELETE.
+/// A bulk UPDATE/UPSERT/DELETE renders any RETURN VALUES payloads (one item
+/// per line) FIRST, then the `(n read, m modified, k ccf)` accounting line
+/// (arch §7). The items-then-status order matches the original's unsorted
+/// emission (items printed during the per-item loop, the status line after)
+/// and is `-s`-stable (`'U'`/`'D'` < `'{'`). The verb string matches the
+/// original: UPDATE / UPSERT / DELETE.
 std::string render_bulk_write(const BulkWriteOutcome& b) {
+    std::string out;
+    for (const auto& item : b.returned_items) {
+        out += show_item(item);
+        out += '\n';
+    }
     const char* verb = b.verb == BulkWriteOutcome::Verb::update   ? "UPDATE"
                        : b.verb == BulkWriteOutcome::Verb::upsert ? "UPSERT"
                                                                   : "DELETE";
-    return std::string(verb) + " (" + std::to_string(b.read) + " read, " +
+    out += std::string(verb) + " (" + std::to_string(b.read) + " read, " +
            std::to_string(b.modified) + " modified, " + std::to_string(b.ccf) + " ccf)\n";
+    return out;
 }
 
 // ---- EXPLAIN block formatting (port of util/strip_newlines.cpp) ------------

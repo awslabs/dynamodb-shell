@@ -365,24 +365,9 @@ Aws::DynamoDB::Model::ScanRequest build_scan(const ScanIn& in) {
     return request;
 }
 
-Aws::DynamoDB::Model::PutItemRequest build_put_item(const PutItemIn& in) {
-    Aws::DynamoDB::Model::PutItemRequest request;
-    request.SetTableName(in.table_name);
-    request.SetItem(to_sdk_item(in.item));
-    if (in.condition_expression.has_value()) {
-        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
-    }
-    if (!in.expression_attribute_names.empty()) {
-        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
-    }
-    if (!in.expression_attribute_values.empty()) {
-        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
-    }
-    return request;
-}
-
-// RETURN VALUES selector -> SDK enum. Threaded into UpdateItem/DeleteItem for
-// EXPLAIN fidelity; the returned-item display is deferred to 2g (D-2c-13).
+// RETURN VALUES selector -> SDK enum. Threaded into PutItem (REPLACE) and
+// UpdateItem/DeleteItem; the returned-item display is rendered from the *Out
+// attributes (2g).
 Aws::DynamoDB::Model::ReturnValue to_sdk_return_value(ReturnValue rv) {
     switch (rv) {
         case ReturnValue::all_old:
@@ -397,6 +382,28 @@ Aws::DynamoDB::Model::ReturnValue to_sdk_return_value(ReturnValue rv) {
             break;
     }
     return Aws::DynamoDB::Model::ReturnValue::NONE;
+}
+
+Aws::DynamoDB::Model::PutItemRequest build_put_item(const PutItemIn& in) {
+    Aws::DynamoDB::Model::PutItemRequest request;
+    request.SetTableName(in.table_name);
+    request.SetItem(to_sdk_item(in.item));
+    if (in.condition_expression.has_value()) {
+        request.SetConditionExpression(Aws::String(in.condition_expression->c_str()));
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    if (in.return_values != ReturnValue::none) {
+        request.SetReturnValues(to_sdk_return_value(in.return_values));
+    }
+    if (in.return_consumed_capacity != ReturnConsumedCapacity::none) {
+        request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+    }
+    return request;
 }
 
 Aws::DynamoDB::Model::UpdateItemRequest build_update_item(const UpdateItemIn& in) {
@@ -629,7 +636,14 @@ Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn& in) {
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
     }
-    return PutItemOut{};
+    const auto& result = outcome.GetResult();
+    PutItemOut out;
+    const auto& attrs = result.GetAttributes();
+    if (!attrs.empty()) {
+        out.attributes = ItemRow{from_sdk_item(attrs)};
+    }
+    out.consumed_capacity = from_sdk_consumed_capacity(result.GetConsumedCapacity());
+    return out;
 }
 
 Result<UpdateItemOut> AwsDDBClient::update_item(const UpdateItemIn& in) {
