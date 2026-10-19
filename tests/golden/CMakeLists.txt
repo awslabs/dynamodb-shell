@@ -122,14 +122,21 @@ if(DDBSH_GOLDEN_ALL_FAMILIES)
     include("${ORACLE_TESTS_DIR}/test-cleanup.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
 else()
-    # Route the 2b families plus the 2c families (UPDATE/DELETE) to the new
-    # engine (D24 + 2c). The update/delete family files reference
-    # ${CMAKE_SOURCE_DIR}/tests/*.sql for their `-f` seed loads (resolved
-    # against the oracle root in the oracle master include); shadow
-    # CMAKE_SOURCE_DIR with the oracle root so those paths resolve here too
-    # (the 2b families use no such load, so this is harmless for them).
+    # Route the 2b families plus the 2c families (UPDATE/DELETE), the 2e
+    # create-drop family (icd-: CREATE/DROP/DESCRIBE/ALTER), and the 2e-4 PITR
+    # family (ipt-: CREATE/DESCRIBE + SET PITR enable/disable) to the new engine
+    # (D24 + 2c + 2e-2 + 2e-4). The update/delete family files reference
+    # ${CMAKE_SOURCE_DIR}/tests/*.sql for their `-f` seed loads, and the
+    # create-drop / pitr families reference ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait
+    # for their table-settled / pitr-settled poll steps (resolved against the
+    # oracle root in the oracle master include); shadow CMAKE_SOURCE_DIR with the
+    # oracle root so those paths resolve here too (the 2b families use no such
+    # load, so this is harmless for them). The ddbsh-wait steps invoke a script,
+    # not ddbsh, so they run unchanged under routing.
     get_filename_component(_oracle_root "${ORACLE_TESTS_DIR}" DIRECTORY)
     set(CMAKE_SOURCE_DIR "${_oracle_root}")
+    include("${ORACLE_TESTS_DIR}/ddbsh-create-drop-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-pitr-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-insert-tests.txt")

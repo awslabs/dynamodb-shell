@@ -657,4 +657,151 @@ TEST(Parse, ExplainSelectSetsFlag) {
     EXPECT_TRUE(stmt.explain());
 }
 
+// ---- ALTER TABLE combined `SET billing ... UPDATE GSI` gate (D-2e-6) --------
+// The one piece of logic unique to 2e-2 lives in the grammar action: a combined
+// `SET billing ... UPDATE GSI (...)` whose table billing mode is PROVISIONED
+// keeps the GSI updates; on-demand drops them (the index throughput is implied)
+// and records the informational diagnostic. The only prior coverage set the
+// flag on a hand-built node, bypassing the grammar — these tests drive the
+// decision through the parser itself (Should-fix, 2e-2 review).
+
+TEST(Parse, AlterTableCombinedProvisionedKeepsGsiUpdates) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "alter table t set billing mode provisioned ( 100 rcu, 200 wcu ) "
+                         "update gsi ( g1 set billing mode provisioned ( 10 rcu, 20 wcu ) );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& alter = node_of<ddbsh::engine::AlterTableCmd>(stmt);
+    ASSERT_TRUE(alter.billing.has_value());
+    EXPECT_EQ(alter.billing->mode, ddbsh::engine::BillingMode::provisioned);
+    EXPECT_FALSE(alter.ignored_gsi_on_demand);
+    ASSERT_EQ(alter.gsi_updates.size(), 1u);
+    EXPECT_EQ(alter.gsi_updates[0].action, ddbsh::engine::GsiUpdate::Action::update);
+    EXPECT_EQ(alter.gsi_updates[0].index_name, "g1");
+}
+
+TEST(Parse, AlterTableCombinedOnDemandDropsGsiUpdates) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt =
+        parse_ok(session,
+                 "alter table t set billing mode on demand "
+                 "update gsi ( g1 set billing mode on demand throughput (10 rcu, 20 wcu) );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& alter = node_of<ddbsh::engine::AlterTableCmd>(stmt);
+    ASSERT_TRUE(alter.billing.has_value());
+    EXPECT_EQ(alter.billing->mode, ddbsh::engine::BillingMode::pay_per_request);
+    EXPECT_TRUE(alter.ignored_gsi_on_demand);  // gate fired
+    EXPECT_TRUE(alter.gsi_updates.empty());    // dropped by the gate
+}
+
+// ---- ALTER TABLE SET TTL (2e-3) builds an AlterTtlCmd -----------------------
+
+TEST(Parse, AlterTableSetTtlEnableBuildsTtlNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set ttl ( expiry );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& ttl = node_of<ddbsh::engine::AlterTtlCmd>(stmt);
+    EXPECT_EQ(ttl.table, "t");
+    EXPECT_TRUE(ttl.enabled);
+    EXPECT_EQ(ttl.attribute, "expiry");
+}
+
+TEST(Parse, AlterTableSetTtlDisableBuildsTtlNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set ttl disabled;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& ttl = node_of<ddbsh::engine::AlterTtlCmd>(stmt);
+    EXPECT_EQ(ttl.table, "t");
+    EXPECT_FALSE(ttl.enabled);
+    EXPECT_TRUE(ttl.attribute.empty());
+}
+
+// ---- ALTER TABLE SET PITR (2e-4) builds an AlterPitrCmd ---------------------
+
+TEST(Parse, AlterTableSetPitrEnabledBuildsPitrNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set pitr enabled;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& pitr = node_of<ddbsh::engine::AlterPitrCmd>(stmt);
+    EXPECT_EQ(pitr.table, "t");
+    EXPECT_TRUE(pitr.enabled);
+}
+
+TEST(Parse, AlterTableSetPitrDisabledBuildsPitrNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t set pitr disabled;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& pitr = node_of<ddbsh::engine::AlterPitrCmd>(stmt);
+    EXPECT_EQ(pitr.table, "t");
+    EXPECT_FALSE(pitr.enabled);
+}
+
+// ---- ALTER TABLE REPLICA (2e-5) builds an AlterReplicaCmd -------------------
+
+TEST(Parse, AlterTableDropReplicaBuildsReplicaNode) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t drop replica eu-west-1;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    EXPECT_EQ(replica.table, "t");
+    EXPECT_EQ(replica.replica.action, ddbsh::engine::ReplicaUpdate::Action::drop);
+    EXPECT_EQ(replica.replica.region, "eu-west-1");
+    EXPECT_FALSE(replica.replica.table_class.has_value());
+    EXPECT_FALSE(replica.replica.throughput_override.has_value());
+    EXPECT_TRUE(replica.replica.replica_gsis.empty());
+}
+
+TEST(Parse, AlterTableAddReplicaBareDefaultsClassToStandard) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t add replica us-west-2;");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    EXPECT_EQ(replica.replica.action, ddbsh::engine::ReplicaUpdate::Action::add);
+    EXPECT_EQ(replica.replica.region, "us-west-2");
+    // optional_table_class defaults to STANDARD when the clause is absent.
+    ASSERT_TRUE(replica.replica.table_class.has_value());
+    EXPECT_EQ(*replica.replica.table_class, ddbsh::engine::TableClass::standard);
+    EXPECT_FALSE(replica.replica.throughput_override.has_value());
+    EXPECT_TRUE(replica.replica.replica_gsis.empty());
+}
+
+TEST(Parse, AlterTableAddReplicaWithClassThroughputAndGsis) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "alter table t add replica us-west-2 table class standard infrequent "
+                         "access ( 50 rcu ) gsi ( g1 ( 10 rcu ), g2 ( 20 rcu ) );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    ASSERT_TRUE(replica.replica.table_class.has_value());
+    EXPECT_EQ(*replica.replica.table_class, ddbsh::engine::TableClass::standard_infrequent_access);
+    ASSERT_TRUE(replica.replica.throughput_override.has_value());
+    EXPECT_EQ(replica.replica.throughput_override->read_capacity_units, 50);
+    ASSERT_EQ(replica.replica.replica_gsis.size(), 2u);
+    EXPECT_EQ(replica.replica.replica_gsis[0].index_name, "g1");
+    EXPECT_EQ(replica.replica.replica_gsis[0].throughput_override.read_capacity_units, 10);
+    EXPECT_EQ(replica.replica.replica_gsis[1].index_name, "g2");
+    EXPECT_EQ(replica.replica.replica_gsis[1].throughput_override.read_capacity_units, 20);
+}
+
+TEST(Parse, AlterTableUpdateReplicaBuildsUpdateAction) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session, "alter table t update replica us-west-2 ( 99 rcu );");
+    EXPECT_EQ(stmt.kind(), StatementKind::alter_table);
+    const auto& replica = node_of<ddbsh::engine::AlterReplicaCmd>(stmt);
+    EXPECT_EQ(replica.replica.action, ddbsh::engine::ReplicaUpdate::Action::update);
+    EXPECT_EQ(replica.replica.region, "us-west-2");
+    ASSERT_TRUE(replica.replica.throughput_override.has_value());
+    EXPECT_EQ(replica.replica.throughput_override->read_capacity_units, 99);
+}
+
 }  // namespace

@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "execute/alter_table_executor.hpp"
 #include "execute/create_table_executor.hpp"
 #include "execute/delete_executor.hpp"
 #include "execute/describe_executor.hpp"
@@ -218,6 +219,40 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 return emit_single(engine::execute_create_table_explain(create, impl_->client));
             }
             return emit_single(engine::execute_create_table(create, impl_->client));
+        }
+        case StatementKind::alter_table: {
+            // The four ALTER AST nodes share one StatementKind::alter_table
+            // (D-2e-1); dispatch on the active node. UpdateTable (AlterTableCmd),
+            // SET TTL (AlterTtlCmd), SET PITR (AlterPitrCmd), and REPLICA
+            // (AlterReplicaCmd) — all four land here.
+            const auto& command = statement.ast()->command;
+            const bool explain = statement.ast()->explain;
+            if (std::holds_alternative<engine::AlterTableCmd>(command)) {
+                const auto& alter = std::get<engine::AlterTableCmd>(command);
+                if (explain) {
+                    // EXPLAIN renders the serialized UpdateTable request with NO
+                    // trailing status token (contrast CREATE) — D-2e-11.
+                    return emit_single(engine::execute_alter_table_explain(alter, impl_->client));
+                }
+                return emit_single(engine::execute_alter_table(alter, impl_->client));
+            }
+            if (std::holds_alternative<engine::AlterTtlCmd>(command)) {
+                // SET TTL: DescribeTimeToLive + UpdateTimeToLive (the executor
+                // owns the probe-first / already-disabled short-circuit / EXPLAIN
+                // logic, D-2e-7), so pass the explain flag through.
+                const auto& ttl = std::get<engine::AlterTtlCmd>(command);
+                return emit_single(engine::execute_alter_ttl(ttl, impl_->client, explain));
+            }
+            if (std::holds_alternative<engine::AlterPitrCmd>(command)) {
+                // SET PITR: UpdateContinuousBackups (the executor owns the EXPLAIN
+                // `UpdateContinuousBackupsRequest(...)` label quirk, D-2e-8/-11).
+                const auto& pitr = std::get<engine::AlterPitrCmd>(command);
+                return emit_single(engine::execute_alter_pitr(pitr, impl_->client, explain));
+            }
+            // REPLICA: UpdateTable with one ReplicationGroupUpdate (D-2e-9); the
+            // executor owns the EXPLAIN `UpdateTable(...)` block.
+            const auto& replica = std::get<engine::AlterReplicaCmd>(command);
+            return emit_single(engine::execute_alter_replica(replica, impl_->client, explain));
         }
         case StatementKind::show_tables: {
             // SHOW TABLES is not explainable (it is a show_command, not in the

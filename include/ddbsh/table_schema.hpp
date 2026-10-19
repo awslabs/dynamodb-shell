@@ -91,6 +91,29 @@ struct Gsi {
     std::optional<WarmThroughput> warm;
 };
 
+/// One GlobalSecondaryIndexUpdate action in an ALTER TABLE (arch §7). The
+/// original wrapped a CreateGlobalSecondaryIndexAction /
+/// UpdateGlobalSecondaryIndexAction / DeleteGlobalSecondaryIndexAction in a
+/// GlobalSecondaryIndexUpdate; this is the SDK-free carrier shared by the parse
+/// result (engine::AlterTableCmd) and the client seam (ddbsh::UpdateTableIn).
+///
+///   * `create`: `index_name` + `key_schema` + `projection`, with optional
+///     `billing` (provisioned/on-demand throughput) and/or `warm`. The new key
+///     attributes are carried in AlterTableCmd::attribute_definitions (the SDK
+///     requires them in the UpdateTable AttributeDefinitions).
+///   * `update`: `index_name` + EITHER `billing` OR `warm` (the original's
+///     UpdateGlobalSecondaryIndexAction took one per update element).
+///   * `drop`: `index_name` only.
+struct GsiUpdate {
+    enum class Action { create, update, drop };
+    Action action = Action::update;
+    std::string index_name;
+    std::optional<KeySchema> key_schema;              ///< create only
+    std::optional<Projection> projection;             ///< create only
+    std::optional<BillingModeAndThroughput> billing;  ///< create or update
+    std::optional<WarmThroughput> warm;               ///< create or update
+};
+
 /// A local secondary index definition.
 struct Lsi {
     std::string name;
@@ -125,6 +148,42 @@ enum class TableClass { standard, standard_infrequent_access };
 struct Tag {
     std::string key;
     std::string value;
+};
+
+/// A replica's provisioned-throughput override (ALTER TABLE ... REPLICA; arch
+/// §7). The original's provisioned_throughput_override grammar set ONLY the
+/// read capacity units (`( N rcu )`), so this carries read capacity only.
+struct ProvisionedThroughputOverride {
+    long long read_capacity_units = 0;
+};
+
+/// A per-replica GSI throughput override (the `GSI ( name ( N rcu ), ... )`
+/// clause on ADD/UPDATE REPLICA). The original's ReplicaGlobalSecondaryIndex
+/// carried the index name plus a read-only ProvisionedThroughputOverride.
+struct ReplicaGsi {
+    std::string index_name;
+    ProvisionedThroughputOverride throughput_override;
+};
+
+/// One ReplicationGroupUpdate for an ALTER TABLE ... REPLICA (arch §7, the
+/// original CUpdateTableReplica). The SDK-free carrier shared by the parse
+/// result (engine::AlterReplicaCmd) and the client seam (ddbsh::UpdateTableIn),
+/// matching the established no-duplicate pattern (cf. GsiUpdate):
+///   * `add`:    CreateReplicationGroupMemberAction — region + a TableClass
+///               override (the original defaults it to STANDARD when the clause
+///               is absent) + optional throughput override + optional GSIs.
+///   * `update`: UpdateReplicationGroupMemberAction — same fields as add.
+///   * `drop`:   DeleteReplicationGroupMemberAction — region only.
+/// `table_class` is nullopt only for `drop` (add/update always carry one,
+/// defaulting to STANDARD); `throughput_override` / `replica_gsis` are set only
+/// when the clause provided them.
+struct ReplicaUpdate {
+    enum class Action { add, drop, update };
+    Action action = Action::add;
+    std::string region;
+    std::optional<TableClass> table_class;
+    std::optional<ProvisionedThroughputOverride> throughput_override;
+    std::vector<ReplicaGsi> replica_gsis;
 };
 
 }  // namespace ddbsh

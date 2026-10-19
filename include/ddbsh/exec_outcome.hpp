@@ -26,8 +26,13 @@
 namespace ddbsh {
 
 /// A terse status token line: CONNECT/CREATE/DROP/ALTER/QUIT/... (arch §7).
+/// `diagnostics` are byte-exact informational lines the CLI writes to STDERR
+/// (the D-2e-6 on-demand-GSI-ignored message). They are DATA on a success
+/// outcome — they do NOT flip the exit code — mirroring the TransactOutcome
+/// stderr channel. Empty for every status except that one combined ALTER form.
 struct StatusOutcome {
     std::string token;
+    std::vector<std::string> diagnostics{};
 };
 
 /// A multi-line semi-structured human report: DESCRIBE, SHOW LIMITS,

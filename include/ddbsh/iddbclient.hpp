@@ -207,6 +207,74 @@ struct CreateTableIn {
 };
 struct CreateTableOut {};
 
+// ---- UpdateTable -----------------------------------------------------------
+// ALTER TABLE SET ... issues UpdateTable (arch §7, the original
+// CUpdateTableCommand). Unlike CreateTable, every field is OPTIONAL and set
+// only when the clause provided it: the original built one UpdateTableRequest
+// and set exactly the attributes the clause selected, leaving the rest unset so
+// the SDK omits them from the payload. The request carries SDK-free value
+// types (ddbsh/table_schema.hpp) shared with the parse result, keeping the
+// public seam AWS-type-free (D11); the CLI adapter translates it to
+// Aws::DynamoDB::Model::UpdateTableRequest, setting only the present fields.
+//
+// Billing fidelity (arch §8): a present `billing` always sets BOTH BillingMode
+// and the matching throughput (provisioned => ProvisionedThroughput;
+// on-demand => OnDemandThroughput with the -1 clear-one / UNLIMITED clear-both
+// sentinels). `table_class` / `deletion_protection` are optional<> (NOT a
+// defaulted value) so "clause absent" serializes to NO TableClass /
+// DeletionProtectionEnabled in the request, matching the original's unset
+// fields. `attribute_definitions` + `gsi_updates` carry the CREATE / UPDATE /
+// DROP GSI actions (2e-2). `replica` carries the ONE ReplicationGroupUpdate for
+// an ALTER TABLE ... REPLICA (2e-5); it is set ONLY for a replica ALTER (and
+// then the other fields stay unset), nullopt for a plain SET — one UpdateTableIn
+// backs both because both are UpdateTable calls (D-2e-12).
+struct UpdateTableIn {
+    std::string table_name;
+    std::optional<BillingModeAndThroughput> billing;  ///< SET billing_mode_and_throughput
+    std::optional<WarmThroughput> warm;               ///< SET warm_throughput
+    std::optional<SseSpec> sse;                       ///< SET sse_specification
+    std::optional<StreamSpec> stream;                 ///< SET stream_specification
+    std::optional<TableClass> table_class;            ///< SET table_class (nullopt => unset)
+    std::optional<bool> deletion_protection;  ///< SET deletion protection (nullopt => unset)
+    std::vector<AttributeDef> attribute_definitions;  ///< new key attrs for CREATE GSI
+    std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
+    std::optional<ReplicaUpdate> replica;  ///< ADD / DROP / UPDATE REPLICA (nullopt for plain SET)
+};
+struct UpdateTableOut {};
+
+// ---- UpdateTimeToLive ------------------------------------------------------
+// ALTER TABLE SET TTL ( attr ) / SET TTL DISABLED issues UpdateTimeToLive after
+// a DescribeTimeToLive probe (arch §7, the original CUpdateTableTTLCommand).
+// `enabled` sets TimeToLiveSpecification.Enabled; `attribute_name` is the TTL
+// attribute — the user-supplied name on enable, or the existing name (read back
+// from DescribeTimeToLive) on disable. The SDK-free struct keeps the seam
+// AWS-type-free (D11); the CLI adapter translates it to
+// Aws::DynamoDB::Model::UpdateTimeToLiveRequest and composes the byte-exact
+// "Error updating TTL. ..." failure message the original logged (D-2e-13).
+struct UpdateTimeToLiveIn {
+    std::string table_name;
+    bool enabled = false;
+    std::string attribute_name;
+};
+struct UpdateTimeToLiveOut {};
+
+// ---- UpdateContinuousBackups (PITR) ----------------------------------------
+// ALTER TABLE SET PITR ENABLED / SET PITR DISABLED issues UpdateContinuousBackups
+// (arch §7, the original CUpdatePITRCommand). `enabled` sets the
+// PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled flag. On success
+// the executor emits the `ALTER` status token. The SDK-free struct keeps the
+// seam AWS-type-free (D11); the CLI adapter translates it to
+// Aws::DynamoDB::Model::UpdateContinuousBackupsRequest and composes the
+// byte-exact "Setting PITR failed. ..." failure message the original logged
+// (D-2e-13). EXPLAIN serializes it under the quirky label
+// `UpdateContinuousBackupsRequest(...)` — the ONLY EXPLAIN label the original
+// gives a `Request` suffix (D-2e-11).
+struct UpdateContinuousBackupsIn {
+    std::string table_name;
+    bool enabled = false;
+};
+struct UpdateContinuousBackupsOut {};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -442,8 +510,9 @@ struct TransactWriteItemsOut {};
 /// raw SerializePayload() string; the engine never sees an Aws:: type. One
 /// alternative per in-scope API the EXPLAIN paths can emit (arch §7/§8).
 using ExplainRequest =
-    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, DeleteTableIn,
-                 DescribeTableIn, DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
+    std::variant<GetItemIn, QueryIn, ScanIn, PutItemIn, CreateTableIn, UpdateTableIn,
+                 UpdateTimeToLiveIn, UpdateContinuousBackupsIn, DeleteTableIn, DescribeTableIn,
+                 DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
                  DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
                  TransactWriteItemsIn>;
 
@@ -458,6 +527,28 @@ public:
     virtual Result<ScanOut> scan(const ScanIn&) = 0;
     virtual Result<PutItemOut> put_item(const PutItemIn&) = 0;
     virtual Result<CreateTableOut> create_table(const CreateTableIn&) = 0;
+
+    /// UpdateTable for an ALTER TABLE SET ... (arch §7, the original
+    /// CUpdateTableCommand). Sets only the fields the request carries; on
+    /// success the executor emits the `ALTER` status token. A service failure
+    /// is returned as an Error (the adapter composes the byte-exact
+    /// "Update Table failed. ..." message the original logged, D-2e-13).
+    virtual Result<UpdateTableOut> update_table(const UpdateTableIn&) = 0;
+
+    /// UpdateTimeToLive for an ALTER TABLE SET TTL ... (arch §7, the original
+    /// CUpdateTableTTLCommand). The executor probes DescribeTimeToLive first,
+    /// then calls this (skipping it when disabling an already-disabled table —
+    /// D-2e-7). A service failure is returned as an Error (the adapter composes
+    /// the byte-exact "Error updating TTL. ..." message, D-2e-13).
+    virtual Result<UpdateTimeToLiveOut> update_time_to_live(const UpdateTimeToLiveIn&) = 0;
+
+    /// UpdateContinuousBackups for an ALTER TABLE SET PITR ... (arch §7, the
+    /// original CUpdatePITRCommand). On success the executor emits the `ALTER`
+    /// status token. A service failure is returned as an Error (the adapter
+    /// composes the byte-exact "Setting PITR failed. ..." message, D-2e-13).
+    virtual Result<UpdateContinuousBackupsOut> update_continuous_backups(
+        const UpdateContinuousBackupsIn&) = 0;
+
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;

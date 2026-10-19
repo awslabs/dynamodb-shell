@@ -44,6 +44,10 @@ public:
     Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn&) override;
     Result<TransactWriteItemsOut> transact_write_items(const TransactWriteItemsIn&) override;
     Result<CreateTableOut> create_table(const CreateTableIn&) override;
+    Result<UpdateTableOut> update_table(const UpdateTableIn&) override;
+    Result<UpdateTimeToLiveOut> update_time_to_live(const UpdateTimeToLiveIn&) override;
+    Result<UpdateContinuousBackupsOut> update_continuous_backups(
+        const UpdateContinuousBackupsIn&) override;
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;

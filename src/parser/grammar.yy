@@ -213,6 +213,7 @@
 %type <ddbsh::engine::CommandNode> drop_table_command describe_command
 %type <ddbsh::engine::CommandNode> show_tables_command show_version_command
 %type <ddbsh::engine::CommandNode> create_table_command
+%type <ddbsh::engine::CommandNode> alter_table_command
 %type <ddbsh::engine::CommandNode> dml_command write_command
 %type <ddbsh::engine::CommandNode> insert_command replace_command
 %type <ddbsh::engine::CommandNode> update_command upsert_command delete_command
@@ -238,6 +239,13 @@
 %type <std::optional<ddbsh::engine::WarmThroughput>> optional_warm_throughput
 %type <std::vector<ddbsh::engine::Gsi>> gsi_list gsi_specification
 %type <ddbsh::engine::Gsi> gsi
+%type <ddbsh::engine::GsiUpdate> alter_table_gsi_create alter_table_gsi_drop
+%type <ddbsh::engine::GsiUpdate> alter_table_gsi_update_element
+%type <std::vector<ddbsh::engine::GsiUpdate>> alter_table_gsi_update
+%type <ddbsh::engine::ProvisionedThroughputOverride> provisioned_throughput_override
+%type <std::optional<ddbsh::engine::ProvisionedThroughputOverride>> optional_provisioned_throughput_override
+%type <ddbsh::engine::ReplicaGsi> replica_gsi_specification_list_entry
+%type <std::vector<ddbsh::engine::ReplicaGsi>> replica_gsi_specification_list optional_replica_gsi_specification
 %type <std::vector<ddbsh::engine::Lsi>> lsi_list lsi_specification
 %type <ddbsh::engine::Lsi> lsi
 %type <ddbsh::engine::Projection> index_projection
@@ -377,6 +385,7 @@ ddl_command:
       drop_table_command { $$ = std::move($1); }
     | describe_command   { $$ = std::move($1); }
     | create_table_command { $$ = std::move($1); }
+    | alter_table_command  { $$ = std::move($1); }
     ;
 
 /* dml for the write family (INSERT/REPLACE) and the read family (SELECT via
@@ -541,6 +550,297 @@ create_table_command:
             cmd.tags = std::move($18);
             $$ = std::move(cmd);
         }
+    ;
+
+/* ---- ALTER TABLE (2e-1 SET non-GSI + 2e-2 GSI -> UpdateTable) ------------
+ * Faithful port of the original alter_table_command SET / GSI forms that map
+ * to one CUpdateTableCommand -> UpdateTable (parser.y). The trailing ';' is
+ * consumed by `input`, so each form omits it. Each alternative builds ONE
+ * AlterTableCmd and fills only the field(s) the clause provided (D-2e-2); the
+ * executor copies them into an UpdateTableIn and the adapter sets only the
+ * present fields on the UpdateTableRequest, matching the original's "leave the
+ * rest unset" behavior. The billing+warm form fills both `billing` and `warm`;
+ * the standalone warm form fills only `warm` (arch §8, D-2e-3/-4).
+ *
+ * GSI forms (2e-2): CREATE GSI carries the new key attribute_definitions plus
+ * one create GsiUpdate; DROP GSI carries one drop GsiUpdate; UPDATE GSI carries
+ * a list of update GsiUpdates. The combined `SET billing ... UPDATE GSI` form
+ * applies the D-2e-6 on-demand gate in its action: when the table billing mode
+ * is on-demand the GSI updates are dropped (the index throughput is implied)
+ * and a flag records the (unpinned) informational diagnostic. SET TTL (2e-3)
+ * builds an AlterTtlCmd (DescribeTimeToLive + UpdateTimeToLive); SET PITR (2e-4)
+ * builds an AlterPitrCmd (UpdateContinuousBackups); the REPLICA forms land in
+ * 2e-5.
+ *
+ * LALR(1): the first tokens after K_SET are all distinct (K_BILLING / K_WARM /
+ * K_SSE / K_TABLE / K_STREAM / K_DELETION / K_TTL / K_PITR). The shared prefix
+ * `K_SET billing_mode_and_throughput optional_warm_throughput` of the bare SET
+ * form vs. the combined UPDATE-GSI form is resolved by one-token lookahead
+ * (reduce on FOLLOW vs. shift K_UPDATE), exactly as the original factored it. */
+alter_table_command:
+      K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.billing = std::move($5);
+            cmd.warm = std::move($6);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET warm_throughput
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.warm = std::move($5);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET sse_specification
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.sse = std::move($5);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET table_class
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.table_class = $5;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET stream_specification
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.stream = std::move($5);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET deletion_protection
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.deletion_protection = $5;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string '(' attribute_name_type_list ')' K_CREATE K_GSI alter_table_gsi_create
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.attribute_definitions = std::move($5);
+            cmd.gsi_updates.push_back(std::move($9));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_DROP K_GSI alter_table_gsi_drop
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.gsi_updates.push_back(std::move($6));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput
+            K_UPDATE K_GSI '(' alter_table_gsi_update ')'
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            // D-2e-6: setting the table to on-demand implies the index
+            // throughput; the original drops the GSI update list and logs an
+            // informational message. Keep the gate; carry the GSI updates only
+            // when the table billing mode is PROVISIONED.
+            const bool provisioned = $5.mode == ddbsh::engine::BillingMode::provisioned;
+            cmd.billing = std::move($5);
+            cmd.warm = std::move($6);
+            if (provisioned) {
+                cmd.gsi_updates = std::move($10);
+            } else {
+                cmd.ignored_gsi_on_demand = true;
+            }
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_UPDATE K_GSI '(' alter_table_gsi_update ')'
+        {
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.gsi_updates = std::move($7);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_TTL K_DISABLED
+        {
+            /* SET TTL DISABLED: builds an AlterTtlCmd (DescribeTTL +
+             * UpdateTimeToLive, D-2e-7), a distinct ALTER node sharing the one
+             * StatementKind::alter_table. No attribute on disable — the executor
+             * reuses the existing TTL attribute name from the probe. */
+            ddbsh::engine::AlterTtlCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = false;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_TTL '(' string ')'
+        {
+            /* SET TTL ( attr ): enable TTL on the named attribute. */
+            ddbsh::engine::AlterTtlCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = true;
+            cmd.attribute = std::move($7);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_PITR K_ENABLED
+        {
+            /* SET PITR ENABLED: builds an AlterPitrCmd (UpdateContinuousBackups,
+             * D-2e-8), a distinct ALTER node sharing the one
+             * StatementKind::alter_table. K_PITR is a distinct first token after
+             * K_SET, so no new LALR conflict. */
+            ddbsh::engine::AlterPitrCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = true;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_SET K_PITR K_DISABLED
+        {
+            /* SET PITR DISABLED. */
+            ddbsh::engine::AlterPitrCmd cmd;
+            cmd.table = std::move($3);
+            cmd.enabled = false;
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_DROP K_REPLICA string
+        {
+            /* DROP REPLICA region: builds an AlterReplicaCmd (UpdateTable with a
+             * DeleteReplicationGroupMemberAction, D-2e-9). K_REPLICA is a
+             * distinct token after K_DROP (vs K_GSI), so no new LALR conflict. */
+            ddbsh::engine::AlterReplicaCmd cmd;
+            cmd.table = std::move($3);
+            cmd.replica.action = ddbsh::engine::ReplicaUpdate::Action::drop;
+            cmd.replica.region = std::move($6);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_ADD K_REPLICA string optional_table_class
+            optional_provisioned_throughput_override optional_replica_gsi_specification
+        {
+            /* ADD REPLICA region [table class] [( N rcu )] [GSI (...)]: builds an
+             * AlterReplicaCmd (UpdateTable with a CreateReplicationGroupMemberAction).
+             * optional_table_class defaults to STANDARD when absent, which the
+             * adapter always sets as the TableClassOverride (matching the
+             * original's always-SetTableClassOverride behavior). */
+            ddbsh::engine::AlterReplicaCmd cmd;
+            cmd.table = std::move($3);
+            cmd.replica.action = ddbsh::engine::ReplicaUpdate::Action::add;
+            cmd.replica.region = std::move($6);
+            cmd.replica.table_class = $7;
+            cmd.replica.throughput_override = std::move($8);
+            cmd.replica.replica_gsis = std::move($9);
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_UPDATE K_REPLICA string optional_table_class
+            optional_provisioned_throughput_override optional_replica_gsi_specification
+        {
+            /* UPDATE REPLICA region ...: builds an AlterReplicaCmd (UpdateTable
+             * with an UpdateReplicationGroupMemberAction). Same fields as ADD;
+             * K_REPLICA is a distinct token after K_UPDATE (vs K_GSI). */
+            ddbsh::engine::AlterReplicaCmd cmd;
+            cmd.table = std::move($3);
+            cmd.replica.action = ddbsh::engine::ReplicaUpdate::Action::update;
+            cmd.replica.region = std::move($6);
+            cmd.replica.table_class = $7;
+            cmd.replica.throughput_override = std::move($8);
+            cmd.replica.replica_gsis = std::move($9);
+            $$ = std::move(cmd);
+        }
+    ;
+
+/* ---- GSI update actions (2e-2) -------------------------------------------
+ * Each produces one engine::GsiUpdate (the SDK-free carrier for a
+ * GlobalSecondaryIndexUpdate). CREATE reuses the CREATE-TABLE key_schema /
+ * index_projection / billing / warm non-terminals verbatim. An UPDATE element
+ * sets EITHER billing OR warm (the original's two update-element forms), never
+ * both in one element. DROP carries only the index name. */
+alter_table_gsi_create:
+      string K_ON key_schema index_projection optional_billing_mode_and_throughput optional_warm_throughput
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::create;
+            g.index_name = std::move($1);
+            g.key_schema = std::move($3);
+            g.projection = std::move($4);
+            g.billing = std::move($5);
+            g.warm = std::move($6);
+            $$ = std::move(g);
+        }
+    ;
+
+alter_table_gsi_drop:
+      string
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::drop;
+            g.index_name = std::move($1);
+            $$ = std::move(g);
+        }
+    ;
+
+alter_table_gsi_update_element:
+      string K_SET billing_mode_and_throughput
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::update;
+            g.index_name = std::move($1);
+            g.billing = std::move($3);
+            $$ = std::move(g);
+        }
+    | string K_SET warm_throughput
+        {
+            ddbsh::engine::GsiUpdate g;
+            g.action = ddbsh::engine::GsiUpdate::Action::update;
+            g.index_name = std::move($1);
+            g.warm = std::move($3);
+            $$ = std::move(g);
+        }
+    ;
+
+alter_table_gsi_update:
+      alter_table_gsi_update_element
+        {
+            $$ = std::vector<ddbsh::engine::GsiUpdate>{};
+            $$.push_back(std::move($1));
+        }
+    | alter_table_gsi_update ',' alter_table_gsi_update_element
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+/* ---- REPLICA support non-terminals (2e-5) --------------------------------
+ * Port of the original's provisioned_throughput_override /
+ * optional_provisioned_throughput_override / optional_replica_gsi_specification
+ * / replica_gsi_specification_list(_entry) (parser.y). A replica throughput
+ * override carries READ capacity only (`( N rcu )` — the original set only
+ * RCU). The per-replica GSI list is `GSI ( name ( N rcu ), ... )`.
+ * optional_table_class is reused from CREATE TABLE (it defaults to STANDARD
+ * when absent, which the adapter always sets as the TableClassOverride). */
+provisioned_throughput_override:
+      '(' T_WHOLE_NUMBER K_RCU ')'
+        { $$ = ddbsh::engine::ProvisionedThroughputOverride{ddbsh::engine::parse_ll($2)}; }
+    ;
+
+optional_provisioned_throughput_override:
+      provisioned_throughput_override  { $$ = std::move($1); }
+    | %empty                           { $$ = std::nullopt; }
+    ;
+
+optional_replica_gsi_specification:
+      K_GSI '(' replica_gsi_specification_list ')'  { $$ = std::move($3); }
+    | %empty                                        { $$ = std::vector<ddbsh::engine::ReplicaGsi>{}; }
+    ;
+
+replica_gsi_specification_list:
+      replica_gsi_specification_list_entry
+        {
+            $$ = std::vector<ddbsh::engine::ReplicaGsi>{};
+            $$.push_back(std::move($1));
+        }
+    | replica_gsi_specification_list ',' replica_gsi_specification_list_entry
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+replica_gsi_specification_list_entry:
+      string provisioned_throughput_override
+        { $$ = ddbsh::engine::ReplicaGsi{std::move($1), std::move($2)}; }
     ;
 
 attribute_name_type_list:

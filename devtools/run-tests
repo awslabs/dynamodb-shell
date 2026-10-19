@@ -140,10 +140,13 @@ export AWS_REGION="$REGION"
 # engine. 2b (D24): symbol-table (ist-*), select (isel-*), insert (iins-*).
 # 2c adds UPDATE (iut-*) and DELETE (ddbsh-delete-*) — both families are fully
 # in 2c scope (no ratelimit/return-values cases; if_not_exists is implemented
-# as fidelity, matching the iut-ifne-* goldens). The step-2 exit gate empties
-# this (every family on the new engine, oracle wiring removed); it grows
-# family-by-family in 2c+ until then.
-ROUTED_RE="${DDBSH_ROUTED_RE:-^(ist-|isel-|iins-|iut-|ddbsh-delete-|itxt-)}"
+# as fidelity, matching the iut-ifne-* goldens). 2d adds transactions (itxt-*).
+# 2e-2 adds the create-drop family (icd-*: CREATE/DROP/DESCRIBE + the SET and
+# GSI ALTER forms), routed once the WHOLE family (incl. the ddbsh-wait
+# table-settled poll steps, which call a script not ddbsh) is green. The
+# step-2 exit gate empties this (every family on the new engine, oracle wiring
+# removed); it grows family-by-family in 2c+ until then.
+ROUTED_RE="${DDBSH_ROUTED_RE:-^(ist-|isel-|iins-|iut-|ddbsh-delete-|itxt-|icd-|ipt-)}"
 ENGINE_SRC="$REPO_DIR"
 ENGINE_BUILD="${DDBSH_ENGINE_BUILD_DIR:-$REPO_DIR/build-engine}"
 GOLDEN_SRC="$REPO_DIR/tests/golden"

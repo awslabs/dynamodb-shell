@@ -43,6 +43,7 @@ enum class StatementKind {
     describe,          ///< DESCRIBE <table>
     drop_table,        ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
     create_table,      ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
+    alter_table,       ///< ALTER TABLE <table> ... (UpdateTable / SET TTL / SET PITR / REPLICA)
     insert,            ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
     select_statement,  ///< SELECT [CONSISTENT] <proj|*> FROM <table>[.<index>] [WHERE ...]
     update_statement,  ///< UPDATE / UPSERT <table>[.<index>] SET|REMOVE ... [WHERE ...]

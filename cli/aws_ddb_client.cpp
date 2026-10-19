@@ -23,21 +23,35 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
+#include <aws/dynamodb/model/CreateGlobalSecondaryIndexAction.h>
+#include <aws/dynamodb/model/CreateReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
+#include <aws/dynamodb/model/DeleteGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/DeleteItemRequest.h>
+#include <aws/dynamodb/model/DeleteReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/DescribeTableReplicaAutoScalingRequest.h>
 #include <aws/dynamodb/model/DescribeTableRequest.h>
 #include <aws/dynamodb/model/DescribeTimeToLiveRequest.h>
 #include <aws/dynamodb/model/GetItemRequest.h>
+#include <aws/dynamodb/model/GlobalSecondaryIndexUpdate.h>
 #include <aws/dynamodb/model/ListTablesRequest.h>
+#include <aws/dynamodb/model/ProvisionedThroughputOverride.h>
 #include <aws/dynamodb/model/PutItemRequest.h>
 #include <aws/dynamodb/model/QueryRequest.h>
+#include <aws/dynamodb/model/ReplicaGlobalSecondaryIndex.h>
+#include <aws/dynamodb/model/ReplicationGroupUpdate.h>
 #include <aws/dynamodb/model/ScanRequest.h>
+#include <aws/dynamodb/model/TimeToLiveSpecification.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
 #include <aws/dynamodb/model/TransactWriteItemsRequest.h>
+#include <aws/dynamodb/model/UpdateContinuousBackupsRequest.h>
+#include <aws/dynamodb/model/UpdateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/UpdateItemRequest.h>
+#include <aws/dynamodb/model/UpdateReplicationGroupMemberAction.h>
+#include <aws/dynamodb/model/UpdateTableRequest.h>
+#include <aws/dynamodb/model/UpdateTimeToLiveRequest.h>
 
 namespace ddbsh::cli {
 
@@ -746,6 +760,28 @@ Aws::DynamoDB::Model::WarmThroughput to_sdk_warm(const WarmThroughput& w) {
     return out;
 }
 
+// Build a ProvisionedThroughput from billing rcu/wcu.
+Aws::DynamoDB::Model::ProvisionedThroughput to_sdk_provisioned(const BillingModeAndThroughput& b) {
+    Aws::DynamoDB::Model::ProvisionedThroughput pt;
+    pt.SetReadCapacityUnits(b.rcu);
+    pt.SetWriteCapacityUnits(b.wcu);
+    return pt;
+}
+
+// Build an OnDemandThroughput from the (optional per-dimension) max request
+// units. A -1 sentinel (clear-one / UNLIMITED clear-both) is carried verbatim,
+// exactly as the original's grammar encoded it (arch §8).
+Aws::DynamoDB::Model::OnDemandThroughput to_sdk_ondemand(const OnDemandThroughput& od) {
+    Aws::DynamoDB::Model::OnDemandThroughput out;
+    if (od.max_read_request_units.has_value()) {
+        out.SetMaxReadRequestUnits(*od.max_read_request_units);
+    }
+    if (od.max_write_request_units.has_value()) {
+        out.SetMaxWriteRequestUnits(*od.max_write_request_units);
+    }
+    return out;
+}
+
 // Apply a billing spec to the CreateTableRequest. A nullopt billing defaults to
 // PAY_PER_REQUEST (the original's "no billing clause" default).
 void apply_billing(Aws::DynamoDB::Model::CreateTableRequest& request,
@@ -756,20 +792,10 @@ void apply_billing(Aws::DynamoDB::Model::CreateTableRequest& request,
     }
     if (billing->mode == BillingMode::provisioned) {
         request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PROVISIONED);
-        Aws::DynamoDB::Model::ProvisionedThroughput pt;
-        pt.SetReadCapacityUnits(billing->rcu);
-        pt.SetWriteCapacityUnits(billing->wcu);
-        request.SetProvisionedThroughput(pt);
+        request.SetProvisionedThroughput(to_sdk_provisioned(*billing));
     } else {
         request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST);
-        Aws::DynamoDB::Model::OnDemandThroughput od;
-        if (billing->od.max_read_request_units.has_value()) {
-            od.SetMaxReadRequestUnits(*billing->od.max_read_request_units);
-        }
-        if (billing->od.max_write_request_units.has_value()) {
-            od.SetMaxWriteRequestUnits(*billing->od.max_write_request_units);
-        }
-        request.SetOnDemandThroughput(od);
+        request.SetOnDemandThroughput(to_sdk_ondemand(billing->od));
     }
 }
 
@@ -779,20 +805,116 @@ void apply_billing(Aws::DynamoDB::Model::CreateTableRequest& request,
 void apply_gsi_throughput(Aws::DynamoDB::Model::GlobalSecondaryIndex& gsi,
                           const BillingModeAndThroughput& billing) {
     if (billing.mode == BillingMode::provisioned) {
-        Aws::DynamoDB::Model::ProvisionedThroughput pt;
-        pt.SetReadCapacityUnits(billing.rcu);
-        pt.SetWriteCapacityUnits(billing.wcu);
-        gsi.SetProvisionedThroughput(pt);
+        gsi.SetProvisionedThroughput(to_sdk_provisioned(billing));
     } else {
-        Aws::DynamoDB::Model::OnDemandThroughput od;
-        if (billing.od.max_read_request_units.has_value()) {
-            od.SetMaxReadRequestUnits(*billing.od.max_read_request_units);
-        }
-        if (billing.od.max_write_request_units.has_value()) {
-            od.SetMaxWriteRequestUnits(*billing.od.max_write_request_units);
-        }
-        gsi.SetOnDemandThroughput(od);
+        gsi.SetOnDemandThroughput(to_sdk_ondemand(billing.od));
     }
+}
+
+// Translate one engine::GsiUpdate into a GlobalSecondaryIndexUpdate, mirroring
+// the original's alter_table_gsi_create / _update_element / _drop grammar
+// actions (parser.y): a Create action carries key schema + projection +
+// optional throughput/warm; an Update action carries only throughput (matching
+// the table mode) OR warm; a Delete action carries only the index name. The
+// create/update throughput setters take the same shape as the table-level ones.
+Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate to_sdk_gsi_update(const GsiUpdate& gu) {
+    Aws::DynamoDB::Model::GlobalSecondaryIndexUpdate out;
+    switch (gu.action) {
+        case GsiUpdate::Action::create: {
+            Aws::DynamoDB::Model::CreateGlobalSecondaryIndexAction action;
+            action.SetIndexName(gu.index_name);
+            if (gu.key_schema.has_value()) {
+                action.SetKeySchema(to_sdk_key_schema(*gu.key_schema));
+            }
+            if (gu.projection.has_value()) {
+                action.SetProjection(to_sdk_projection(*gu.projection));
+            }
+            if (gu.billing.has_value()) {
+                if (gu.billing->mode == BillingMode::provisioned) {
+                    action.SetProvisionedThroughput(to_sdk_provisioned(*gu.billing));
+                } else {
+                    action.SetOnDemandThroughput(to_sdk_ondemand(gu.billing->od));
+                }
+            }
+            if (gu.warm.has_value()) {
+                action.SetWarmThroughput(to_sdk_warm(*gu.warm));
+            }
+            out.SetCreate(action);
+            break;
+        }
+        case GsiUpdate::Action::update: {
+            Aws::DynamoDB::Model::UpdateGlobalSecondaryIndexAction action;
+            action.SetIndexName(gu.index_name);
+            if (gu.billing.has_value()) {
+                if (gu.billing->mode == BillingMode::provisioned) {
+                    action.SetProvisionedThroughput(to_sdk_provisioned(*gu.billing));
+                } else {
+                    action.SetOnDemandThroughput(to_sdk_ondemand(gu.billing->od));
+                }
+            }
+            if (gu.warm.has_value()) {
+                action.SetWarmThroughput(to_sdk_warm(*gu.warm));
+            }
+            out.SetUpdate(action);
+            break;
+        }
+        case GsiUpdate::Action::drop: {
+            Aws::DynamoDB::Model::DeleteGlobalSecondaryIndexAction action;
+            action.SetIndexName(gu.index_name);
+            out.SetDelete(action);
+            break;
+        }
+    }
+    return out;
+}
+
+// Translate an SSE spec to the SDK SSESpecification (shared by CREATE and
+// ALTER). Mirrors the original's sse_specification grammar action.
+Aws::DynamoDB::Model::SSESpecification to_sdk_sse(const SseSpec& spec) {
+    Aws::DynamoDB::Model::SSESpecification sse;
+    sse.SetEnabled(spec.enabled);
+    if (spec.enabled) {
+        if (spec.sse_type == SseType::aes256) {
+            sse.SetSSEType(Aws::DynamoDB::Model::SSEType::AES256);
+        } else {
+            sse.SetSSEType(Aws::DynamoDB::Model::SSEType::KMS);
+        }
+        if (spec.kms_master_key_id.has_value()) {
+            sse.SetKMSMasterKeyId(*spec.kms_master_key_id);
+        }
+    }
+    return sse;
+}
+
+// Translate a stream spec to the SDK StreamSpecification (shared by CREATE and
+// ALTER). Mirrors the original's stream_specification grammar action.
+Aws::DynamoDB::Model::StreamSpecification to_sdk_stream(const StreamSpec& spec) {
+    Aws::DynamoDB::Model::StreamSpecification stream;
+    stream.SetStreamEnabled(spec.enabled);
+    if (spec.enabled) {
+        switch (spec.view_type) {
+            case StreamViewType::keys_only:
+                stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::KEYS_ONLY);
+                break;
+            case StreamViewType::new_image:
+                stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::NEW_IMAGE);
+                break;
+            case StreamViewType::old_image:
+                stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::OLD_IMAGE);
+                break;
+            case StreamViewType::new_and_old_images:
+                stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::NEW_AND_OLD_IMAGES);
+                break;
+        }
+    }
+    return stream;
+}
+
+// Translate a table class to the SDK enum (shared by CREATE and ALTER).
+Aws::DynamoDB::Model::TableClass to_sdk_table_class(TableClass tc) {
+    return tc == TableClass::standard_infrequent_access
+               ? Aws::DynamoDB::Model::TableClass::STANDARD_INFREQUENT_ACCESS
+               : Aws::DynamoDB::Model::TableClass::STANDARD;
 }
 
 Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn& in) {
@@ -837,47 +959,14 @@ Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn&
     }
 
     if (in.stream.has_value()) {
-        Aws::DynamoDB::Model::StreamSpecification stream;
-        stream.SetStreamEnabled(in.stream->enabled);
-        if (in.stream->enabled) {
-            switch (in.stream->view_type) {
-                case StreamViewType::keys_only:
-                    stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::KEYS_ONLY);
-                    break;
-                case StreamViewType::new_image:
-                    stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::NEW_IMAGE);
-                    break;
-                case StreamViewType::old_image:
-                    stream.SetStreamViewType(Aws::DynamoDB::Model::StreamViewType::OLD_IMAGE);
-                    break;
-                case StreamViewType::new_and_old_images:
-                    stream.SetStreamViewType(
-                        Aws::DynamoDB::Model::StreamViewType::NEW_AND_OLD_IMAGES);
-                    break;
-            }
-        }
-        request.SetStreamSpecification(stream);
+        request.SetStreamSpecification(to_sdk_stream(*in.stream));
     }
 
     if (in.sse.has_value()) {
-        Aws::DynamoDB::Model::SSESpecification sse;
-        sse.SetEnabled(in.sse->enabled);
-        if (in.sse->enabled) {
-            if (in.sse->sse_type == SseType::aes256) {
-                sse.SetSSEType(Aws::DynamoDB::Model::SSEType::AES256);
-            } else {
-                sse.SetSSEType(Aws::DynamoDB::Model::SSEType::KMS);
-            }
-            if (in.sse->kms_master_key_id.has_value()) {
-                sse.SetKMSMasterKeyId(*in.sse->kms_master_key_id);
-            }
-        }
-        request.SetSSESpecification(sse);
+        request.SetSSESpecification(to_sdk_sse(*in.sse));
     }
 
-    request.SetTableClass(in.table_class == TableClass::standard_infrequent_access
-                              ? Aws::DynamoDB::Model::TableClass::STANDARD_INFREQUENT_ACCESS
-                              : Aws::DynamoDB::Model::TableClass::STANDARD);
+    request.SetTableClass(to_sdk_table_class(in.table_class));
 
     request.SetDeletionProtectionEnabled(in.deletion_protection);
 
@@ -890,9 +979,170 @@ Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn&
     return request;
 }
 
+// ---- Replica translation (ddbsh::ReplicaUpdate -> ReplicationGroupUpdate) --
+// Port of the original CUpdateTableReplica (arch §7): ADD -> Create, UPDATE ->
+// Update, DROP -> Delete, exactly one action per ReplicationGroupUpdate.
+// ADD/UPDATE always set the TableClassOverride (the original defaults it to
+// STANDARD when the clause is absent — reproduced via value_or) and set the
+// read-only ProvisionedThroughputOverride and the per-GSI overrides only when
+// the clause provided them.
+Aws::DynamoDB::Model::ProvisionedThroughputOverride to_sdk_throughput_override(
+    const ProvisionedThroughputOverride& o) {
+    Aws::DynamoDB::Model::ProvisionedThroughputOverride out;
+    out.SetReadCapacityUnits(o.read_capacity_units);
+    return out;
+}
+
+Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex> to_sdk_replica_gsis(
+    const std::vector<ReplicaGsi>& gsis) {
+    Aws::Vector<Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex> out;
+    out.reserve(gsis.size());
+    for (const auto& g : gsis) {
+        Aws::DynamoDB::Model::ReplicaGlobalSecondaryIndex rgsi;
+        rgsi.SetIndexName(g.index_name);
+        rgsi.SetProvisionedThroughputOverride(to_sdk_throughput_override(g.throughput_override));
+        out.push_back(rgsi);
+    }
+    return out;
+}
+
+Aws::DynamoDB::Model::ReplicationGroupUpdate to_sdk_replica_update(const ReplicaUpdate& r) {
+    Aws::DynamoDB::Model::ReplicationGroupUpdate out;
+    switch (r.action) {
+        case ReplicaUpdate::Action::drop: {
+            Aws::DynamoDB::Model::DeleteReplicationGroupMemberAction del;
+            del.SetRegionName(r.region);
+            out.SetDelete(del);
+            break;
+        }
+        case ReplicaUpdate::Action::add: {
+            Aws::DynamoDB::Model::CreateReplicationGroupMemberAction create;
+            create.SetRegionName(r.region);
+            create.SetTableClassOverride(
+                to_sdk_table_class(r.table_class.value_or(TableClass::standard)));
+            if (r.throughput_override.has_value()) {
+                create.SetProvisionedThroughputOverride(
+                    to_sdk_throughput_override(*r.throughput_override));
+            }
+            if (!r.replica_gsis.empty()) {
+                create.SetGlobalSecondaryIndexes(to_sdk_replica_gsis(r.replica_gsis));
+            }
+            out.SetCreate(create);
+            break;
+        }
+        case ReplicaUpdate::Action::update: {
+            Aws::DynamoDB::Model::UpdateReplicationGroupMemberAction update;
+            update.SetRegionName(r.region);
+            update.SetTableClassOverride(
+                to_sdk_table_class(r.table_class.value_or(TableClass::standard)));
+            if (r.throughput_override.has_value()) {
+                update.SetProvisionedThroughputOverride(
+                    to_sdk_throughput_override(*r.throughput_override));
+            }
+            if (!r.replica_gsis.empty()) {
+                update.SetGlobalSecondaryIndexes(to_sdk_replica_gsis(r.replica_gsis));
+            }
+            out.SetUpdate(update);
+            break;
+        }
+    }
+    return out;
+}
+
+// ---- UpdateTable translation (ddbsh::UpdateTableIn -> SDK request) ---------
+// Mirrors the original CUpdateTableCommand (arch §7): set ONLY the fields the
+// ALTER clause provided, leaving the rest unset so the SDK omits them from the
+// payload. Billing always sets BOTH the mode and the matching throughput
+// (provisioned => ProvisionedThroughput; on-demand => OnDemandThroughput),
+// exactly as the original's billing ctor did.
+Aws::DynamoDB::Model::UpdateTableRequest build_update_table(const UpdateTableIn& in) {
+    Aws::DynamoDB::Model::UpdateTableRequest request;
+    request.SetTableName(in.table_name);
+
+    if (in.billing.has_value()) {
+        if (in.billing->mode == BillingMode::provisioned) {
+            request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PROVISIONED);
+            request.SetProvisionedThroughput(to_sdk_provisioned(*in.billing));
+        } else {
+            request.SetBillingMode(Aws::DynamoDB::Model::BillingMode::PAY_PER_REQUEST);
+            request.SetOnDemandThroughput(to_sdk_ondemand(in.billing->od));
+        }
+    }
+
+    if (in.warm.has_value()) {
+        request.SetWarmThroughput(to_sdk_warm(*in.warm));
+    }
+
+    if (in.sse.has_value()) {
+        request.SetSSESpecification(to_sdk_sse(*in.sse));
+    }
+
+    if (in.stream.has_value()) {
+        request.SetStreamSpecification(to_sdk_stream(*in.stream));
+    }
+
+    if (in.table_class.has_value()) {
+        request.SetTableClass(to_sdk_table_class(*in.table_class));
+    }
+
+    if (in.deletion_protection.has_value()) {
+        request.SetDeletionProtectionEnabled(*in.deletion_protection);
+    }
+
+    // CREATE GSI carries the new key attributes in AttributeDefinitions (the
+    // SDK requires them on the UpdateTable request); UPDATE/DROP GSI carry none.
+    for (const auto& attr : in.attribute_definitions) {
+        Aws::DynamoDB::Model::AttributeDefinition def;
+        def.SetAttributeName(attr.name);
+        def.SetAttributeType(to_sdk(attr.type));
+        request.AddAttributeDefinitions(def);
+    }
+
+    for (const auto& gu : in.gsi_updates) {
+        request.AddGlobalSecondaryIndexUpdates(to_sdk_gsi_update(gu));
+    }
+
+    // A replica ALTER carries exactly one ReplicationGroupUpdate (the original
+    // CUpdateTableReplica::run added one). Only a replica ALTER sets this; a
+    // plain SET leaves it nullopt (D-2e-12).
+    if (in.replica.has_value()) {
+        request.AddReplicaUpdates(to_sdk_replica_update(*in.replica));
+    }
+
+    return request;
+}
+
 Aws::DynamoDB::Model::DeleteTableRequest build_delete_table(const DeleteTableIn& in) {
     Aws::DynamoDB::Model::DeleteTableRequest request;
     request.SetTableName(in.table_name);
+    return request;
+}
+
+// Mirrors the original CUpdateTableTTLCommand (arch §7): one
+// UpdateTimeToLiveRequest carrying a TimeToLiveSpecification{Enabled,
+// AttributeName}. The executor supplies the effective attribute name (the
+// user's on enable, the existing one on disable), so this is a flat translation.
+Aws::DynamoDB::Model::UpdateTimeToLiveRequest build_update_time_to_live(
+    const UpdateTimeToLiveIn& in) {
+    Aws::DynamoDB::Model::UpdateTimeToLiveRequest request;
+    request.SetTableName(in.table_name);
+    Aws::DynamoDB::Model::TimeToLiveSpecification spec;
+    spec.SetEnabled(in.enabled);
+    spec.SetAttributeName(in.attribute_name);
+    request.SetTimeToLiveSpecification(spec);
+    return request;
+}
+
+// Mirrors the original CUpdatePITRCommand (arch §7): one
+// UpdateContinuousBackupsRequest carrying a PointInTimeRecoverySpecification
+// {PointInTimeRecoveryEnabled}. A flat translation.
+Aws::DynamoDB::Model::UpdateContinuousBackupsRequest build_update_continuous_backups(
+    const UpdateContinuousBackupsIn& in) {
+    Aws::DynamoDB::Model::UpdateContinuousBackupsRequest request;
+    request.SetTableName(in.table_name);
+    Aws::DynamoDB::Model::PointInTimeRecoverySpecification spec;
+    spec.SetPointInTimeRecoveryEnabled(in.enabled);
+    request.SetPointInTimeRecoverySpecification(spec);
     return request;
 }
 
@@ -909,6 +1159,65 @@ Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
                           std::string(err.GetRequestId().c_str())});
     }
     return CreateTableOut{};
+}
+
+Result<UpdateTableOut> AwsDDBClient::update_table(const UpdateTableIn& in) {
+    auto request = build_update_table(in);
+    auto outcome = client_->UpdateTable(request);
+    if (!outcome.IsSuccess()) {
+        // Compose the byte-exact message the original logged on an UpdateTable
+        // failure: "Update Table failed. <ExceptionName>. <RequestId>.
+        // <Message>" (update_table.cpp logerror, note the space in "Update
+        // Table"). Unpinned by golden (icd asserts success paths), D-2e-13.
+        const auto& err = outcome.GetError();
+        std::string message =
+            "Update Table failed. " + std::string(err.GetExceptionName().c_str()) + ". " +
+            std::string(err.GetRequestId().c_str()) + ". " + std::string(err.GetMessage().c_str());
+        return fail(Error{Errc::service_error, std::move(message),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return UpdateTableOut{};
+}
+
+Result<UpdateTimeToLiveOut> AwsDDBClient::update_time_to_live(const UpdateTimeToLiveIn& in) {
+    auto request = build_update_time_to_live(in);
+    auto outcome = client_->UpdateTimeToLive(request);
+    if (!outcome.IsSuccess()) {
+        // Compose the byte-exact message the original logged on an
+        // UpdateTimeToLive failure: "Error updating TTL. <ExceptionName>.
+        // <RequestId>.\n\t<Message>" (update_table_ttl.cpp logerror). Unpinned
+        // by golden (ipt/icd assert success paths), D-2e-13.
+        const auto& err = outcome.GetError();
+        std::string message = "Error updating TTL. " + std::string(err.GetExceptionName().c_str()) +
+                              ". " + std::string(err.GetRequestId().c_str()) + ".\n\t" +
+                              std::string(err.GetMessage().c_str());
+        return fail(Error{Errc::service_error, std::move(message),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return UpdateTimeToLiveOut{};
+}
+
+Result<UpdateContinuousBackupsOut> AwsDDBClient::update_continuous_backups(
+    const UpdateContinuousBackupsIn& in) {
+    auto request = build_update_continuous_backups(in);
+    auto outcome = client_->UpdateContinuousBackups(request);
+    if (!outcome.IsSuccess()) {
+        // Compose the byte-exact message the original logged on an
+        // UpdateContinuousBackups failure: "Setting PITR failed. <ExceptionName>.
+        // <RequestId>.\n\t<Message>" (pitr.cpp logerror). Unpinned by golden
+        // (ipt asserts success paths), D-2e-13.
+        const auto& err = outcome.GetError();
+        std::string message = "Setting PITR failed. " +
+                              std::string(err.GetExceptionName().c_str()) + ". " +
+                              std::string(err.GetRequestId().c_str()) + ".\n\t" +
+                              std::string(err.GetMessage().c_str());
+        return fail(Error{Errc::service_error, std::move(message),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    return UpdateContinuousBackupsOut{};
 }
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
@@ -1296,6 +1605,12 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                 return payload(build_delete_item(in));
             } else if constexpr (std::is_same_v<T, CreateTableIn>) {
                 return payload(build_create_table(in));
+            } else if constexpr (std::is_same_v<T, UpdateTableIn>) {
+                return payload(build_update_table(in));
+            } else if constexpr (std::is_same_v<T, UpdateTimeToLiveIn>) {
+                return payload(build_update_time_to_live(in));
+            } else if constexpr (std::is_same_v<T, UpdateContinuousBackupsIn>) {
+                return payload(build_update_continuous_backups(in));
             } else if constexpr (std::is_same_v<T, DeleteTableIn>) {
                 return payload(build_delete_table(in));
             } else if constexpr (std::is_same_v<T, DescribeTableIn>) {

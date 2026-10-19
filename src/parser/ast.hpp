@@ -154,11 +154,15 @@ using ddbsh::AttributeDef;
 using ddbsh::BillingMode;
 using ddbsh::BillingModeAndThroughput;
 using ddbsh::Gsi;
+using ddbsh::GsiUpdate;
 using ddbsh::KeySchema;
 using ddbsh::Lsi;
 using ddbsh::OnDemandThroughput;
 using ddbsh::Projection;
 using ddbsh::ProjectionType;
+using ddbsh::ProvisionedThroughputOverride;
+using ddbsh::ReplicaGsi;
+using ddbsh::ReplicaUpdate;
 using ddbsh::ScalarType;
 using ddbsh::SseSpec;
 using ddbsh::SseType;
@@ -318,12 +322,88 @@ struct DeleteCmd {
     ReturnValue return_value = ReturnValue::none;
 };
 
+// ---- ALTER TABLE (2e) ------------------------------------------------------
+
+/// ALTER TABLE <table> SET ... (UpdateTable; the original CUpdateTableCommand).
+/// An all-optional-fields model: the grammar fills ONLY the field(s) the clause
+/// provided and leaves the rest nullopt, mirroring the original (which set
+/// exactly the clause's attributes on one UpdateTableRequest). `table_class`
+/// and `deletion_protection` are optional (NOT defaulted) so "clause absent"
+/// serializes to no field in the request (arch §8, D-2e-2). The four oracle
+/// command classes split into four AST nodes sharing one StatementKind::
+/// alter_table (D-2e-1); this is the UpdateTable node. GSI-update and replica
+/// payloads land in later sub-phases (2e-2 / 2e-5).
+struct AlterTableCmd {
+    std::string table;
+    std::optional<BillingModeAndThroughput> billing;  ///< SET billing_mode_and_throughput
+    std::optional<WarmThroughput> warm;               ///< SET warm_throughput
+    std::optional<SseSpec> sse;                       ///< SET sse_specification
+    std::optional<StreamSpec> stream;                 ///< SET stream_specification
+    std::optional<TableClass> table_class;            ///< SET table_class
+    std::optional<bool> deletion_protection;          ///< SET deletion protection enabled|disabled
+    std::vector<AttributeDef> attribute_definitions;  ///< ( attr type, ... ) for CREATE GSI
+    std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
+    /// D-2e-6: a combined `SET billing ... UPDATE GSI (...)` whose table billing
+    /// mode is on-demand drops the GSI updates (the index throughput is implied)
+    /// and the original emitted an informational message. The gate is applied in
+    /// the grammar action (gsi_updates cleared); this flag records that it fired
+    /// so the executor surfaces the (unpinned) diagnostic on stderr.
+    bool ignored_gsi_on_demand = false;
+};
+
+/// ALTER TABLE <table> SET TTL ( attr ) | SET TTL DISABLED (DescribeTimeToLive
+/// + UpdateTimeToLive; the original CUpdateTableTTLCommand). A second ALTER AST
+/// node sharing the one StatementKind::alter_table (D-2e-1). `enabled` is true
+/// for `SET TTL ( attr )` (the attribute carries the user-supplied name); false
+/// for `SET TTL DISABLED` (the attribute is empty — on disable the executor
+/// reuses the existing TTL attribute name from the DescribeTimeToLive response,
+/// exactly as the original did). D-2e-7.
+struct AlterTtlCmd {
+    std::string table;
+    bool enabled = false;
+    std::string attribute;  ///< the TTL attribute name; set only when enabled
+};
+
+/// ALTER TABLE <table> SET PITR ENABLED | SET PITR DISABLED (the original
+/// CUpdatePITRCommand -> UpdateContinuousBackups). A third ALTER AST node
+/// sharing the one StatementKind::alter_table (D-2e-1). `enabled` sets the
+/// PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled flag. On success
+/// the executor emits the `ALTER` status token; EXPLAIN serializes the request
+/// under the quirky label `UpdateContinuousBackupsRequest(...)` — the ONLY
+/// EXPLAIN label in the original that carries a `Request` suffix (the original
+/// pitr.cpp printf). D-2e-8 / D-2e-11.
+struct AlterPitrCmd {
+    std::string table;
+    bool enabled = false;
+};
+
+/// ALTER TABLE <table> ADD|DROP|UPDATE REPLICA <region> ... (the original
+/// CUpdateTableReplica -> UpdateTable with ONE ReplicationGroupUpdate). The
+/// fourth and final ALTER AST node sharing the one StatementKind::alter_table
+/// (D-2e-1). It carries the table name plus the single ReplicaUpdate the clause
+/// built (action + region + class/throughput/gsis); the executor copies it into
+/// UpdateTableIn::replica and issues UpdateTable. On success -> the `ALTER`
+/// status token; EXPLAIN -> one `UpdateTable(...)` block (it IS an UpdateTable
+/// call, so the same label as a plain SET), NO trailing status (D-2e-9/-11).
+///
+/// NOTE (arch §12 #4): the original left its m_delete/m_update/m_create action
+/// pointers raw (the vendored oracle later default-initialized them to nullptr).
+/// Our value-type ReplicaUpdate is zero-initialized by construction — a natural
+/// RAII fix, NOT an observable divergence: the original sets exactly one action
+/// per invocation and guards the rest with `if (ptr)`, so the serialized
+/// UpdateTable request is identical.
+struct AlterReplicaCmd {
+    std::string table;
+    ReplicaUpdate replica;
+};
+
 struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>)
 
 /// The parsed command. Grows one alternative per ported command family.
-using CommandNode = std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd,
-                                 DescribeCmd, DropTableCmd, CreateTableCmd, InsertCmd, SelectCmd,
-                                 UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
+using CommandNode =
+    std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
+                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, AlterPitrCmd,
+                 AlterReplicaCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -368,6 +448,14 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::drop_table;
             } else if constexpr (std::is_same_v<T, CreateTableCmd>) {
                 return StatementKind::create_table;
+            } else if constexpr (std::is_same_v<T, AlterTableCmd>) {
+                return StatementKind::alter_table;
+            } else if constexpr (std::is_same_v<T, AlterTtlCmd>) {
+                return StatementKind::alter_table;
+            } else if constexpr (std::is_same_v<T, AlterPitrCmd>) {
+                return StatementKind::alter_table;
+            } else if constexpr (std::is_same_v<T, AlterReplicaCmd>) {
+                return StatementKind::alter_table;
             } else if constexpr (std::is_same_v<T, InsertCmd>) {
                 return StatementKind::insert;
             } else if constexpr (std::is_same_v<T, SelectCmd>) {
