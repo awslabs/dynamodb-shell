@@ -60,140 +60,22 @@
 
 #include "aws_api_guard.hpp"
 #include "aws_ddb_client.hpp"
+#include "repl.hpp"
 
 namespace {
+
+// The terminal-free driver (Terminator, LineSource, StreamLineSource,
+// run_source) lives in cli/repl.{hpp,cpp} so it can be unit-tested offline;
+// only the readline-backed StdinLineSource and process wiring stay here.
+using ddbsh::cli::LineSource;
+using ddbsh::cli::run_source;
+using ddbsh::cli::StreamLineSource;
+using ddbsh::cli::Terminator;
 
 const char* env_or(const char* name, const char* fallback) {
     const char* v = std::getenv(name);
     return (v != nullptr && v[0] != '\0') ? v : fallback;
 }
-
-// ASCII whitespace trim (locale-independent — the terminator match must not
-// depend on the process locale, matching the engine's deterministic parsing).
-std::string_view trim(std::string_view s) {
-    const auto is_ws = [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
-    };
-    std::size_t begin = 0;
-    std::size_t end = s.size();
-    while (begin < end && is_ws(static_cast<unsigned char>(s[begin]))) {
-        ++begin;
-    }
-    while (end > begin && is_ws(static_cast<unsigned char>(s[end - 1]))) {
-        --end;
-    }
-    return s.substr(begin, end - begin);
-}
-
-// ASCII case-insensitive equality (the `go` terminator and the `set terminator`
-// keywords are matched case-insensitively, per isql convention).
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    const auto lower = [](unsigned char c) -> unsigned char {
-        return (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c - 'A' + 'a') : c;
-    };
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if (lower(static_cast<unsigned char>(a[i])) != lower(static_cast<unsigned char>(b[i]))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// The batch terminator. Either a BLANK line ends the batch, or a word on its
-// own line (default `go`) does. A deliberate CLI-layer concept — the engine
-// never sees the terminator (statements inside a batch stay ';'-terminated).
-struct Terminator {
-    bool blank_line = false;  ///< true => a blank line ends the batch
-    std::string word = "go";  ///< the terminator word when !blank_line
-};
-
-bool is_terminator_line(std::string_view trimmed, const Terminator& term) {
-    if (term.blank_line) {
-        return trimmed.empty();
-    }
-    return !trimmed.empty() && iequals(trimmed, term.word);
-}
-
-// Strip a single matched pair of surrounding ASCII quotes (" or ') if present.
-std::string_view strip_quotes(std::string_view s) {
-    if (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.back() == s.front()) {
-        return s.substr(1, s.size() - 2);
-    }
-    return s;
-}
-
-// Recognize the CLI-only `set terminator [value]` meta-command. Recognized only
-// at the start of a batch (empty buffer), as a standalone line. With no value
-// the terminator becomes a blank line; otherwise it becomes the given word
-// (surrounding quotes stripped). Returns true if the line was the directive and
-// was consumed.
-//
-// NB (collision): the engine currently has no SET command (DynamoDB ddbsh never
-// had one, and the 2b scope excludes it), so intercepting `set terminator` at
-// the CLI is unambiguous today. If a future engine SET statement is added, the
-// CLI must disambiguate this directive from it.
-// TODO(phase-N): revisit if an engine-level SET command is introduced.
-bool try_set_terminator_directive(std::string_view trimmed, Terminator& term) {
-    // First token must be "set".
-    std::size_t p = 0;
-    const auto next_token = [&](std::size_t& pos) -> std::string_view {
-        while (pos < trimmed.size() && (trimmed[pos] == ' ' || trimmed[pos] == '\t')) {
-            ++pos;
-        }
-        std::size_t start = pos;
-        while (pos < trimmed.size() && trimmed[pos] != ' ' && trimmed[pos] != '\t') {
-            ++pos;
-        }
-        return trimmed.substr(start, pos - start);
-    };
-
-    if (!iequals(next_token(p), "set")) {
-        return false;
-    }
-    if (!iequals(next_token(p), "terminator")) {
-        return false;
-    }
-
-    std::string_view rest = trim(trimmed.substr(p));
-    rest = strip_quotes(rest);
-    if (rest.empty()) {
-        term.blank_line = true;
-        term.word.clear();
-    } else {
-        term.blank_line = false;
-        term.word = std::string(rest);
-    }
-    return true;
-}
-
-// A source of physical input lines (one line, newline stripped), or nullopt at
-// end of input. Isolates the CLI's three input backends behind one seam.
-class LineSource {
-public:
-    virtual ~LineSource() = default;
-    virtual std::optional<std::string> next() = 0;
-};
-
-// File / string input: std::getline over any istream (ifstream for -f,
-// istringstream for -c). No prompt, no history (non-interactive).
-class StreamLineSource : public LineSource {
-public:
-    explicit StreamLineSource(std::istream& in) : in_(in) {}
-
-    std::optional<std::string> next() override {
-        std::string line;
-        if (!std::getline(in_, line)) {
-            return std::nullopt;
-        }
-        return line;
-    }
-
-private:
-    std::istream& in_;
-};
 
 // Interactive stdin: GNU readline with the region prompt + history. Isolated
 // here so the engine stays terminal-free (tenet 3 / D6).
@@ -219,134 +101,6 @@ public:
 private:
     std::string prompt_;
 };
-
-// The result of running one assembled batch through the engine.
-struct BatchStatus {
-    bool quit = false;       ///< a QUIT statement ran; stop the shell
-    bool had_error = false;  ///< at least one statement (or the batch tail) errored
-};
-
-// Execute a BATCH of ';'-separated statements through the engine, in order,
-// writing each result to the appropriate stream. The engine parses the whole
-// string in one call (Session::parse_batch) and tolerates a missing trailing
-// ';' (arch §4); the CLI owns the execute loop and the stop-on-quit /
-// abort-on-error policy — no lexing/parsing lives here (tenet 3). A trailing
-// parse error is rendered to stderr after the statements that parsed ("execute
-// what you can"). When abort_on_error is set, execution stops at the first
-// failing statement (matching the original run loop's
-// `!retval || !abort_on_error()` guard, arch §3).
-BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
-                           std::string_view text, bool abort_on_error) {
-    // Render each outcome fragment to stdout as the engine emits it, so a
-    // multi-row INSERT (or any future streaming write) interleaves its
-    // already-written status tokens with a mid-batch error exactly as the
-    // original did (AI-4 / D-2c-12).
-    struct RenderingSink : ddbsh::OutcomeSink {
-        const ddbsh::render::Renderer& renderer;
-        explicit RenderingSink(const ddbsh::render::Renderer& r) : renderer(r) {}
-        void emit(const ddbsh::ExecOutcome& fragment) override {
-            // stdout gets the result bytes; stderr gets any diagnostics the
-            // outcome carries (a transaction's non-reducible-SELECT message,
-            // D-2d-6). Both are flushed so a mid-batch error interleaves
-            // correctly (AI-4 / D-2c-12).
-            std::fputs(renderer.render(fragment).c_str(), stdout);
-            std::fflush(stdout);
-            std::string diag = renderer.render_stderr(fragment);
-            if (!diag.empty()) {
-                std::fputs(diag.c_str(), stderr);
-                std::fflush(stderr);
-            }
-        }
-    };
-
-    BatchStatus status;
-    ddbsh::ParsedBatch batch = session.parse_batch(text);
-    for (const auto& stmt : batch.statements) {
-        RenderingSink sink(renderer);
-        auto outcome = session.execute(stmt, sink);
-        if (!outcome.has_value()) {
-            std::fputs(renderer.render_error(outcome.error()).c_str(), stderr);
-            std::fflush(stderr);
-            status.had_error = true;
-            if (abort_on_error) {
-                return status;
-            }
-            continue;
-        }
-        if (stmt.kind() == ddbsh::StatementKind::quit) {
-            status.quit = true;
-            return status;
-        }
-    }
-    if (batch.error.has_value()) {
-        // A PARSE error is reported to stderr but does NOT set the process
-        // error exit, matching the original's run loop (ddbsh.cpp CDDBSh::run):
-        // `retval` is updated ONLY by `pCommand->run()`, so a yyparse failure
-        // leaves it untouched (0 for a pure parse error) and the shell exits 0.
-        // Only a command's run() failure (handled above) contributes to the
-        // nonzero exit code. This is the behavior the golden suite pins — e.g.
-        // ddbsh-basic-test-9 / ddbsh-cross-account-test-9, whose mutual-exclusion
-        // semantic error must still exit 0 (the oracle does). Abort-on-error
-        // likewise keys off run() failures, not parse failures (a config-file
-        // parse error does not abort startup in the original either).
-        std::fputs(renderer.render_error(*batch.error).c_str(), stderr);
-        std::fflush(stderr);
-    }
-    return status;
-}
-
-// Drive a LineSource through the isql assembly loop: buffer lines until a
-// terminator line (or EOF), flush each batch to the engine. Honors the runtime
-// `set terminator` meta-command (at batch start), stop-on-quit, and
-// abort-on-error. Returns 1 if any error occurred (for the process exit code),
-// else 0.
-int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
-               Terminator& term, bool abort_on_error) {
-    std::string buffer;
-    bool had_error = false;
-
-    const auto flush = [&](bool& stop) -> void {
-        if (buffer.empty()) {
-            return;
-        }
-        BatchStatus st = run_batch_text(session, renderer, buffer, abort_on_error);
-        buffer.clear();
-        had_error = had_error || st.had_error;
-        if (st.quit || (st.had_error && abort_on_error)) {
-            stop = true;
-        }
-    };
-
-    for (std::optional<std::string> line = src.next(); line.has_value(); line = src.next()) {
-        std::string_view trimmed = trim(*line);
-
-        // Batch-start meta-command: change the terminator mid-session.
-        if (buffer.empty() && try_set_terminator_directive(trimmed, term)) {
-            continue;
-        }
-
-        if (is_terminator_line(trimmed, term)) {
-            bool stop = false;
-            flush(stop);
-            if (stop) {
-                return had_error ? 1 : 0;
-            }
-            continue;
-        }
-
-        if (!buffer.empty()) {
-            buffer.push_back('\n');
-        }
-        buffer += *line;
-    }
-
-    // EOF always flushes the remaining buffer (the ratified EOF-is-a-terminator
-    // rule): an incomplete tail becomes a syntax error, a complete statement
-    // without a trailing ';' is accepted (arch §4).
-    bool stop = false;
-    flush(stop);
-    return had_error ? 1 : 0;
-}
 
 // Resolve the config-file path: DDBSH_CONFIG_FILE, else $HOME/.ddbsh_config
 // (arch §3). Returns empty when neither can be formed.
