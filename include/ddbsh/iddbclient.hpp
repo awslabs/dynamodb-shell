@@ -275,6 +275,118 @@ struct UpdateContinuousBackupsIn {
 };
 struct UpdateContinuousBackupsOut {};
 
+// ---- Backup / Restore (2f) -------------------------------------------------
+// The backup/restore family (arch §7, the original create_backup/drop_backup/
+// describe_backup/restore_backup/restore_pitr commands). Each request struct is
+// SDK-free (D11); the CLI adapter translates to the matching
+// Aws::DynamoDB::Model::*Request and back. All five status-token verbs carry a
+// token-only Out; DescribeBackup returns a report view (§5).
+
+// CREATE BACKUP: BACKUP TABLE <t> CALLED <name> -> CreateBackup.
+struct CreateBackupIn {
+    std::string table_name;
+    std::string backup_name;
+};
+struct CreateBackupOut {};  // token-only ("BACKUP")
+
+// DROP BACKUP <arn> -> DeleteBackup (the original drop_backup.cpp; EXPLAIN emits
+// `DeleteBackup(...)`, correcting the stale arch §12 #1 claim — D-2f-7).
+struct DeleteBackupIn {
+    std::string backup_arn;
+};
+struct DeleteBackupOut {};  // token-only ("DROP BACKUP")
+
+// One element of a backed-up table's key schema, for the DESCRIBE BACKUP report
+// (the original iterated SourceTableDetails.GetKeySchema() generically, mapping
+// KeyType -> name). `key_type` is the mapped name ("HASH"/"RANGE"); the adapter
+// fills it so the engine needs no enum<->name table.
+struct BackupKeySchemaElement {
+    std::string key_type;
+    std::string attribute_name;
+};
+
+// DESCRIBE BACKUP <arn> -> DescribeBackup. Out carries exactly the fields the
+// report prints, in the original's order (§5). The adapter pre-formats all
+// datetimes to ISO-8601 (D-2f-2) so the engine stays SDK-free.
+struct DescribeBackupIn {
+    std::string backup_arn;
+};
+struct DescribeBackupOut {
+    std::string source_table_name;
+    std::string source_table_id;
+    std::string source_table_arn;
+    long long table_size_bytes = 0;
+    long long item_count = 0;
+    std::vector<BackupKeySchemaElement> key_schema;
+    std::string table_creation_datetime;                         ///< ISO-8601 (adapter-formatted)
+    std::optional<std::string> billing_mode;                     ///< set iff BillingModeHasBeenSet
+    std::optional<std::pair<long long, long long>> provisioned;  ///< (RCU,WCU) iff set
+    std::string backup_name;
+    std::string backup_arn;
+    long long backup_size_bytes = 0;
+    std::string backup_status;
+    std::string backup_type;
+    std::string backup_creation_datetime;  ///< ISO-8601
+    std::string backup_expiry_datetime;    ///< ISO-8601
+};
+
+// RESTORE TABLE <target> FROM BACKUP <arn> -> RestoreTableFromBackup. Note the
+// slot order (N1): `target` is the new table, `backup_arn` the source.
+struct RestoreFromBackupIn {
+    std::string target_table_name;
+    std::string backup_arn;
+};
+struct RestoreFromBackupOut {};  // token-only ("RESTORE")
+
+// RESTORE TABLE <target> FROM <source> TO PITR <ts> -> RestoreTableToPointInTime
+// (N1: `target` is the new table, `source` the existing source table). The
+// adapter owns the ISO-8601 -> Aws::Utils::DateTime parse and surfaces a
+// malformed timestamp as an Error (D-2f-4). EXPLAIN emits the quirky
+// `RestoreTableToPointInTimeRequest(...)` label (R1/D-2f-5).
+struct RestoreToPitrIn {
+    std::string source_table_name;
+    std::string target_table_name;
+    std::string restore_datetime;  ///< ISO-8601 (unquoted T_TIMESTAMP)
+};
+struct RestoreToPitrOut {};  // token-only ("RESTORE")
+
+// ---- DescribeLimits (SHOW LIMITS) ------------------------------------------
+// SHOW LIMITS issues DescribeLimits then a paginated ListTables + DescribeTable
+// per table (the original show_limits.cpp). This struct carries only the
+// account/table max figures; the per-table throughput sums are computed by the
+// executor from describe_table (§5).
+struct DescribeLimitsIn {};
+struct DescribeLimitsOut {
+    long long account_max_rcu = 0;
+    long long account_max_wcu = 0;
+    long long table_max_rcu = 0;
+    long long table_max_wcu = 0;
+};
+
+// ---- ListBackups (SHOW BACKUPS) --------------------------------------------
+// SHOW [type] BACKUPS [<t>] pages ListBackups (limit 100) until the cursor is
+// empty (the original show_backups.cpp). `table_name`/`backup_type` are set
+// only when the user supplied them (N3: the filter is passed through
+// unvalidated, as the original did). The adapter pre-formats datetimes (D-2f-2).
+struct ListBackupsIn {
+    std::optional<std::string> table_name;
+    std::optional<std::string> backup_type;
+    int limit = 100;
+    std::optional<std::string> exclusive_start_backup_arn;  ///< pagination cursor
+};
+struct BackupSummaryRow {
+    std::string table_name;
+    std::string backup_name;
+    std::string backup_status;
+    std::string backup_arn;
+    std::string creation_datetime;  ///< ISO-8601
+    std::string expiry_datetime;    ///< ISO-8601
+};
+struct ListBackupsOut {
+    std::vector<BackupSummaryRow> summaries;
+    std::optional<std::string> last_evaluated_backup_arn;  ///< empty/absent => done
+};
+
 // ---- ListTables ------------------------------------------------------------
 // A minimal seam op used by the 2a readiness-gate smoke program to prove real
 // backend reachability. It is NOT the full SHOW TABLES command (arch §7:
@@ -383,6 +495,11 @@ struct DescribeTableOut {
     /// => the mapped StreamViewType name (stream enabled), describe.cpp
     /// __show_stream.
     std::optional<std::string> stream_view_type;
+    /// Whether the SDK StreamSpecification was present (mirrors
+    /// StreamSpecificationHasBeenSet). SHOW CREATE TABLE needs it to tell "no
+    /// STREAM clause" (absent) from "STREAM DISABLED" (present but not enabled);
+    /// the DESCRIBE report ignores it (it keys only on stream_view_type).
+    bool stream_specification_set = false;
     /// SSE: nullopt => "SSE: Not set"; a value => the mapped SSEStatus name
     /// ("ENABLED"/...), describe.cpp __show_table_sse.
     std::optional<std::string> sse_status;
@@ -514,7 +631,8 @@ using ExplainRequest =
                  UpdateTimeToLiveIn, UpdateContinuousBackupsIn, DeleteTableIn, DescribeTableIn,
                  DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
                  DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
-                 TransactWriteItemsIn>;
+                 TransactWriteItemsIn, CreateBackupIn, DeleteBackupIn, DescribeBackupIn,
+                 RestoreFromBackupIn, RestoreToPitrIn>;
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
@@ -548,6 +666,38 @@ public:
     /// composes the byte-exact "Setting PITR failed. ..." message, D-2e-13).
     virtual Result<UpdateContinuousBackupsOut> update_continuous_backups(
         const UpdateContinuousBackupsIn&) = 0;
+
+    /// CreateBackup for a BACKUP TABLE <t> CALLED <name> (arch §7, the original
+    /// create_backup.cpp). On success the executor emits the `BACKUP` token.
+    virtual Result<CreateBackupOut> create_backup(const CreateBackupIn&) = 0;
+
+    /// DeleteBackup for a DROP BACKUP <arn> (arch §7, the original
+    /// drop_backup.cpp). On success the executor emits the `DROP BACKUP` token.
+    virtual Result<DeleteBackupOut> delete_backup(const DeleteBackupIn&) = 0;
+
+    /// DescribeBackup for a DESCRIBE BACKUP <arn> (arch §7, the original
+    /// describe_backup.cpp). Returns the report view (§5); datetimes are
+    /// pre-formatted to ISO-8601 by the adapter (D-2f-2).
+    virtual Result<DescribeBackupOut> describe_backup(const DescribeBackupIn&) = 0;
+
+    /// RestoreTableFromBackup for RESTORE TABLE <target> FROM BACKUP <arn> (arch
+    /// §7, restore_backup.cpp). On success the executor emits the `RESTORE` token.
+    virtual Result<RestoreFromBackupOut> restore_table_from_backup(const RestoreFromBackupIn&) = 0;
+
+    /// RestoreTableToPointInTime for RESTORE TABLE <target> FROM <source> TO PITR
+    /// <ts> (arch §7, restore_pitr.cpp). The adapter parses the ISO-8601 restore
+    /// timestamp; a malformed timestamp is returned as an Error (D-2f-4). On
+    /// success the executor emits the `RESTORE` token.
+    virtual Result<RestoreToPitrOut> restore_table_to_point_in_time(const RestoreToPitrIn&) = 0;
+
+    /// DescribeLimits for SHOW LIMITS (arch §7, show_limits.cpp). Returns the
+    /// account/table max RCU/WCU; the executor also pages ListTables +
+    /// describe_table to sum per-table throughput.
+    virtual Result<DescribeLimitsOut> describe_limits(const DescribeLimitsIn&) = 0;
+
+    /// ListBackups for SHOW [type] BACKUPS [<t>] (arch §7, show_backups.cpp).
+    /// One page per call; the executor loops on last_evaluated_backup_arn.
+    virtual Result<ListBackupsOut> list_backups(const ListBackupsIn&) = 0;
 
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;

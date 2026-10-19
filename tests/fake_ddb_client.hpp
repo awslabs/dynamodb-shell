@@ -305,6 +305,128 @@ public:
         return UpdateContinuousBackupsOut{};
     }
 
+    // ---- Backup / Restore (2f) ---------------------------------------------
+
+    /// The CreateBackup requests issued, in order.
+    const std::vector<CreateBackupIn>& create_backup_requests() const {
+        return create_backup_requests_;
+    }
+    /// Make create_backup fail with this Error. nullopt => succeed.
+    void set_create_backup_error(std::optional<Error> error) {
+        create_backup_error_ = std::move(error);
+    }
+    Result<CreateBackupOut> create_backup(const CreateBackupIn& in) override {
+        create_backup_requests_.push_back(in);
+        if (create_backup_error_.has_value()) {
+            return fail(*create_backup_error_);
+        }
+        return CreateBackupOut{};
+    }
+
+    /// The DeleteBackup requests issued, in order.
+    const std::vector<DeleteBackupIn>& delete_backup_requests() const {
+        return delete_backup_requests_;
+    }
+    /// Make delete_backup fail with this Error. nullopt => succeed.
+    void set_delete_backup_error(std::optional<Error> error) {
+        delete_backup_error_ = std::move(error);
+    }
+    Result<DeleteBackupOut> delete_backup(const DeleteBackupIn& in) override {
+        delete_backup_requests_.push_back(in);
+        if (delete_backup_error_.has_value()) {
+            return fail(*delete_backup_error_);
+        }
+        return DeleteBackupOut{};
+    }
+
+    /// Canned DescribeBackup response. nullopt (default) => an Error.
+    void set_describe_backup(std::optional<DescribeBackupOut> out) {
+        describe_backup_out_ = std::move(out);
+    }
+    const std::vector<DescribeBackupIn>& describe_backup_requests() const {
+        return describe_backup_requests_;
+    }
+    Result<DescribeBackupOut> describe_backup(const DescribeBackupIn& in) override {
+        describe_backup_requests_.push_back(in);
+        if (!describe_backup_out_.has_value()) {
+            return fail(Errc::service_error, "no backup");
+        }
+        return *describe_backup_out_;
+    }
+
+    /// The RestoreTableFromBackup requests issued, in order.
+    const std::vector<RestoreFromBackupIn>& restore_from_backup_requests() const {
+        return restore_from_backup_requests_;
+    }
+    void set_restore_from_backup_error(std::optional<Error> error) {
+        restore_from_backup_error_ = std::move(error);
+    }
+    Result<RestoreFromBackupOut> restore_table_from_backup(const RestoreFromBackupIn& in) override {
+        restore_from_backup_requests_.push_back(in);
+        if (restore_from_backup_error_.has_value()) {
+            return fail(*restore_from_backup_error_);
+        }
+        return RestoreFromBackupOut{};
+    }
+
+    /// The RestoreTableToPointInTime requests issued, in order.
+    const std::vector<RestoreToPitrIn>& restore_to_pitr_requests() const {
+        return restore_to_pitr_requests_;
+    }
+    void set_restore_to_pitr_error(std::optional<Error> error) {
+        restore_to_pitr_error_ = std::move(error);
+    }
+    Result<RestoreToPitrOut> restore_table_to_point_in_time(const RestoreToPitrIn& in) override {
+        restore_to_pitr_requests_.push_back(in);
+        if (restore_to_pitr_error_.has_value()) {
+            return fail(*restore_to_pitr_error_);
+        }
+        return RestoreToPitrOut{};
+    }
+
+    /// Canned DescribeLimits response (and optional failure).
+    void set_describe_limits(DescribeLimitsOut out) { describe_limits_out_ = std::move(out); }
+    void set_describe_limits_error(std::optional<Error> error) {
+        describe_limits_error_ = std::move(error);
+    }
+    Result<DescribeLimitsOut> describe_limits(const DescribeLimitsIn&) override {
+        if (describe_limits_error_.has_value()) {
+            return fail(*describe_limits_error_);
+        }
+        return describe_limits_out_;
+    }
+
+    /// Canned ListBackups pages: each call returns the next page in order, with
+    /// a synthetic cursor set on every page but the last so the executor
+    /// exercises its pagination loop.
+    void set_backup_pages(std::vector<std::vector<BackupSummaryRow>> pages) {
+        backup_pages_ = std::move(pages);
+    }
+    void set_list_backups_error(std::optional<Error> error) {
+        list_backups_error_ = std::move(error);
+    }
+    const std::vector<ListBackupsIn>& list_backups_requests() const {
+        return list_backups_requests_;
+    }
+    Result<ListBackupsOut> list_backups(const ListBackupsIn& in) override {
+        list_backups_requests_.push_back(in);
+        if (list_backups_error_.has_value()) {
+            return fail(*list_backups_error_);
+        }
+        std::size_t page = 0;
+        if (in.exclusive_start_backup_arn.has_value()) {
+            page = static_cast<std::size_t>(std::stoul(*in.exclusive_start_backup_arn));
+        }
+        ListBackupsOut out;
+        if (page < backup_pages_.size()) {
+            out.summaries = backup_pages_[page];
+        }
+        if (page + 1 < backup_pages_.size()) {
+            out.last_evaluated_backup_arn = std::to_string(page + 1);
+        }
+        return out;
+    }
+
     Result<void> wait_for_table_active(const std::string& table_name) override {
         waited_active_.push_back(table_name);
         return {};
@@ -465,6 +587,21 @@ private:
     std::optional<Error> update_ttl_error_;
     std::vector<UpdateContinuousBackupsIn> update_pitr_requests_;
     std::optional<Error> update_pitr_error_;
+    std::vector<CreateBackupIn> create_backup_requests_;
+    std::optional<Error> create_backup_error_;
+    std::vector<DeleteBackupIn> delete_backup_requests_;
+    std::optional<Error> delete_backup_error_;
+    std::vector<DescribeBackupIn> describe_backup_requests_;
+    std::optional<DescribeBackupOut> describe_backup_out_;
+    std::vector<RestoreFromBackupIn> restore_from_backup_requests_;
+    std::optional<Error> restore_from_backup_error_;
+    std::vector<RestoreToPitrIn> restore_to_pitr_requests_;
+    std::optional<Error> restore_to_pitr_error_;
+    DescribeLimitsOut describe_limits_out_;
+    std::optional<Error> describe_limits_error_;
+    std::vector<std::vector<BackupSummaryRow>> backup_pages_;
+    std::vector<ListBackupsIn> list_backups_requests_;
+    std::optional<Error> list_backups_error_;
     std::vector<std::string> waited_active_;
     std::vector<ExplainRequest> explain_requests_;
     std::string explain_body_ = "{\n\t\"stub\":\t\"explain\"\n}";
