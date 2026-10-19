@@ -25,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.14
+        VERSION 0.9.15
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -92,6 +92,8 @@ add_library(ddbsh
             src/execute/delete_executor.cpp
             src/execute/create_table_executor.cpp
             src/execute/alter_table_executor.cpp
+            src/execute/backup_restore_executor.cpp
+            src/execute/show_commands_executor.cpp
             src/execute/drop_table_executor.cpp
             src/execute/describe_executor.cpp
             src/execute/show_tables_executor.cpp
@@ -166,6 +168,8 @@ if(DDBSH_BUILD_TESTS)
                    tests/transact_exec_test.cpp
                    tests/create_table_exec_test.cpp
                    tests/alter_table_exec_test.cpp
+                   tests/backup_restore_exec_test.cpp
+                   tests/show_commands_exec_test.cpp
                    tests/show_tables_exec_test.cpp
                    tests/describe_exec_test.cpp
                    tests/explain_exec_test.cpp)
