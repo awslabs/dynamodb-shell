@@ -68,6 +68,13 @@ struct SelectOutcome {
 /// return-values support in a later sub-phase.)
 struct WriteOutcome {
     std::vector<std::string> tokens;
+    /// Parallel to `tokens`: the RETURN VALUES payload for row i, set only when
+    /// the write requested RETURN VALUES (REPLACE ALL_OLD — INSERT forces NONE).
+    /// Empty (the common case) => byte-identical to a plain per-row token line.
+    /// When non-empty it is the same length as `tokens`; the Renderer emits
+    /// `token: show_item(item)` for a present entry, else just `token` (arch §7,
+    /// insert.cpp: `printf("%s: %s\n", op, show_item(...))` vs `printf("%s\n")`).
+    std::vector<std::optional<ItemRow>> items{};
 };
 
 /// One serialized DynamoDB API request in an EXPLAIN block (P2a-03 §4.3).
@@ -120,6 +127,14 @@ struct BulkWriteOutcome {
     long modified = 0;
     long ccf = 0;
     std::optional<ConsumedCapacity> consumed_capacity;
+    /// RETURN VALUES payloads, in processing order (one per successful write
+    /// that returned attributes). Set only when the command requested RETURN
+    /// VALUES; empty otherwise (byte-identical to today). The Renderer emits
+    /// each as `show_item(item)` BEFORE the accounting line — matching the
+    /// original's unsorted emission order (items during the per-item loop, the
+    /// `(n read, m modified, k ccf)` status after), and `-s`-stable because
+    /// `'U'`/`'D'` sort above `'{'` (arch §7, update.cpp/delete.cpp).
+    std::vector<ItemRow> returned_items{};
 };
 
 struct MultiOutcome;  // defined below (recursive variant member)

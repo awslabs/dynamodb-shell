@@ -279,9 +279,18 @@ BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Rendere
         }
     }
     if (batch.error.has_value()) {
+        // A PARSE error is reported to stderr but does NOT set the process
+        // error exit, matching the original's run loop (ddbsh.cpp CDDBSh::run):
+        // `retval` is updated ONLY by `pCommand->run()`, so a yyparse failure
+        // leaves it untouched (0 for a pure parse error) and the shell exits 0.
+        // Only a command's run() failure (handled above) contributes to the
+        // nonzero exit code. This is the behavior the golden suite pins — e.g.
+        // ddbsh-basic-test-9 / ddbsh-cross-account-test-9, whose mutual-exclusion
+        // semantic error must still exit 0 (the oracle does). Abort-on-error
+        // likewise keys off run() failures, not parse failures (a config-file
+        // parse error does not abort startup in the original either).
         std::fputs(renderer.render_error(*batch.error).c_str(), stderr);
         std::fflush(stderr);
-        status.had_error = true;
     }
     return status;
 }

@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "execute/rate_limiter.hpp"
 #include "execute/write_common.hpp"
 #include "expressions/symbol_table.hpp"
 #include "planner/get_key_schema.hpp"
@@ -62,6 +63,16 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     SymbolTable write_st(next_prefix());
     DeleteItemIn write_template = make_delete_request(cmd, base_pk, base_rk, write_st);
 
+    const bool want_rv = cmd.return_value != ReturnValue::none;
+
+    // A WITH RATELIMIT clause meters the read (enumeration) and write buckets
+    // (delete.cpp do_query/do_scan + do_delete). Never constructed when
+    // explaining (no service call to meter).
+    std::optional<RateLimiter> limiter;
+    if (!explain && cmd.ratelimit.has_value()) {
+        limiter.emplace(cmd.ratelimit->rcu, cmd.ratelimit->wcu);
+    }
+
     // ---- single conditional delete (full base-table key) -------------------
     if (where != nullptr && where->can_delete_item(base_pk, base_rk)) {
         DeleteItemIn request = write_template;
@@ -77,16 +88,25 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             sink.emit(ExecOutcome{std::move(out)});
             return {};
         }
+        if (limiter.has_value()) {
+            limiter->writelimit();
+        }
         auto result = client.delete_item(request);
         BulkWriteOutcome acct{BulkWriteOutcome::Verb::del, 0, 0, 0, std::nullopt};
         if (result.has_value()) {
             acct.modified = 1;
+            if (want_rv) {
+                acct.returned_items.push_back(result->attributes.value_or(ItemRow{}));
+            }
+            if (limiter.has_value()) {
+                limiter->consume_writes(result->consumed_capacity);
+            }
         } else if (result.error().code == Errc::conditional_check_failed) {
             acct.ccf = 1;
         } else {
             return fail(result.error());
         }
-        sink.emit(ExecOutcome{acct});
+        sink.emit(ExecOutcome{std::move(acct)});
         return {};
     }
 
@@ -143,6 +163,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     for (;;) {
         std::vector<ItemRow> items;
         std::optional<ValueMap> last_key;
+        std::optional<ConsumedCapacity> page_cc;
         if (read.api == WriteReadApi::query) {
             QueryIn request = read.query;
             request.exclusive_start_key = start_key;
@@ -152,6 +173,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             }
             items = std::move(result->items);
             last_key = std::move(result->last_evaluated_key);
+            page_cc = std::move(result->consumed_capacity);
         } else {
             ScanIn request = read.scan;
             request.exclusive_start_key = start_key;
@@ -161,6 +183,13 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             }
             items = std::move(result->items);
             last_key = std::move(result->last_evaluated_key);
+            page_cc = std::move(result->consumed_capacity);
+        }
+
+        // Meter the read page (do_query/do_scan: consume_reads after a
+        // successful page, before iterating its items).
+        if (limiter.has_value()) {
+            limiter->consume_reads(page_cc);
         }
 
         for (const auto& item : items) {
@@ -177,9 +206,19 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
                 continue;
             }
             ++acct.read;
+            // do_delete: writelimit() before the write, consume_writes() after.
+            if (limiter.has_value()) {
+                limiter->writelimit();
+            }
             auto result = client.delete_item(request);
             if (result.has_value()) {
                 ++acct.modified;
+                if (want_rv) {
+                    acct.returned_items.push_back(result->attributes.value_or(ItemRow{}));
+                }
+                if (limiter.has_value()) {
+                    limiter->consume_writes(result->consumed_capacity);
+                }
             } else if (result.error().code == Errc::conditional_check_failed) {
                 ++acct.ccf;
             } else {
@@ -191,12 +230,17 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             break;
         }
         start_key = std::move(last_key);
+        // Throttle before fetching the next page (readlimit() after setting the
+        // next ExclusiveStartKey).
+        if (limiter.has_value()) {
+            limiter->readlimit();
+        }
     }
 
     if (explain) {
         sink.emit(ExecOutcome{std::move(explain_out)});
     } else {
-        sink.emit(ExecOutcome{acct});
+        sink.emit(ExecOutcome{std::move(acct)});
     }
     return {};
 }

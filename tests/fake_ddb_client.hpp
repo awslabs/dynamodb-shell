@@ -182,7 +182,10 @@ public:
         if (put_error_.has_value() && (!put_error_at_.has_value() || call == *put_error_at_)) {
             return fail(*put_error_);
         }
-        return PutItemOut{};
+        PutItemOut out;
+        out.attributes = put_attributes_;
+        out.consumed_capacity = write_consumed_capacity_;
+        return out;
     }
 
     Result<UpdateItemOut> update_item(const UpdateItemIn& in) override {
@@ -190,7 +193,10 @@ public:
         if (update_error_.has_value()) {
             return fail(*update_error_);
         }
-        return UpdateItemOut{};
+        UpdateItemOut out;
+        out.attributes = update_attributes_;
+        out.consumed_capacity = write_consumed_capacity_;
+        return out;
     }
 
     Result<DeleteItemOut> delete_item(const DeleteItemIn& in) override {
@@ -198,7 +204,26 @@ public:
         if (delete_item_error_.has_value()) {
             return fail(*delete_item_error_);
         }
-        return DeleteItemOut{};
+        DeleteItemOut out;
+        out.attributes = delete_attributes_;
+        out.consumed_capacity = write_consumed_capacity_;
+        return out;
+    }
+
+    /// Canned RETURN VALUES payload the next put_item(s) return (REPLACE ALL_OLD).
+    void set_put_attributes(std::optional<ItemRow> attrs) { put_attributes_ = std::move(attrs); }
+    /// Canned RETURN VALUES payload the next update_item(s) return.
+    void set_update_attributes(std::optional<ItemRow> attrs) {
+        update_attributes_ = std::move(attrs);
+    }
+    /// Canned RETURN VALUES payload the next delete_item(s) return.
+    void set_delete_attributes(std::optional<ItemRow> attrs) {
+        delete_attributes_ = std::move(attrs);
+    }
+    /// Consumed capacity attached to every write response (put/update/delete),
+    /// present under a ratelimit (TOTAL). nullopt (default) => no capacity.
+    void set_write_consumed_capacity(std::optional<ConsumedCapacity> cc) {
+        write_consumed_capacity_ = std::move(cc);
     }
 
     Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn& in) override {
@@ -567,6 +592,10 @@ private:
     std::vector<PutItemIn> put_requests_;
     std::optional<Error> put_error_;
     std::optional<std::size_t> put_error_at_;
+    std::optional<ItemRow> put_attributes_;
+    std::optional<ItemRow> update_attributes_;
+    std::optional<ItemRow> delete_attributes_;
+    std::optional<ConsumedCapacity> write_consumed_capacity_;
     std::vector<UpdateItemIn> update_requests_;
     std::optional<Error> update_error_;
     std::vector<DeleteItemIn> delete_item_requests_;
