@@ -83,20 +83,28 @@ clang-tidy <files>
 Build with warnings-as-errors (`-Wall -Wextra -Werror`); the generated
 flex/bison translation units are the only `-Wno-error` exceptions.
 
+> **clang-tidy toolchain caveat (`TODO(cleanup)`):** in the current dev
+> environment the only C++23 toolchain is gcc14, and clang-tidy cannot parse
+> gcc14's libstdc++ C++23 headers (it emits tens of thousands of system-header
+> warnings plus spurious parse errors). The enforced quality gate is therefore
+> the gcc14 `-Wall -Wextra -Werror` build (clean). A CI follow-up should add a
+> clang job with a matched libc++/libstdc++ (or a `gcc -fanalyzer` pass) so
+> clang-tidy can run cleanly; this is an environment limitation, not a code
+> defect.
+
 ## Testing — MANDATORY protocol
 
 - **Always run tests via `devtools/run-tests`** from the **orchestration repo**.
   Never invoke `ctest`, the test binary, or a suite runner directly for a phase
-  gate. The script builds the oracle and the new engine, routes the ported
-  command families to the new engine via the golden harness, runs the complement
-  on the oracle, and writes artifacts into `discussions/` named by HEAD short
-  hash.
-- **Full-engine exposure mode:** `devtools/run-tests --full-engine` routes EVERY
-  non-global-tables family to the new engine (golden project configured with
-  `-DDDBSH_GOLDEN_ALL_FAMILIES=ON`) and skips the oracle side, measuring the
-  implemented-surface parity against the original each phase exit (standing
-  directive, 2026-10-15). Unimplemented commands fail as expected until their
-  families port, so this is a measurement run, not the phase gate.
+  gate. Since the Step-2 exit gate (2h-1) the script builds ONLY the new engine
+  and runs every non-global-tables golden family against it via the golden
+  harness (the gate exit propagates); the original C++11 `oracle/` tree is
+  retained as the golden/`.exp`/`ddbsh-wait` source but is no longer built or
+  run. Artifacts land in `discussions/` named by HEAD short hash.
+- **Full-engine mode:** `devtools/run-tests --full-engine` registers the same
+  family set as the default gate but forces the exit code to 0, so it is a
+  MEASUREMENT (read the parity figure from the printed counts / artifact) rather
+  than a gate. Since 2h-1 it differs from the default only in exit semantics.
 - **Backend is real DynamoDB (us-east-1)** via the standard `~/.aws` chain. There
   is no DynamoDB Local / no endpoint override. `create/insert/update/delete/drop`
   hit real tables and cost real money — use a dedicated test account/region. The

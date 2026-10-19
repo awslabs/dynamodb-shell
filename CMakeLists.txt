@@ -25,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.16
+        VERSION 0.9.17
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -203,6 +203,25 @@ if(DDBSH_BUILD_TESTS)
     add_test(NAME engine_boundary_check
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # Opt-in verification of the library-embedding sample as an EXTERNAL
+    # consumer (2h-4, D-2h-4): install the library to a temp prefix, build
+    # examples/embed_demo via its standalone Makefile against that install, run
+    # it, and diff its stdout against the committed golden. OFF by default
+    # because it needs an install step + a second compiler invocation (the
+    # sample itself is offline — no AWS). Enable with -DDDBSH_TEST_EMBED_SAMPLE=ON.
+    option(DDBSH_TEST_EMBED_SAMPLE
+        "Build + run the examples/ embedding sample against an install as a CTest."
+        OFF)
+    if(DDBSH_TEST_EMBED_SAMPLE)
+        add_test(NAME embed_sample
+                 COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_embed_test.sh"
+                         "${CMAKE_COMMAND}"
+                         "${CMAKE_BINARY_DIR}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/examples"
+                         "${CMAKE_CXX_COMPILER}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/embed_demo.expected.txt")
+    endif()
 endif()
 
 install(TARGETS ddbsh ddbsh-cli

@@ -1,0 +1,32 @@
+=== ddbsh library embedding demo (offline, in-memory client) ===
+
+ddbsh> SHOW TABLES;
+Movies | ACTIVE | PAY_PER_REQUEST | STANDARD | 00000000-0000-0000-0000-000000000000 | arn:aws:dynamodb:us-east-1:000000000000:table/Movies | TTL DISABLED | GSI: 0 | LSI : 0 |
+
+ddbsh> SELECT * FROM Movies;
+{rating: 8.8, title: Inception, year: 2010}
+{rating: 8.6, title: Interstellar, year: 2014}
+
+ddbsh> SELECT * FROM Movies WHERE year = 2014;
+{rating: 8.8, title: Inception, year: 2010}
+{rating: 8.6, title: Interstellar, year: 2014}
+
+ddbsh> SELECT * FROM Movies WHERE year = 2010 AND title = "Inception";
+{rating: 8.8, title: Inception, year: 2010}
+
+ddbsh> SELECT title, rating FROM Movies;
+{rating: 8.8, title: Inception}
+{rating: 8.6, title: Interstellar}
+
+ddbsh> INSERT INTO Movies ( year, title, rating ) VALUES ( 2019, "Parasite", 8.6 );
+INSERT
+
+ddbsh> UPDATE Movies SET rating = 9.0 WHERE year = 2014 AND title = "Interstellar";
+UPDATE (0 read, 1 modified, 0 ccf)
+
+ddbsh> DELETE FROM Movies WHERE year = 2010 AND title = "Inception";
+DELETE (0 read, 1 modified, 0 ccf)
+
+ddbsh> SELECT title FROM Movies;
+{title: Interstellar}
+{title: Parasite}

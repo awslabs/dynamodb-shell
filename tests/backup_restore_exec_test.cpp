@@ -117,6 +117,17 @@ TEST(BackupExec, DropBackupParsesToKind) {
     EXPECT_EQ(stmt->kind(), StatementKind::drop_backup);
 }
 
+TEST(BackupExec, DropBackupFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_delete_backup_error(
+        Error{Errc::service_error, "no such backup", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+    auto out = session.run("drop backup \"arn:aws:dynamodb:us-east-1:1:table/t/backup/01\";");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::service_error);
+    EXPECT_EQ(out.error().message, "no such backup");
+}
+
 // ---- DESCRIBE BACKUP -------------------------------------------------------
 
 ddbsh::DescribeBackupOut canned_backup() {
@@ -265,6 +276,21 @@ TEST(RestoreExec, FailurePropagates) {
     auto out = session.run("restore table newt from backup \"arn\";");
     ASSERT_FALSE(out.has_value());
     EXPECT_EQ(out.error().message, "nope");
+}
+
+// RESTORE-to-PITR error propagation (2h-5): the oracle's restore_pitr returns 0
+// even on API failure (arch §12 #7); the reimplementation propagates the error
+// via Result/Error. This pins that hardening so a future regression to the
+// oracle's swallow-the-error behavior fails the gate.
+TEST(RestoreExec, ToPitrFailurePropagates) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_restore_to_pitr_error(
+        Error{Errc::service_error, "pitr unavailable", std::nullopt, std::nullopt});
+    ddbsh::Session session = make_session(client);
+    auto out = session.run("restore table newt from srct to pitr \"2023-01-01T00:00:00Z\";");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::service_error);
+    EXPECT_EQ(out.error().message, "pitr unavailable");
 }
 
 }  // namespace
