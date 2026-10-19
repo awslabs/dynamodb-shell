@@ -123,9 +123,13 @@ if(DDBSH_GOLDEN_ALL_FAMILIES)
     include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
 else()
     # Route the 2b families plus the 2c families (UPDATE/DELETE), the 2e
-    # create-drop family (icd-: CREATE/DROP/DESCRIBE/ALTER), and the 2e-4 PITR
-    # family (ipt-: CREATE/DESCRIBE + SET PITR enable/disable) to the new engine
-    # (D24 + 2c + 2e-2 + 2e-4). The update/delete family files reference
+    # create-drop family (icd-: CREATE/DROP/DESCRIBE/ALTER), the 2e-4 PITR
+    # family (ipt-: CREATE/DESCRIBE + SET PITR enable/disable), and the 2g
+    # families — return-values (ddbsh-rv-*), basic (ddbsh-basic-*), and
+    # cross-account (ddbsh-cross-account-*) — to the new engine (D24 + 2c + 2e-2
+    # + 2e-4 + 2g). The 2g families became fully in-scope once RETURN VALUES,
+    # WITH RATELIMIT, and RETURN CONSUMED CAPACITY landed (the mutual-exclusion
+    # error was already wired). The update/delete family files reference
     # ${CMAKE_SOURCE_DIR}/tests/*.sql for their `-f` seed loads, and the
     # create-drop / pitr families reference ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait
     # for their table-settled / pitr-settled poll steps (resolved against the
@@ -135,6 +139,7 @@ else()
     # not ddbsh, so they run unchanged under routing.
     get_filename_component(_oracle_root "${ORACLE_TESTS_DIR}" DIRECTORY)
     set(CMAKE_SOURCE_DIR "${_oracle_root}")
+    include("${ORACLE_TESTS_DIR}/ddbsh-basic-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-create-drop-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-pitr-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
@@ -143,4 +148,6 @@ else()
     include("${ORACLE_TESTS_DIR}/ddbsh-update-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-delete-tests.txt")
     include("${ORACLE_TESTS_DIR}/ddbsh-transactions-tests.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-return-values.txt")
+    include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
 endif()
