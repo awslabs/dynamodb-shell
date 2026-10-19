@@ -35,21 +35,28 @@ struct ParsedStatement;  // defined in src/parser/ast.hpp (engine-internal)
 /// The kind of statement parsed. Derived from the owned AST node; grows into
 /// the full command catalog as families port.
 enum class StatementKind {
-    empty,             ///< blank / comment-only / bare-';' input
-    show_version,      ///< SHOW VERSION
-    quit,              ///< QUIT
-    connect,           ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
-    show_tables,       ///< SHOW TABLES [BRIEF] [LIKE <template>]
-    describe,          ///< DESCRIBE <table>
-    drop_table,        ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
-    create_table,      ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
-    alter_table,       ///< ALTER TABLE <table> ... (UpdateTable / SET TTL / SET PITR / REPLICA)
-    insert,            ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
-    select_statement,  ///< SELECT [CONSISTENT] <proj|*> FROM <table>[.<index>] [WHERE ...]
-    update_statement,  ///< UPDATE / UPSERT <table>[.<index>] SET|REMOVE ... [WHERE ...]
-    del,               ///< DELETE FROM <table>[.<index>] [WHERE ...]
-    help,              ///< HELP [topic ...] — print usage (no API call)
-    transaction,       ///< BEGIN; ... (COMMIT|ROLLBACK); — TransactGet/WriteItems
+    empty,              ///< blank / comment-only / bare-';' input
+    show_version,       ///< SHOW VERSION
+    quit,               ///< QUIT
+    connect,            ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
+    show_tables,        ///< SHOW TABLES [BRIEF] [LIKE <template>]
+    describe,           ///< DESCRIBE <table>
+    drop_table,         ///< DROP TABLE [IF EXISTS] [NOWAIT] <table>
+    create_table,       ///< CREATE TABLE [IF NOT EXISTS] [NOWAIT] <table> ( ... ) ...
+    alter_table,        ///< ALTER TABLE <table> ... (UpdateTable / SET TTL / SET PITR / REPLICA)
+    insert,             ///< INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( ... )
+    select_statement,   ///< SELECT [CONSISTENT] <proj|*> FROM <table>[.<index>] [WHERE ...]
+    update_statement,   ///< UPDATE / UPSERT <table>[.<index>] SET|REMOVE ... [WHERE ...]
+    del,                ///< DELETE FROM <table>[.<index>] [WHERE ...]
+    help,               ///< HELP [topic ...] — print usage (no API call)
+    transaction,        ///< BEGIN; ... (COMMIT|ROLLBACK); — TransactGet/WriteItems
+    create_backup,      ///< BACKUP TABLE <t> CALLED <name> — CreateBackup
+    drop_backup,        ///< DROP BACKUP <arn> — DeleteBackup
+    describe_backup,    ///< DESCRIBE BACKUP <arn> — DescribeBackup
+    restore,            ///< RESTORE TABLE <target> FROM BACKUP <arn> | FROM <src> TO PITR <ts>
+    show_backups,       ///< SHOW [type] BACKUPS [<t>] — ListBackups
+    show_limits,        ///< SHOW LIMITS — DescribeLimits + ListTables/DescribeTable
+    show_create_table,  ///< SHOW CREATE TABLE [IF NOT EXISTS][NOWAIT] <t>
 };
 
 /// A self-contained parsed statement. Move-only: it owns the parsed AST via a
