@@ -1,11 +1,41 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Global-tables family -- setup phase (arch §7/§11, phase-2j AI-2j-2).
+#
+# Exercises CONNECT-reconnect (B11) end to end: each statement is its own
+# `ddbshtest -c "connect <region>; <stmt>"` process, and the reconnection seam
+# (D-2j-10) must actually switch the client to <region> for the statement to
+# land there. The chain creates a table + GSI in the PRIMARY region (us-east-2),
+# adds a us-west-1 replica, and seeds two items in the primary.
+#
+# Replica provisioning and cross-region replication are eventually consistent
+# (minutes), so every control-plane step is followed by a bounded poll
+# (ddbsh-wait) that waits until the asserted state is actually reached -- no
+# fixed sleeps (the phase-2g discipline, extended region-aware for GT).
+#
+# Regions/account are human-fixed (D-2j-1): primary us-east-2, replica
+# us-west-1, single account via the default profile. Table name `gttest` does
+# not collide with the data families' tables.
+
+# Precondition: gttest must not already exist in the primary region. describe
+# fails (table not found) when clean; WILL_FAIL asserts that failure. A leftover
+# table from a crashed prior run trips this guard instead of silently reusing it.
 add_test(NAME ddbsh-gt-setup-check COMMAND ddbshtest -c "connect us-east-2; describe gttest;")
 set_property(TEST ddbsh-gt-setup-check PROPERTY WILL_FAIL TRUE)
 
+# Create the table + GSI in the primary region (CREATE waits for TableStatus
+# ACTIVE; the settle poll additionally waits for the GSI to finish backfilling,
+# which is required before a replica can be added).
 add_test(NAME ddbsh-gt-setup-mktable COMMAND ddbshtest -c "connect us-east-2; create table gttest ( a number, b number ) primary key (a hash) gsi ( gsi1 on ( b hash ) projecting all );")
+add_test(NAME ddbsh-gt-setup-settle1 COMMAND ${GOLDEN_SUITE}/ddbsh-wait table-settled gttest us-east-2)
 
+# Add the us-west-1 replica, then wait until it reports ACTIVE from the primary
+# region's DescribeTable and the table has settled back to ACTIVE.
 add_test(NAME ddbsh-gt-setup-mkreplica1 COMMAND ddbshtest -c "connect us-east-2; alter table gttest add replica us-west-1;")
+add_test(NAME ddbsh-gt-setup-replica-active COMMAND ${GOLDEN_SUITE}/ddbsh-wait replica-active gttest us-east-2 us-west-1)
+add_test(NAME ddbsh-gt-setup-settle2 COMMAND ${GOLDEN_SUITE}/ddbsh-wait table-settled gttest us-east-2)
 
+# Seed two items in the primary region; replication to us-west-1 is awaited in
+# the check phase (ddbsh-gt-check.txt).
 add_test(NAME ddbsh-gt-setup-insert1 COMMAND ddbshtest -c "connect us-east-2; insert into gttest (a, b) values ( 3, 4 ), (4, 5);")
-
-
-

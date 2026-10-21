@@ -19,12 +19,35 @@
 # credential/region resolution as devtools/run-tests (no endpoint override).
 #
 # Usage:
-#   ddbsh-wait table-settled <table>
+#   ddbsh-wait table-settled <table> [region]
 #       Wait until TableStatus == ACTIVE and every GSI IndexStatus == ACTIVE
-#       (i.e. no table-level or index-level update is still in progress).
+#       (i.e. no table-level or index-level update is still in progress). The
+#       optional third argument polls a specific region (default: the resolved
+#       AWS_REGION); the global-tables family uses it to settle the primary
+#       region (us-east-2) independent of the suite's default region.
 #
 #   ddbsh-wait pitr <table> <ENABLED|DISABLED>
 #       Wait until the table's PointInTimeRecoveryStatus equals the target.
+#
+#   ddbsh-wait replica-active <table> <primary-region> <replica-region>
+#       Global-tables settling: poll DescribeTable in <primary-region> until the
+#       replica in <replica-region> reports ReplicaStatus == ACTIVE (i.e. the
+#       ADD REPLICA has finished provisioning). Replica creation is eventually
+#       consistent (minutes), so this replaces a fixed sleep with a bounded poll.
+#
+#   ddbsh-wait replica-gone <table> <primary-region> <replica-region>
+#       Global-tables teardown: poll DescribeTable in <primary-region> until the
+#       replica in <replica-region> is no longer in the Replicas list. A DROP
+#       REPLICA is asynchronous -- the table returns to ACTIVE while the replica
+#       is still DELETING -- so the table must be awaited back to single-region
+#       before DROP TABLE, or DynamoDB rejects the delete with the global-tables
+#       source-region guard.
+#
+#   ddbsh-wait scan-count <table> <region> <count>
+#       Global-tables settling: poll a COUNT scan of <table> in <region> until it
+#       returns exactly <count> items. Used to wait out cross-region replication
+#       lag before reading a replica (it also implies the replica table is ACTIVE
+#       and readable, since a scan against a not-yet-ready replica yields 0).
 #
 #   ddbsh-wait retry-cmd -- <command> [args...]
 #       Run <command>, retrying while it exits non-zero, until it succeeds or
@@ -53,7 +76,7 @@ die() {
 }
 
 MODE="${1:-}"
-[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|pitr|retry-cmd> ..."
+[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|pitr|replica-active|replica-gone|scan-count|retry-cmd> ..."
 
 # retry-cmd is handled separately: it takes a command, not a table, and does
 # not itself query the control plane.
@@ -110,10 +133,43 @@ pitr_matches() {
     [ "$status" = "$want" ]
 }
 
+replica_active() {
+    # $1 = replica region name. Poll DescribeTable in $REGION (the primary) and
+    # read the ReplicaStatus for the requested replica region. A table with no
+    # replica yet (or still CREATING) yields an empty/non-ACTIVE result.
+    local want_region="$1" status
+    status="$(describe_table_query "Table.Replicas[?RegionName=='${want_region}'].ReplicaStatus | [0]")"
+    [ "$status" = "ACTIVE" ]
+}
+
+replica_gone() {
+    # $1 = replica region name. Poll DescribeTable in $REGION (the primary) until
+    # the requested replica region is no longer present in the Replicas list
+    # (a DROP REPLICA is asynchronous: the table returns to ACTIVE while the
+    # replica is still DELETING, so table-settled is too weak -- the table must
+    # be fully single-region before DROP TABLE, or DynamoDB rejects the delete
+    # with the global-tables source-region guard).
+    local want_region="$1" status
+    status="$(describe_table_query "Table.Replicas[?RegionName=='${want_region}'].ReplicaStatus | [0]")"
+    [ -z "$status" ] || [ "$status" = "None" ]
+}
+
+scan_count_matches() {
+    # $1 = expected item count. A COUNT scan against a not-yet-ready replica
+    # (table missing/CREATING, or replication still in flight) returns 0 or
+    # fails, so this waits out both replica activation and replication lag.
+    local want="$1" count
+    count="$(aws dynamodb scan --table-name "$TABLE" --region "$REGION" \
+        --select COUNT --query 'Count' --output text 2>/dev/null)"
+    [ "$count" = "$want" ]
+}
+
 case "$MODE" in
     table-settled)
+        # Optional third arg overrides the polled region (global tables).
+        [ -n "${3:-}" ] && REGION="$3"
         check() { table_settled; }
-        desc="table $TABLE to settle (TableStatus + all GSIs ACTIVE)"
+        desc="table $TABLE to settle (TableStatus + all GSIs ACTIVE) in $REGION"
         ;;
     pitr)
         WANT="${3:-}"
@@ -121,8 +177,34 @@ case "$MODE" in
         check() { pitr_matches "$WANT"; }
         desc="table $TABLE PITR to reach $WANT"
         ;;
+    replica-active)
+        PRIMARY="${3:-}"
+        REPLICA="${4:-}"
+        { [ -n "$PRIMARY" ] && [ -n "$REPLICA" ]; } || \
+            die "usage: ddbsh-wait replica-active <table> <primary-region> <replica-region>"
+        REGION="$PRIMARY"
+        check() { replica_active "$REPLICA"; }
+        desc="replica $REPLICA of $TABLE to become ACTIVE (polling $PRIMARY)"
+        ;;
+    replica-gone)
+        PRIMARY="${3:-}"
+        REPLICA="${4:-}"
+        { [ -n "$PRIMARY" ] && [ -n "$REPLICA" ]; } || \
+            die "usage: ddbsh-wait replica-gone <table> <primary-region> <replica-region>"
+        REGION="$PRIMARY"
+        check() { replica_gone "$REPLICA"; }
+        desc="replica $REPLICA of $TABLE to be fully removed (polling $PRIMARY)"
+        ;;
+    scan-count)
+        REGION="${3:-}"
+        WANT_COUNT="${4:-}"
+        { [ -n "$REGION" ] && [ -n "$WANT_COUNT" ]; } || \
+            die "usage: ddbsh-wait scan-count <table> <region> <count>"
+        check() { scan_count_matches "$WANT_COUNT"; }
+        desc="table $TABLE in $REGION to hold $WANT_COUNT items"
+        ;;
     *)
-        die "unknown mode: $MODE (expected table-settled|pitr)"
+        die "unknown mode: $MODE (expected table-settled|pitr|replica-active|replica-gone|scan-count)"
         ;;
 esac
 

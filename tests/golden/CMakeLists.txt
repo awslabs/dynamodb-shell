@@ -28,8 +28,9 @@
 # results dir via ${RD} / ${RD_REIMPL} and their seed/.sql + ddbsh-wait inputs
 # via ${GOLDEN_SUITE}; all three are set below.
 #
-# The global-tables families (ddbsh-gt-*) remain excluded in every mode (they
-# need a multi-region live setup, arch §11) and are the sole deferred family.
+# The global-tables families (ddbsh-gt-*) run against a real multi-region setup
+# (primary us-east-2, replica us-west-1) as of phase 2j (AI-2j-2); they are
+# registered last and gated by region-aware ddbsh-wait settling polls.
 #
 # Configuration inputs (set by devtools/run-tests or on the command line):
 #   -DDDBSH_SHELL_BIN=<path>    the shipping ddbsh binary (required)
@@ -107,3 +108,17 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-explain-ddl-tests.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-explain-write-tests.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-show-version-tests.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-show-misc-tests.txt")
+
+# --- Global-tables family (phase 2j, AI-2j-2) -------------------------------
+# Real multi-region: primary us-east-2, replica us-west-1 (human-fixed regions/
+# account, D-2j-1). Un-defers the family that was excluded through phase 2i
+# (D-2i-9 reversed) now that CONNECT actually reconnects (D-2j-10). Registered
+# last and contiguous: setup (create + add replica + seed) -> check (read the
+# replica) -> completion (drop replica + drop table). Each phase interleaves
+# region-aware ddbsh-wait polls (no fixed sleeps) because replica provisioning
+# and cross-region replication are eventually consistent. The family is self-
+# contained (its own `gttest` table in us-east-2/us-west-1), so it is
+# independent of the data families and their test-cleanup.
+include("${GOLDEN_SUITE_DIR}/ddbsh-gt-setup.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-gt-check.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-gt-completion.txt")

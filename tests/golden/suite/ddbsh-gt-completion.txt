@@ -1,1 +1,16 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Global-tables family -- completion/cleanup phase (arch §7/§11, phase-2j
+# AI-2j-2). Drops the us-west-1 replica, waits until it is FULLY removed from
+# the primary's replica list (a DROP REPLICA is asynchronous -- the table
+# returns to ACTIVE while the replica is still DELETING; DROP TABLE while the
+# replica is mid-deletion is rejected by DynamoDB's global-tables source-region
+# guard), then drops the now-single-region table (DROP waits for it to be gone).
+# Registered last in the family so the resources exist for the check phase; the
+# family is self-contained (its own table/regions), independent of the data
+# families' test-cleanup.
+
+add_test(NAME ddbsh-gt-drop-replica COMMAND ddbshtest -c "connect us-east-2; alter table gttest drop replica us-west-1;")
+add_test(NAME ddbsh-gt-drop-replica-wait COMMAND ${GOLDEN_SUITE}/ddbsh-wait replica-gone gttest us-east-2 us-west-1)
 add_test(NAME ddbsh-gt-completion-cleanup COMMAND ddbshtest -c "connect us-east-2; drop table gttest;")
