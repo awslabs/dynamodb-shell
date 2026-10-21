@@ -274,7 +274,8 @@ struct SelectCmd {
 ///   * if_not_exists:      `#lhs = if_not_exists(#p, :v)`  (if_not_exists_*)
 /// NOTE on if_not_exists (fidelity correction): arch §12 #5 claims
 /// `if_not_exists` is a dead token (not in the keyword table). That is FALSE —
-/// it is in both the original's keyword table (oracle/parser/keywords.cpp) and
+/// it is in both the original's keyword table (parser/keywords.cpp in the
+/// oracle-archive-v0.8.1 tag) and
 /// ours (src/parser/lexer.l), the original grammar wires it, and the golden
 /// `iut-ifne-*.exp` prove the original emits `SET #a = if_not_exists(#a,:v)`.
 /// Supporting it is therefore FIDELITY (tenet 1/6), not the human-gated

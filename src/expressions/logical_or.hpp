@@ -5,7 +5,7 @@
 //
 // PRIVATE engine header. SDK-free port of expressions/logical_or.hpp
 // (CLogicalOr), carrying forward the Step-1 cleanup that is now the oracle's
-// behavior (see oracle/expressions/logical_or.hpp):
+// behavior (see expressions/logical_or.hpp in the oracle-archive-v0.8.1 tag):
 //   * An OR never contributes to a KeyConditionExpression (a KCE is a single
 //     anded chain), so the ENTIRE OR subtree is emitted into the
 //     FilterExpression — including key-attribute comparisons that the pristine

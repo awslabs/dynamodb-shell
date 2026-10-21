@@ -13,14 +13,14 @@
 # The compiler is NOT hardcoded (choose via CMakePresets or -DCMAKE_CXX_COMPILER).
 # C++23 is required for std::expected (D12).
 #
-# NOTE (2a reorg, P2a-01 D-Q3): the reimplementation now owns the top-level
-# tree (include/ src/ cli/ tests/). The original C++11 golden build — the
-# fidelity oracle exercised by devtools/run-tests against real DynamoDB — was
-# relocated to oracle/CMakeLists.txt and is intentionally NOT wired into this
-# build (it uses the retired TEST_HARNESS allocator and C++11 idioms that would
-# not survive this tree's -Werror). The original sources are ported into src/
-# per sub-phase (2b-2e); until a family is ported, the oracle remains the
-# regression contract. See the P2a-01 discussion for the reorg rationale.
+# NOTE (2a reorg, P2a-01 D-Q3; 2i oracle retirement): the reimplementation owns
+# the whole tree (include/ src/ cli/ tests/). The original C++11 ddbsh engine —
+# the fidelity oracle and golden-regeneration source — was removed from the
+# working tree during phase 2i and is preserved only in git history under the
+# oracle-archive-v0.8.1 tag. Its golden contract was relocated to
+# tests/golden/suite and remains the regression contract, exercised by
+# devtools/run-tests (the standalone tests/golden CMake project) against real
+# DynamoDB.
 
 cmake_minimum_required(VERSION 3.21)
 

@@ -14,8 +14,8 @@
 #
 # ${RD_REIMPL} is the reimplementation-owned golden results dir
 # (tests/golden/reimpl/results), set by tests/golden/CMakeLists.txt. It is kept
-# separate from the pristine oracle results dir (${RD}) so the upstream
-# oracle/tests tree stays verbatim.
+# separate from the relocated original-suite results dir (${RD}, under
+# tests/golden/suite/results) so the two trees stay cleanly separated.
 
 add_test(NAME ihelp-general COMMAND ddbshtest -q -T ${RD_REIMPL}/ihelp-general.exp -c "help")
 add_test(NAME ihelp-explain COMMAND ddbshtest -q -T ${RD_REIMPL}/ihelp-explain.exp -c "help explain")
