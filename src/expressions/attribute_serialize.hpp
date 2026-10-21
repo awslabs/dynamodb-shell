@@ -10,14 +10,19 @@
 // stripped (dynamodb/serialize_attribute.cpp). In the reimplementation the
 // in-scope SELECT paths (GetItem/Query/Scan) ALWAYS serialize through a symbol
 // table (the values become ExpressionAttributeValues and the string carries
-// `:v<prefix><n>` tokens), so this literal path is not exercised by any 2b
+// `:v<prefix><n>` tokens), so this literal path is not exercised by any
 // golden. It is provided for completeness and faithfulness of the ported base
 // class (whose serialize() accepts a null symbol table).
 //
-// TODO(fidelity): when a command family that uses the null-symbol-table
-// serialize path lands and becomes golden-relevant, verify these bytes against
-// the AWS SDK's AttributeValue::SerializeAttribute() output and pin with a
-// golden. Until then this is SDK-shape-approximate, not byte-verified.
+// B21 disposition (phase 2j, AI-2j-6): VERIFIED unreachable. Every planner and
+// executor serializer call site passes a non-null SymbolTable (select_planner,
+// write_common, update_executor, delete_executor, transact_build — confirmed by
+// inspection), so no in-scope command execution path reaches this branch. It is
+// retained only for base-class faithfulness; its byte output is pinned as the
+// engine's own contract by expression_test.cpp `SerializeAttribute.
+// NullSymbolTablePathBytes` so the retained code cannot silently rot. It is NOT
+// golden-relevant (no command surfaces it), so the earlier TODO(fidelity) to
+// byte-verify against a live SDK path and pin a golden is retired as moot.
 
 #ifndef DDBSH_SRC_EXPRESSIONS_ATTRIBUTE_SERIALIZE_HPP
 #define DDBSH_SRC_EXPRESSIONS_ATTRIBUTE_SERIALIZE_HPP
