@@ -9,34 +9,46 @@
 # standalone (built separately from the engine/CLI/unit-test build via
 # devtools/run-tests) and never links any engine code.
 #
-# Two golden trees live here:
-#   suite/   — the original ddbsh golden suite (family *.txt, results/*.exp,
-#              .sql seeds, ddbsh-wait), relocated in-tree during the phase-2i
-#              oracle retirement (D-2i-6: the golden contract is kept, never
-#              deleted; the old C++11 engine it came with is removed and
-#              preserved only in git history under the oracle-archive-v0.8.1
-#              tag). These families are the fidelity regression contract.
-#   reimpl/  — golden families authored during the reimplementation (phase 2i)
-#              for command forms the original never golden-tested; their
-#              expected outputs were recorded from the original ddbsh
-#              (production `ddbsh-old` binary) before the engine was retired.
+# Single golden tree (phase 2j, AI-2j-5 — the provenance-based suite/ + reimpl/
+# split was collapsed into one command-family layout; provenance now lives only
+# in git history and the discussion record):
+#
+#   families/   — one manifest .txt per command family (basic, create-drop,
+#                 select, insert-replace, update, delete, transactions, pitr,
+#                 symbol-table, return-values, cross-account, explain, show,
+#                 help, global-tables, test-cleanup). The original add_test
+#                 lines are reused verbatim; `ddbshtest` is an IMPORTED target
+#                 that resolves to the harness (see below).
+#   results/    — ALL golden `.exp` files (the relocated original suite goldens
+#                 merged with the reimplementation-authored goldens; byte-
+#                 identical to their pre-consolidation content). Referenced as
+#                 ${RD}.
+#   data/       — the `.sql` seed scripts loaded by the data families via `-f`.
+#                 Referenced as ${DATA}.
+#   ddbsh-wait  — the region-aware poll-until-state helper used by the control-
+#                 plane settling steps (create-drop throughput, pitr, global-
+#                 tables). Referenced as ${GOLDEN_DIR}/ddbsh-wait.
+#
+# The golden `.exp` files, `.sql` seeds, and ddbsh-wait are the fidelity
+# regression contract (D-2i-6: the golden contract is kept, never deleted; the
+# old C++11 engine it came with is removed and preserved only in git history
+# under the oracle-archive-v0.8.1 tag). The reimpl-authored families recorded
+# their expected outputs from the original ddbsh (production `ddbsh-old` binary,
+# D-2i-2) before the engine was retired.
 #
 # How the reuse works: the original `add_test(... COMMAND ddbshtest ...)` lines
 # name `ddbshtest`. Here `ddbshtest` is an IMPORTED executable whose location is
 # the configured golden-runner.sh, so every `COMMAND ddbshtest` resolves to the
-# harness, which drives the shipping `ddbsh`. The family files reference the
-# results dir via ${RD} / ${RD_REIMPL} and their seed/.sql + ddbsh-wait inputs
-# via ${GOLDEN_SUITE}; all three are set below.
+# harness, which drives the shipping `ddbsh`.
 #
-# The global-tables families (ddbsh-gt-*) run against a real multi-region setup
-# (primary us-east-2, replica us-west-1) as of phase 2j (AI-2j-2); they are
-# registered last and gated by region-aware ddbsh-wait settling polls.
+# The global-tables family runs against a real multi-region setup (primary
+# us-east-2, replica us-west-1) as of phase 2j (AI-2j-2); it is registered last
+# and gated by region-aware ddbsh-wait settling polls.
 #
 # Configuration inputs (set by devtools/run-tests or on the command line):
-#   -DDDBSH_SHELL_BIN=<path>    the shipping ddbsh binary (required)
-#   -DDDBSH_SDK_LIB=<path>      AWS SDK shared-library dir (optional)
-#   -DGOLDEN_SUITE_DIR=<path>   the relocated original golden suite dir
-#                               (defaults to ./suite)
+#   -DDDBSH_SHELL_BIN=<path>   the shipping ddbsh binary (required)
+#   -DDDBSH_SDK_LIB=<path>     AWS SDK shared-library dir (optional)
+#   -DGOLDEN_DIR=<path>        the golden tree root (defaults to this dir)
 
 cmake_minimum_required(VERSION 3.21)
 project(ddbsh-golden NONE)
@@ -45,13 +57,13 @@ enable_testing()
 
 set(DDBSH_SHELL_BIN "" CACHE FILEPATH "Path to the shipping ddbsh binary")
 set(DDBSH_SDK_LIB "" CACHE PATH "AWS SDK shared-library directory (LD_LIBRARY_PATH)")
-set(GOLDEN_SUITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/suite"
-    CACHE PATH "Directory holding the original golden family .txt files, results/, .sql seeds, and ddbsh-wait")
+set(GOLDEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+    CACHE PATH "Golden tree root (families/, results/, data/, ddbsh-wait)")
 
-get_filename_component(GOLDEN_SUITE_DIR "${GOLDEN_SUITE_DIR}" ABSOLUTE)
-if(NOT EXISTS "${GOLDEN_SUITE_DIR}/ddbsh-select-tests.txt")
+get_filename_component(GOLDEN_DIR "${GOLDEN_DIR}" ABSOLUTE)
+if(NOT EXISTS "${GOLDEN_DIR}/families/select.txt")
     message(FATAL_ERROR
-        "GOLDEN_SUITE_DIR does not look like the golden suite dir: ${GOLDEN_SUITE_DIR}")
+        "GOLDEN_DIR does not look like the golden tree root: ${GOLDEN_DIR}")
 endif()
 
 # Configure the harness with the resolved shell/SDK paths baked in as defaults
@@ -70,55 +82,41 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/golden-runner.sh.in"
 add_executable(ddbshtest IMPORTED GLOBAL)
 set_target_properties(ddbshtest PROPERTIES IMPORTED_LOCATION "${GOLDEN_RUNNER}")
 
-# Variables the suite family files reference:
-#   ${RD}           — the suite's golden results dir (.exp files)
-#   ${GOLDEN_SUITE} — the suite dir itself (.sql seed scripts + the ddbsh-wait
-#                     poll helper, used by the -f load and table/pitr-settled
-#                     wait steps)
-set(RD "${GOLDEN_SUITE_DIR}/results")
-set(GOLDEN_SUITE "${GOLDEN_SUITE_DIR}")
+# Variables the family files reference:
+#   ${RD}         — the golden results dir (.exp files)
+#   ${DATA}       — the .sql seed scripts (loaded via `ddbshtest -f`)
+#   ${GOLDEN_DIR} — the tree root (holds the ddbsh-wait poll helper)
+set(RD "${GOLDEN_DIR}/results")
+set(DATA "${GOLDEN_DIR}/data")
 
-# --- Original golden suite (fidelity regression contract) -------------------
-# The include order places test-cleanup LAST but one (before cross-account):
-# ctest runs these serially in registration order, and test-cleanup drops the
-# tables the data families create, so it must come after them (D-2h-1 §7).
-# cross-account uses its own account's tables and is unaffected.
-include("${GOLDEN_SUITE_DIR}/ddbsh-basic-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-create-drop-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-pitr-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-symbol-table.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-select-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-update-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-delete-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-insert-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-transactions-tests.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-return-values.txt")
-include("${GOLDEN_SUITE_DIR}/test-cleanup.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-cross-account.txt")
+# Registration order (ctest runs serially in registration order):
+#   * The data families come first; they create the tables the next ones query.
+#   * test-cleanup drops the data-family tables, so it comes AFTER them
+#     (D-2h-1 §7).
+#   * cross-account uses its own account's tables and is unaffected by cleanup.
+#   * explain / show / help are self-contained (each creates+drops its own
+#     tables or needs none), so their position is independent.
+#   * global-tables is self-contained (its own `gttest` table in
+#     us-east-2/us-west-1) and is registered LAST, contiguous
+#     (setup -> check -> completion), gated by region-aware ddbsh-wait polls.
+set(GOLDEN_FAMILIES
+    basic
+    create-drop
+    pitr
+    symbol-table
+    select
+    update
+    delete
+    insert-replace
+    transactions
+    return-values
+    test-cleanup
+    cross-account
+    help
+    explain
+    show
+    global-tables)
 
-# --- Reimplementation-owned golden families (phase 2i, AI-2i-B) -------------
-# New golden families covering command forms the original ddbsh never golden-
-# tested. The expected outputs were RECORDED FROM THE ORIGINAL ddbsh (the
-# production `ddbsh-old` binary, D-2i-2) before the engine was retired, and are
-# reproduced byte-for-byte by the reimplementation. ${RD_REIMPL} is the reimpl
-# golden results dir, mirroring how the suite families use ${RD}.
-set(RD_REIMPL "${CMAKE_CURRENT_SOURCE_DIR}/reimpl/results")
-include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-help-tests.txt")
-include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-explain-ddl-tests.txt")
-include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-explain-write-tests.txt")
-include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-show-version-tests.txt")
-include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-show-misc-tests.txt")
-
-# --- Global-tables family (phase 2j, AI-2j-2) -------------------------------
-# Real multi-region: primary us-east-2, replica us-west-1 (human-fixed regions/
-# account, D-2j-1). Un-defers the family that was excluded through phase 2i
-# (D-2i-9 reversed) now that CONNECT actually reconnects (D-2j-10). Registered
-# last and contiguous: setup (create + add replica + seed) -> check (read the
-# replica) -> completion (drop replica + drop table). Each phase interleaves
-# region-aware ddbsh-wait polls (no fixed sleeps) because replica provisioning
-# and cross-region replication are eventually consistent. The family is self-
-# contained (its own `gttest` table in us-east-2/us-west-1), so it is
-# independent of the data families and their test-cleanup.
-include("${GOLDEN_SUITE_DIR}/ddbsh-gt-setup.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-gt-check.txt")
-include("${GOLDEN_SUITE_DIR}/ddbsh-gt-completion.txt")
+foreach(family IN LISTS GOLDEN_FAMILIES)
+    include("${GOLDEN_DIR}/families/${family}.txt")
+endforeach()

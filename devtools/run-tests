@@ -18,8 +18,9 @@
 # phase 2j), and the gate exit propagates. The old C++11 engine was removed from
 # the working tree during the phase-2i oracle retirement (preserved in git
 # history under the oracle-archive-v0.8.1 tag); the golden contract it came with
-# was relocated into tests/golden/suite (family .txt files, results/ goldens,
-# .sql seeds, ddbsh-wait) and is the sole surviving artifact.
+# was relocated out of oracle/ and consolidated into a single command-family
+# tree at tests/golden/ (families/ manifests, results/ goldens, data/ .sql
+# seeds, ddbsh-wait) and is the sole surviving artifact.
 #
 # The native GoogleTest suite (offline, FakeDDBClient) runs alongside as the
 # deterministic backend-free fidelity signal; a native failure fails the gate.
@@ -104,11 +105,12 @@ SUITE="$(printf '%s' "$SUITE" | tr -c 'A-Za-z0-9._-' '-')"
 # --- Repo / build resolution ------------------------------------------------
 HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 # The golden contract (family .txt files, results/*.exp goldens, .sql seeds,
-# ddbsh-wait) was relocated into tests/golden/suite during the phase-2i oracle
-# retirement (the old C++11 engine it came with was removed; see the
-# oracle-archive-v0.8.1 git tag). It is consumed by the golden harness via
-# -DGOLDEN_SUITE_DIR below.
-GOLDEN_SUITE_DIR_PATH="$REPO_DIR/tests/golden/suite"
+# ddbsh-wait) was relocated out of oracle/ during the phase-2i oracle retirement
+# (the old C++11 engine it came with was removed; see the oracle-archive-v0.8.1
+# git tag) and consolidated into a single command-family tree at
+# tests/golden/ during phase 2j (AI-2j-5). It is consumed by the golden harness
+# via -DGOLDEN_DIR below.
+GOLDEN_DIR_PATH="$REPO_DIR/tests/golden"
 DISCUSSIONS_DIR="$REPO_DIR/discussions"
 mkdir -p "$DISCUSSIONS_DIR"
 
@@ -170,7 +172,7 @@ echo "=== Configuring golden-parity project (all families -> new engine) ==="
 cmake -S "$GOLDEN_SRC" -B "$GOLDEN_BUILD" \
     -DDDBSH_SHELL_BIN="$ENGINE_BIN" \
     -DDDBSH_SDK_LIB="$DDBSH_SDK_LIB" \
-    -DGOLDEN_SUITE_DIR="$GOLDEN_SUITE_DIR_PATH"
+    -DGOLDEN_DIR="$GOLDEN_DIR_PATH"
 
 # --- Target echo + verification ---------------------------------------------
 # No endpoint override => the real regional DynamoDB endpoint.

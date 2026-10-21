@@ -189,7 +189,8 @@ new engine (the shipping `ddbsh` binary driven through the external harness in
 `tests/golden/`); the gate exit propagates. The original C++11 engine was
 removed from the tree during the phase-2i oracle retirement (preserved in git
 history under the `oracle-archive-v0.8.1` tag); its golden contract was
-relocated to `tests/golden/suite/` and remains the regression source. The
+relocated to a single command-family tree at `tests/golden/` and remains the
+regression source. The
 native GoogleTest unit tests (offline, `FakeDDBClient`)
 build with the project (`ddbsh-tests`) and run alongside as the deterministic
 backend-free fidelity signal.

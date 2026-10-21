@@ -29,7 +29,9 @@ The original C++11 `ddbsh` (awslabs upstream) served as the **fidelity oracle**
 through phase 2i. Its engine sources were removed from the working tree during
 the phase-2i oracle retirement and are preserved only in git history under the
 **`oracle-archive-v0.8.1`** tag. Its golden contract (family files, `.exp`
-results, `.sql` seeds, `ddbsh-wait`) was relocated to `tests/golden/suite/` and
+results, `.sql` seeds, `ddbsh-wait`) was relocated out of oracle/ and
+consolidated into a single command-family tree at `tests/golden/` (phase 2j,
+AI-2j-5) and
 remains the regression contract.
 
 ## Repository layout
@@ -104,7 +106,7 @@ flex/bison translation units are the only `-Wno-error` exceptions.
   and runs every non-global-tables golden family against it via the golden
   harness (the gate exit propagates); the original C++11 engine was removed from
   the tree (phase-2i retirement, tag `oracle-archive-v0.8.1`) and its golden
-  contract relocated to `tests/golden/suite/` as the sole surviving source. Artifacts land in `discussions/` named by HEAD short hash.
+  contract consolidated into a single command-family tree at `tests/golden/` as the sole surviving source. Artifacts land in `discussions/` named by HEAD short hash.
 - **Full-engine mode:** `devtools/run-tests --full-engine` registers the same
   family set as the default gate but forces the exit code to 0, so it is a
   MEASUREMENT (read the parity figure from the printed counts / artifact) rather
@@ -123,7 +125,7 @@ flex/bison translation units are the only `-Wno-error` exceptions.
 
 ## Fidelity discipline (the regression contract)
 
-- The original ddbsh golden `.exp` files (now in `tests/golden/suite/`) define
+- The original ddbsh golden `.exp` files (now in `tests/golden/results/`) define
   behavior. The reimplementation must reproduce the same stdout for the same
   commands.
 - Preserve exactly: the deterministic expression-alias scheme

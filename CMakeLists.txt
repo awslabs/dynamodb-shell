@@ -18,14 +18,14 @@
 # the fidelity oracle and golden-regeneration source — was removed from the
 # working tree during phase 2i and is preserved only in git history under the
 # oracle-archive-v0.8.1 tag. Its golden contract was relocated to
-# tests/golden/suite and remains the regression contract, exercised by
+# tests/golden and remains the regression contract, exercised by
 # devtools/run-tests (the standalone tests/golden CMake project) against real
 # DynamoDB.
 
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.21
+        VERSION 0.9.22
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)

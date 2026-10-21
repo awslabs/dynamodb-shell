@@ -6,8 +6,8 @@ add_test(NAME iut-create-1
 add_test(NAME iut-create-2
          COMMAND ddbshtest -c "create table iut2 (pk number, rk number, gsipk number, gsirk number) primary key (pk hash, rk range) billing mode on demand gsi (iut2gsi on (gsipk hash, gsirk range) projecting all)")
 
-add_test(NAME iut-load-1 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-update-load-1.sql)
-add_test(NAME iut-load-2 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-update-load-2.sql)
+add_test(NAME iut-load-1 COMMAND ddbshtest -f ${DATA}/ddbsh-update-load-1.sql)
+add_test(NAME iut-load-2 COMMAND ddbshtest -f ${DATA}/ddbsh-update-load-2.sql)
 
 add_test(NAME iut-load-1-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-1-check.exp -c "select * from iut1")
 add_test(NAME iut-load-2-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-2-check.exp -c "select * from iut2")
@@ -81,8 +81,8 @@ add_test(NAME iut-36 COMMAND ddbshtest -s -q -T ${RD}/iut-36.exp -c "update iut1
 
 # tests for update/upsert to index targets
 
-add_test(NAME iut-load-3 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-update-load-3.sql)
-add_test(NAME iut-load-4 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-update-load-4.sql)
+add_test(NAME iut-load-3 COMMAND ddbshtest -f ${DATA}/ddbsh-update-load-3.sql)
+add_test(NAME iut-load-4 COMMAND ddbshtest -f ${DATA}/ddbsh-update-load-4.sql)
 
 add_test(NAME iut-load-3-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-3-check.exp -c "select * from iut1")
 add_test(NAME iut-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-update-load-4-check.exp -c "select * from iut2")
