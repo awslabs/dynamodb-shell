@@ -1,0 +1,22 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-show-version-tests.txt — coverage for the SHOW VERSION command (phase
+# 2i, AI-2i-B / AI-2i-D).
+#
+# SHOW VERSION is a DELIBERATE, EXPECTED divergence from the oracle: the oracle
+# prints its own version ("ddbsh - version 0.8.1") and the reimplementation
+# prints ITS version ("ddbsh - version 0.9.x"). A byte-exact golden recorded
+# from the oracle could never match by design (design doc D-2i-3, SHOW VERSION
+# resolution #3). Rather than record an unmatchable golden, SHOW VERSION is
+# covered version-agnostically: the test asserts the OUTPUT FORMAT (the fixed
+# "ddbsh - version " prefix followed by a dotted numeric version) via a
+# PASS_REGULAR_EXPRESSION, independent of the specific version number. This
+# verifies the command form is wired and renders the version banner correctly.
+#
+# The regex matches the shared format contract: the literal "ddbsh - version "
+# label (arch §10: the version string drops trailing .0 segments) followed by a
+# dotted numeric version (X.Y, X.Y.Z, ...).
+
+add_test(NAME ishow-version COMMAND ddbshtest -q -c "show version")
+set_property(TEST ishow-version PROPERTY PASS_REGULAR_EXPRESSION "ddbsh - version [0-9]+\\.[0-9]+(\\.[0-9]+)*")
