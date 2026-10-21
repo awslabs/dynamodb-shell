@@ -13,11 +13,13 @@
 # Every non-global-tables family runs against the NEW engine (the shipping
 # `ddbsh` binary driven through the external harness in tests/golden/). The 2b
 # two-sub-run scaffold (routed families on the new engine, the complement on the
-# original C++11 oracle) is retired: there is one engine build, one golden
-# registration (all non-GT families), and the gate exit propagates. The oracle/
-# tree stays as the golden/.exp/ddbsh-wait source (family .txt files, results/
-# goldens, .sql seeds, ddbsh-wait), but the oracle EXECUTABLE is no longer built
-# or run.
+# original C++11 engine) is retired: there is one engine build, one golden
+# registration (all non-GT families), and the gate exit propagates. The old
+# C++11 engine was removed from the working tree during the phase-2i oracle
+# retirement (preserved in git history under the oracle-archive-v0.8.1 tag); the
+# golden contract it came with was relocated into tests/golden/suite (family
+# .txt files, results/ goldens, .sql seeds, ddbsh-wait) and is the sole surviving
+# artifact.
 #
 # The native GoogleTest suite (offline, FakeDDBClient) runs alongside as the
 # deterministic backend-free fidelity signal; a native failure fails the gate.
@@ -100,12 +102,12 @@ SUITE="$(printf '%s' "$SUITE" | tr -c 'A-Za-z0-9._-' '-')"
 
 # --- Repo / build resolution ------------------------------------------------
 HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-# The fidelity oracle is the original C++11 ddbsh, relocated to oracle/ when the
-# reimplementation took over the top-level tree (P2a-01 D-Q3). Since the 2h-1
-# exit gate the oracle executable is no longer built or run; only its tests/
-# tree (family .txt files, results/*.exp goldens, .sql seeds, ddbsh-wait) is
-# consumed by the golden harness, via -DORACLE_TESTS_DIR below.
-SRC_DIR="$REPO_DIR/oracle"
+# The golden contract (family .txt files, results/*.exp goldens, .sql seeds,
+# ddbsh-wait) was relocated into tests/golden/suite during the phase-2i oracle
+# retirement (the old C++11 engine it came with was removed; see the
+# oracle-archive-v0.8.1 git tag). It is consumed by the golden harness via
+# -DGOLDEN_SUITE_DIR below.
+GOLDEN_SUITE_DIR_PATH="$REPO_DIR/tests/golden/suite"
 DISCUSSIONS_DIR="$REPO_DIR/discussions"
 mkdir -p "$DISCUSSIONS_DIR"
 
@@ -160,12 +162,12 @@ if [ ! -x "$ENGINE_BIN" ]; then
     exit 1
 fi
 
-# --- Configure: golden parity project (reuses the oracle family files) ------
+# --- Configure: golden parity project (drives the relocated golden suite) ---
 echo "=== Configuring golden-parity project (all non-GT families -> new engine) ==="
 cmake -S "$GOLDEN_SRC" -B "$GOLDEN_BUILD" \
     -DDDBSH_SHELL_BIN="$ENGINE_BIN" \
     -DDDBSH_SDK_LIB="$DDBSH_SDK_LIB" \
-    -DORACLE_TESTS_DIR="$SRC_DIR/tests"
+    -DGOLDEN_SUITE_DIR="$GOLDEN_SUITE_DIR_PATH"
 
 # --- Target echo + verification ---------------------------------------------
 # No endpoint override => the real regional DynamoDB endpoint.

@@ -1,49 +1,41 @@
 # Copyright 2026 ddbsh reimplementation contributors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# tests/golden/CMakeLists.txt — the golden-parity CTest project for the NEW
-# engine (Step 2b, W7 / D23 / D24).
+# tests/golden/CMakeLists.txt — the golden-parity CTest project.
 #
-# This is a configure-only CMake project (no compilation). It reuses the
-# original golden family files (oracle/tests/*.txt) and golden results
-# (oracle/tests/results/*.exp) VERBATIM, driving the shipping `ddbsh`
-# binary through the external golden harness (golden-runner.sh) instead of the
-# original `ddbshtest`. It is intentionally standalone (built separately from
-# the engine/CLI/unit-test build via devtools/run-tests) and never links any
-# engine code.
+# This is a configure-only CMake project (no compilation). It drives the
+# shipping `ddbsh` binary through the external golden harness (golden-runner.sh)
+# and diffs its output against the golden `.exp` files. It is intentionally
+# standalone (built separately from the engine/CLI/unit-test build via
+# devtools/run-tests) and never links any engine code.
 #
-# How the verbatim reuse works: the original `add_test(... COMMAND ddbshtest ...)`
-# lines name `ddbshtest`. Here `ddbshtest` is an IMPORTED executable whose
-# location is the configured golden-runner.sh, so every `COMMAND ddbshtest`
-# resolves to the harness, which drives `ddbsh`. `${RD}` (the golden
-# results dir) is set below exactly as the original tests/ddbsh-tests.txt sets
-# it. The original `set_property(TEST ... PASS/FAIL_REGULAR_EXPRESSION ...)`
-# lines keep working because CTest applies them to the harness's stdout, which
-# the harness emits verbatim for non-`-T` tests.
+# Two golden trees live here:
+#   suite/   — the original ddbsh golden suite (family *.txt, results/*.exp,
+#              .sql seeds, ddbsh-wait), relocated in-tree during the phase-2i
+#              oracle retirement (D-2i-6: the golden contract is kept, never
+#              deleted; the old C++11 engine it came with is removed and
+#              preserved only in git history under the oracle-archive-v0.8.1
+#              tag). These families are the fidelity regression contract.
+#   reimpl/  — golden families authored during the reimplementation (phase 2i)
+#              for command forms the original never golden-tested; their
+#              expected outputs were recorded from the original ddbsh
+#              (production `ddbsh-old` binary) before the engine was retired.
 #
-# Family routing history (D24, 2b interim → 2h exit gate): families were routed
-# onto the new engine phase by phase (2b: ist-/isel-/iins-; 2c: iut-/delete;
-# 2d: itxt-; 2e: icd-/ipt-; 2g: rv-/basic-/cross-account-). As of 2h-1 the route
-# is complete: ALL non-global-tables families register here and run on the new
-# engine. The global-tables families (ddbsh-gt-*) remain excluded in every mode
-# (they need a multi-region live setup, arch §11, and are commented out in the
-# oracle master include oracle/tests/ddbsh-tests.txt as well).
+# How the reuse works: the original `add_test(... COMMAND ddbshtest ...)` lines
+# name `ddbshtest`. Here `ddbshtest` is an IMPORTED executable whose location is
+# the configured golden-runner.sh, so every `COMMAND ddbshtest` resolves to the
+# harness, which drives the shipping `ddbsh`. The family files reference the
+# results dir via ${RD} / ${RD_REIMPL} and their seed/.sql + ddbsh-wait inputs
+# via ${GOLDEN_SUITE}; all three are set below.
 #
-# Step-2 exit gate (2h-1, D-2h-1, 2026-10-19): the oracle route is now EMPTY —
-# every non-global-tables golden family runs against the new engine. The
-# per-family DDBSH_GOLDEN_ALL_FAMILIES split and the ROUTED_RE complement on the
-# oracle (the 2b two-sub-run scaffold) are retired: there is one build (the new
-# engine), one registration (all non-GT families), and the gate exit propagates.
-# The oracle/ tree stays as the golden/.exp/ddbsh-wait source (the family .txt
-# files and results/*.exp are reused verbatim), but the oracle EXECUTABLE is no
-# longer built or run by devtools/run-tests.
+# The global-tables families (ddbsh-gt-*) remain excluded in every mode (they
+# need a multi-region live setup, arch §11) and are the sole deferred family.
 #
 # Configuration inputs (set by devtools/run-tests or on the command line):
-#   -DDDBSH_SHELL_BIN=<path>   the shipping ddbsh binary (required)
-#   -DDDBSH_SDK_LIB=<path>     AWS SDK shared-library dir (prepended to
-#                              LD_LIBRARY_PATH by the harness; optional)
-#   -DORACLE_TESTS_DIR=<path>  the original tests/ dir holding the family .txt
-#                              files and results/ (defaults to ../../oracle/tests)
+#   -DDDBSH_SHELL_BIN=<path>    the shipping ddbsh binary (required)
+#   -DDDBSH_SDK_LIB=<path>      AWS SDK shared-library dir (optional)
+#   -DGOLDEN_SUITE_DIR=<path>   the relocated original golden suite dir
+#                               (defaults to ./suite)
 
 cmake_minimum_required(VERSION 3.21)
 project(ddbsh-golden NONE)
@@ -52,13 +44,13 @@ enable_testing()
 
 set(DDBSH_SHELL_BIN "" CACHE FILEPATH "Path to the shipping ddbsh binary")
 set(DDBSH_SDK_LIB "" CACHE PATH "AWS SDK shared-library directory (LD_LIBRARY_PATH)")
-set(ORACLE_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../oracle/tests"
-    CACHE PATH "Directory holding the original golden family .txt files and results/")
+set(GOLDEN_SUITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/suite"
+    CACHE PATH "Directory holding the original golden family .txt files, results/, .sql seeds, and ddbsh-wait")
 
-get_filename_component(ORACLE_TESTS_DIR "${ORACLE_TESTS_DIR}" ABSOLUTE)
-if(NOT EXISTS "${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
+get_filename_component(GOLDEN_SUITE_DIR "${GOLDEN_SUITE_DIR}" ABSOLUTE)
+if(NOT EXISTS "${GOLDEN_SUITE_DIR}/ddbsh-select-tests.txt")
     message(FATAL_ERROR
-        "ORACLE_TESTS_DIR does not look like the golden tests dir: ${ORACLE_TESTS_DIR}")
+        "GOLDEN_SUITE_DIR does not look like the golden suite dir: ${GOLDEN_SUITE_DIR}")
 endif()
 
 # Configure the harness with the resolved shell/SDK paths baked in as defaults
@@ -73,52 +65,42 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/golden-runner.sh.in"
                    WORLD_READ WORLD_EXECUTE)
 
 # `ddbshtest` resolves to the harness, so the original add_test lines run the
-# new engine unchanged.
+# shipping engine unchanged.
 add_executable(ddbshtest IMPORTED GLOBAL)
 set_target_properties(ddbshtest PROPERTIES IMPORTED_LOCATION "${GOLDEN_RUNNER}")
 
-# `${RD}` is the golden results dir, exactly as the original ddbsh-tests.txt.
-set(RD "${ORACLE_TESTS_DIR}/results")
+# Variables the suite family files reference:
+#   ${RD}           — the suite's golden results dir (.exp files)
+#   ${GOLDEN_SUITE} — the suite dir itself (.sql seed scripts + the ddbsh-wait
+#                     poll helper, used by the -f load and table/pitr-settled
+#                     wait steps)
+set(RD "${GOLDEN_SUITE_DIR}/results")
+set(GOLDEN_SUITE "${GOLDEN_SUITE_DIR}")
 
-# Single registration (2h-1): every non-global-tables family runs on the new
-# engine. Several families reference ${CMAKE_SOURCE_DIR}/tests/*.sql for their
-# `-f` load scripts (ddbsh-update-tests.txt, ddbsh-create-drop-tests.txt, …) and
-# ${CMAKE_SOURCE_DIR}/tests/ddbsh-wait for their table-settled / pitr-settled
-# poll steps. The oracle master include (oracle/tests/ddbsh-tests.txt) resolves
-# those relative to the oracle project root; here CMAKE_SOURCE_DIR is
-# tests/golden, so shadow it with the oracle root (the parent of
-# ORACLE_TESTS_DIR) for the duration of the includes so the load-script and
-# wait-script paths resolve. The oracle family files are reused verbatim — this
-# is the only non-invasive way to satisfy their path assumption. The ddbsh-wait
-# steps invoke a script (not ddbsh), so they run unchanged under routing.
-#
-# The include order mirrors the oracle master include exactly, which places
-# test-cleanup LAST but one (before cross-account). That ordering matters:
+# --- Original golden suite (fidelity regression contract) -------------------
+# The include order places test-cleanup LAST but one (before cross-account):
 # ctest runs these serially in registration order, and test-cleanup drops the
-# tables the data families create, so it must come after them (watch-item,
-# D-2h-1 §7). cross-account uses its own account's tables and is unaffected.
-get_filename_component(_oracle_root "${ORACLE_TESTS_DIR}" DIRECTORY)
-set(CMAKE_SOURCE_DIR "${_oracle_root}")
-include("${ORACLE_TESTS_DIR}/ddbsh-basic-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-create-drop-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-pitr-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-symbol-table.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-select-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-update-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-delete-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-insert-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-transactions-tests.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-return-values.txt")
-include("${ORACLE_TESTS_DIR}/test-cleanup.txt")
-include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
+# tables the data families create, so it must come after them (D-2h-1 §7).
+# cross-account uses its own account's tables and is unaffected.
+include("${GOLDEN_SUITE_DIR}/ddbsh-basic-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-create-drop-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-pitr-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-symbol-table.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-select-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-update-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-delete-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-insert-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-transactions-tests.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-return-values.txt")
+include("${GOLDEN_SUITE_DIR}/test-cleanup.txt")
+include("${GOLDEN_SUITE_DIR}/ddbsh-cross-account.txt")
 
 # --- Reimplementation-owned golden families (phase 2i, AI-2i-B) -------------
 # New golden families covering command forms the original ddbsh never golden-
 # tested. The expected outputs were RECORDED FROM THE ORIGINAL ddbsh (the
-# fidelity oracle) via `ddbshtest -R` (D-2i-2), and live in a reimpl-owned tree
-# (tests/golden/reimpl/) so the pristine oracle/tests tree stays verbatim.
-# ${RD_REIMPL} is the reimpl golden results dir, mirroring how the oracle
-# families use ${RD}.
+# production `ddbsh-old` binary, D-2i-2) before the engine was retired, and are
+# reproduced byte-for-byte by the reimplementation. ${RD_REIMPL} is the reimpl
+# golden results dir, mirroring how the suite families use ${RD}.
 set(RD_REIMPL "${CMAKE_CURRENT_SOURCE_DIR}/reimpl/results")
 include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-help-tests.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-explain-ddl-tests.txt")

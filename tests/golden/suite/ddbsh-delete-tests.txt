@@ -6,8 +6,8 @@ add_test(NAME ddbsh-delete-create-1
 add_test(NAME ddbsh-delete-create-2
          COMMAND ddbshtest -c "create table idt2 (pk number, rk number, gsipk number, gsirk number) primary key (pk hash, rk range) billing mode on demand gsi ( iut2gsi on (gsipk hash, gsirk range) projecting all)")
 
-add_test(NAME ddbsh-delete-load-1 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-1.sql)
-add_test(NAME ddbsh-delete-load-2 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-2.sql)
+add_test(NAME ddbsh-delete-load-1 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-load-1.sql)
+add_test(NAME ddbsh-delete-load-2 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-load-2.sql)
 
 add_test(NAME ddbsh-delete-load-1-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-1-check.exp -c "select * from idt1")
 add_test(NAME ddbsh-delete-load-2-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-2-check.exp -c "select * from idt2")
@@ -67,8 +67,8 @@ add_test(NAME ddbsh-delete-33 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-33.exp 
 
 add_test(NAME ddbsh-delete-34 COMMAND ddbshtest -q -T ${RD}/ddbsh-delete-34.exp -c "delete from idt1 where pk = 6 and z = 12")
 
-add_test(NAME ddbsh-delete-load-3 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-3.sql)
-add_test(NAME ddbsh-delete-load-4 COMMAND ddbshtest -f ${CMAKE_SOURCE_DIR}/tests/ddbsh-load-4.sql)
+add_test(NAME ddbsh-delete-load-3 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-load-3.sql)
+add_test(NAME ddbsh-delete-load-4 COMMAND ddbshtest -f ${GOLDEN_SUITE}/ddbsh-load-4.sql)
 
 add_test(NAME ddbsh-delete-load-3-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-3-check.exp -c "select * from idt1")
 add_test(NAME ddbsh-delete-load-4-check COMMAND ddbshtest -s -q -T ${RD}/ddbsh-load-4-check.exp -c "select * from idt2")
