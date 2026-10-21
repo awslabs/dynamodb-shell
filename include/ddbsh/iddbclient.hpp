@@ -653,6 +653,29 @@ class IDDBClient {
 public:
     virtual ~IDDBClient() = default;
 
+    /// Reconfigure which region/endpoint subsequent calls target, mirroring the
+    /// original CConnectCommand's reconnect() (arch §3/§7): the original rebuilt
+    /// its DynamoDBClient and re-resolved credentials so every statement after a
+    /// CONNECT hit the new region/endpoint. This is NOT a DynamoDB API call — it
+    /// swaps the underlying client. The engine's CONNECT arm calls this so a
+    /// CONNECT takes effect for every later statement in the same batch and
+    /// across batches (B11 / D-2j-10).
+    ///
+    /// The default is a no-op returning success: a client that is region-fixed
+    /// (the test doubles, which never truly switch regions) inherits it
+    /// unchanged, so adding this seam does not force every implementation to
+    /// rebuild. The CLI's AwsDDBClient overrides it to actually rebuild the SDK
+    /// client with the new region/endpoint. The original's reconnect() was
+    /// non-fatal (it logged and continued); to match, the engine does not
+    /// surface a connect() failure as the statement's Error.
+    /// @param region    the new AWS region (empty => SDK default resolution).
+    /// @param endpoint  the new endpoint override (empty => regional endpoint).
+    virtual Result<void> connect(const std::string& region, const std::string& endpoint) {
+        (void)region;
+        (void)endpoint;
+        return {};
+    }
+
     virtual Result<GetItemOut> get_item(const GetItemIn&) = 0;
     virtual Result<QueryOut> query(const QueryIn&) = 0;
     virtual Result<ScanOut> scan(const ScanIn&) = 0;

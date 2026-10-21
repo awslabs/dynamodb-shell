@@ -560,6 +560,12 @@ Aws::DynamoDB::Model::TransactWriteItemsRequest build_transact_write_items(
 }  // namespace
 
 AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint) {
+    rebuild(region, endpoint);
+}
+
+AwsDDBClient::~AwsDDBClient() = default;
+
+void AwsDDBClient::rebuild(const std::string& region, const std::string& endpoint) {
     Aws::Client::ClientConfiguration cfg;
     if (!region.empty()) {
         cfg.region = region;
@@ -567,10 +573,16 @@ AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoin
     if (!endpoint.empty()) {
         cfg.endpointOverride = endpoint;
     }
+    // Default-chain credential resolution (honors AWS_PROFILE and a profile's
+    // role_arn/source_profile AssumeRole), re-run on every rebuild so a
+    // cross-account/region CONNECT re-resolves credentials as the original did.
     client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
 }
 
-AwsDDBClient::~AwsDDBClient() = default;
+Result<void> AwsDDBClient::connect(const std::string& region, const std::string& endpoint) {
+    rebuild(region, endpoint);
+    return {};
+}
 
 Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
     auto request = build_get_item(in);

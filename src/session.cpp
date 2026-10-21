@@ -150,14 +150,21 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 ExecOutcome{ReportOutcome{engine::help_lines(engine::help_text(help.topic))}});
         }
         case StatementKind::connect: {
-            // CONNECT contacts no API (arch §7): it updates the session's
-            // region/endpoint (the original CConnectCommand calls
-            // setRegionAndEndpoint + reconnect; reconnection is the CLI's job
-            // via the injected client, W5/W8). Updating the per-session config
-            // keeps the prompt/region correct and emits the CONNECT token.
+            // CONNECT updates the session's region/endpoint AND reconnects the
+            // injected client so every later statement (in this batch and
+            // across batches) targets the new region/endpoint — faithfully
+            // matching the original CConnectCommand, which calls
+            // setRegionAndEndpoint + reconnect (arch §3/§7; B11 / D-2j-10).
+            // The original's reconnect() was non-fatal (it logged and
+            // continued, still emitting CONNECT), so a connect() failure is
+            // deliberately NOT surfaced as this statement's Error (open
+            // question #2, default: match the original). The CLI's AwsDDBClient
+            // re-resolves credentials and rebuilds its SDK client; the test
+            // doubles inherit the no-op default.
             const auto& connect = std::get<engine::ConnectCmd>(statement.ast()->command);
             impl_->config.region = connect.region;
             impl_->config.endpoint = connect.endpoint;
+            (void)impl_->client.connect(connect.region, connect.endpoint);
             return emit_single(ExecOutcome{StatusOutcome{"CONNECT"}});
         }
         case StatementKind::select_statement: {
@@ -323,6 +330,10 @@ Result<void> Session::run(std::string_view text, OutcomeSink& sink) {
         return fail(stmt.error());
     }
     return execute(*stmt, sink);
+}
+
+ConnectionHint Session::connection_hint() const {
+    return ConnectionHint{impl_->config.region, !impl_->config.endpoint.empty()};
 }
 
 }  // namespace ddbsh

@@ -35,6 +35,16 @@ public:
     AwsDDBClient(const std::string& region, const std::string& endpoint);
     ~AwsDDBClient() override;
 
+    /// Rebuild the underlying SDK client for a new region/endpoint, mirroring
+    /// the original reconnect() (arch §3/§7). Credentials re-resolve through the
+    /// SDK default chain (which honors AWS_PROFILE + role_arn/source_profile
+    /// AssumeRole), so a cross-region or cross-account CONNECT switches both the
+    /// endpoint and the credentials, as the original did (B11/B12, D-2j-10).
+    /// Returns success; constructing the client performs no network I/O (no
+    /// liveness probe — open question #1, default: omit the original's
+    /// post-reconnect ListTables, which is not observable in the goldens).
+    Result<void> connect(const std::string& region, const std::string& endpoint) override;
+
     Result<GetItemOut> get_item(const GetItemIn&) override;
     Result<QueryOut> query(const QueryIn&) override;
     Result<ScanOut> scan(const ScanIn&) override;
@@ -68,6 +78,11 @@ public:
     Result<std::string> explain_request(const ExplainRequest&) override;
 
 private:
+    // Construct (or replace) the underlying SDK client for a region/endpoint.
+    // Shared by the ctor and connect() so both resolve credentials/endpoint the
+    // same way (D-2j-10).
+    void rebuild(const std::string& region, const std::string& endpoint);
+
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;
 };
 

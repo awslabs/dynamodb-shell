@@ -44,6 +44,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -78,15 +79,20 @@ const char* env_or(const char* name, const char* fallback) {
 }
 
 // Interactive stdin: GNU readline with the region prompt + history. Isolated
-// here so the engine stays terminal-free (tenet 3 / D6).
+// here so the engine stays terminal-free (tenet 3 / D6). The prompt is pulled
+// FRESH from a provider before each read, so a CONNECT that changes the
+// session's region/endpoint is reflected in the very next prompt (B10 /
+// D-2j-2a) — replacing the old startup-snapshot prompt.
 // TODO(portability): readline is not native on Windows — a provider/fallback
 // behind this same seam lands on the portability ledger.
 class StdinLineSource : public LineSource {
 public:
-    explicit StdinLineSource(std::string prompt) : prompt_(std::move(prompt)) {}
+    explicit StdinLineSource(std::function<std::string()> prompt_provider)
+        : prompt_provider_(std::move(prompt_provider)) {}
 
     std::optional<std::string> next() override {
-        char* raw = readline(prompt_.c_str());
+        const std::string prompt = prompt_provider_();
+        char* raw = readline(prompt.c_str());
         if (raw == nullptr) {
             return std::nullopt;  // EOF (Ctrl-D)
         }
@@ -99,7 +105,7 @@ public:
     }
 
 private:
-    std::string prompt_;
+    std::function<std::string()> prompt_provider_;
 };
 
 // Resolve the config-file path: DDBSH_CONFIG_FILE, else $HOME/.ddbsh_config
@@ -244,16 +250,19 @@ int main(int argc, char** argv) {
     }
 
     // Interactive REPL. Prompt = "<region>> " with a "(*)" suffix when an
-    // endpoint override is in effect (arch §4/§11).
-    // TODO(phase-N): the prompt is fixed at startup; reflecting a region change
-    // from a CONNECT (and reconnecting the client) is deferred to the
-    // reconnection round.
-    const std::string prompt = region + (endpoint.empty() ? "" : " (*)") + "> ";
+    // endpoint override is in effect (arch §4/§11). The prompt is rebuilt from
+    // the session's live ConnectionHint before each read, so a CONNECT that
+    // changes the region/endpoint is reflected in the next prompt (B10); the
+    // `> ` suffix and `(*)` marker are CLI presentation policy (D-2j-2a).
+    const auto prompt_provider = [&session]() -> std::string {
+        const ddbsh::ConnectionHint hint = session.connection_hint();
+        return hint.region + (hint.endpoint_overridden ? " (*)" : "") + "> ";
+    };
     const std::string history = history_path();
     if (!history.empty()) {
         read_history(history.c_str());
     }
-    StdinLineSource src(prompt);
+    StdinLineSource src(prompt_provider);
     int rv = run_source(session, renderer, src, term, abort_on_error);
     if (!history.empty()) {
         write_history(history.c_str());

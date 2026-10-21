@@ -25,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.19
+        VERSION 0.9.20
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -205,6 +205,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/show_tables_exec_test.cpp
                    tests/describe_exec_test.cpp
                    tests/explain_exec_test.cpp
+                   tests/connect_reconnect_test.cpp
                    tests/cli_exit_code_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
