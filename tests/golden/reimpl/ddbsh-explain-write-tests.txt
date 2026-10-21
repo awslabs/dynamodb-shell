@@ -1,0 +1,24 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-explain-write-tests.txt — golden-parity family for EXPLAIN INSERT and
+# EXPLAIN REPLACE (phase 2i, AI-2i-B).
+#
+# Unlike the pure-serialization EXPLAIN DDL forms (ddbsh-explain-ddl-tests.txt),
+# the INSERT / REPLACE planner resolves the table's key schema via DescribeTable
+# to build the PutItem (INSERT adds the attribute_not_exists(#pk) condition;
+# arch §7, §8). That is the same reason EXPLAIN SELECT is not backend-free
+# (arch §11). So this family is SEEDED: a single -c creates a real table (the
+# CREATE waits for ACTIVE), runs the two EXPLAIN forms against it, then drops it
+# (self-contained lifecycle, one table create/drop per run). The CREATE/DROP
+# status tokens bracket the two deterministic EXPLAIN PutItem serializations.
+#
+# The expected output was RECORDED FROM THE ORIGINAL ddbsh (production
+# `ddbsh-old` oracle, driven through the golden harness, D-2i-2) and is
+# reproduced byte-for-byte by the reimplementation. EXPLAIN output is
+# deterministic (no sort); the table name is fixed so the golden is stable.
+#
+# WARNING: this family creates and drops a REAL DynamoDB table
+# (ddbsh_iexp_insert) on each run (us-east-1). It is self-cleaning.
+
+add_test(NAME iexp-insert-replace COMMAND ddbshtest -q -T ${RD_REIMPL}/iexp-insert-replace.exp -c "create table ddbsh_iexp_insert ( pk number ) primary key (pk hash); explain insert into ddbsh_iexp_insert (pk, a) values (1, 2); explain replace into ddbsh_iexp_insert (pk, a) values (1, 2); drop table ddbsh_iexp_insert;")
