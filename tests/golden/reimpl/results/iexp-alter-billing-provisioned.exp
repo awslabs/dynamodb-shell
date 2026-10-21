@@ -1,0 +1,8 @@
+UpdateTable({
+   "TableName":   "foo",
+   "BillingMode":   "PROVISIONED",
+   "ProvisionedThroughput":   {
+      "ReadCapacityUnits":   5,
+      "WriteCapacityUnits":   10
+   }
+})

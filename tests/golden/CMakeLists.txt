@@ -121,3 +121,4 @@ include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
 # families use ${RD}.
 set(RD_REIMPL "${CMAKE_CURRENT_SOURCE_DIR}/reimpl/results")
 include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-help-tests.txt")
+include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-explain-ddl-tests.txt")
