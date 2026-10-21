@@ -25,7 +25,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.17
+        VERSION 0.9.18
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -54,6 +54,26 @@ else()
     if(DDBSH_WARNINGS_AS_ERRORS)
         target_compile_options(ddbsh_warnings INTERFACE -Werror)
     endif()
+endif()
+
+# --- Coverage instrumentation (phase 2i, AI-2i-C) ---------------------------
+# Opt-in line/branch coverage for a dedicated measurement build. OFF by default
+# so the normal build and the -Werror gate are unaffected. When ON, every one
+# of OUR targets (engine library, cli-core, cli, tests) is instrumented via the
+# ddbsh_warnings interface they all link; third-party code (AWS SDK, GoogleTest)
+# is untouched. Use a separate build directory (e.g. build-coverage) and report
+# with gcovr/lcov. Not supported with MSVC (use a GCC/Clang build for coverage).
+#   cmake -S . -B build-coverage -DDDBSH_COVERAGE=ON -DDDBSH_WARNINGS_AS_ERRORS=OFF ...
+#   cmake --build build-coverage
+#   (run the suite) ; gcovr --gcov-executable gcc14-gcov ...
+option(DDBSH_COVERAGE "Build with gcov/lcov coverage instrumentation" OFF)
+if(DDBSH_COVERAGE)
+    if(MSVC)
+        message(FATAL_ERROR "DDBSH_COVERAGE requires a GCC/Clang toolchain (not MSVC)")
+    endif()
+    # -O0 keeps line mapping faithful; --coverage sets both compile and link.
+    target_compile_options(ddbsh_warnings INTERFACE --coverage -O0 -g)
+    target_link_options(ddbsh_warnings INTERFACE --coverage)
 endif()
 
 # --- flex + bison (reentrant scanner + C++ lalr1.cc parser, D3) -------------

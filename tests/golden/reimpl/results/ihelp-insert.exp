@@ -1,0 +1,5 @@
+INSERT INTO <table> ( column_list ) VALUES (values) [, ...] [ratelimit]
+ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |
+             WITH RATELIMIT ( RR RCU ) |
+             WITH RATELIMIT ( WW WCU )
+

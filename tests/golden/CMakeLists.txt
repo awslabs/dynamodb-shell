@@ -111,3 +111,13 @@ include("${ORACLE_TESTS_DIR}/ddbsh-transactions-tests.txt")
 include("${ORACLE_TESTS_DIR}/ddbsh-return-values.txt")
 include("${ORACLE_TESTS_DIR}/test-cleanup.txt")
 include("${ORACLE_TESTS_DIR}/ddbsh-cross-account.txt")
+
+# --- Reimplementation-owned golden families (phase 2i, AI-2i-B) -------------
+# New golden families covering command forms the original ddbsh never golden-
+# tested. The expected outputs were RECORDED FROM THE ORIGINAL ddbsh (the
+# fidelity oracle) via `ddbshtest -R` (D-2i-2), and live in a reimpl-owned tree
+# (tests/golden/reimpl/) so the pristine oracle/tests tree stays verbatim.
+# ${RD_REIMPL} is the reimpl golden results dir, mirroring how the oracle
+# families use ${RD}.
+set(RD_REIMPL "${CMAKE_CURRENT_SOURCE_DIR}/reimpl/results")
+include("${CMAKE_CURRENT_SOURCE_DIR}/reimpl/ddbsh-help-tests.txt")

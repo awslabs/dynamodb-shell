@@ -1,0 +1,32 @@
+HELP - provide help in ddbsh
+
+   HELP <keyword> [keyword [keyword ...]]
+
+      Provides help about the specified keyword, or statement.
+
+      HELP ALTER TABLE
+      HELP BACKUP
+      HELP BEGIN
+      HELP COMMIT
+      HELP CONNECT
+      HELP CREATE
+      HELP DELETE
+      HELP DESCRIBE BACKUP
+      HELP DESCRIBE
+      HELP DROP BACKUP
+      HELP DROP TABLE
+      HELP DROP
+      HELP EXPLAIN
+      HELP INSERT
+      HELP REPLACE
+      HELP RESTORE
+      HELP ROLLBACK
+      HELP SELECT
+      HELP SHOW BACKUPS
+      HELP SHOW CREATE TABLE
+      HELP SHOW LIMITS
+      HELP SHOW VERSION
+      HELP SHOW
+      HELP UPDATE
+      HELP UPSERT
+

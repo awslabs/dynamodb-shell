@@ -1,0 +1,39 @@
+ALTER TABLE - make changes to an existing table.
+
+   ALTER TABLE <name> SET billing_mode_and_throughput [warm_throughput]
+      billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)
+      provisioned := ( RR RCU, WW WCU )
+
+   ALTER TABLE <name> SET warm_throughput
+
+   ALTER TABLE <name> SET table_class
+      table_class := TABLE CLASS STANDARD | TABLE CLASS INFREQUENT ACCESS
+
+   ALTER TABLE <name> SET streams
+      streams := STREAM ( stream_type ) | STREAM DISABLED
+      stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES
+
+   ALTER TABLE <name> ( attribute_name attribute_type [, ...] ) CREATE GSI create_gsi_spec
+      create_gsi_spec := <name> ON key_schema index_projection [billing_mode_and_throughput]
+   ALTER TABLE <name> DROP GSI <gsiname>
+
+   ALTER TABLE <name> SET billing_mode_and_throughput UPDATE GSI ( gsi_update [, ...] )
+      gsi_update := <gsiname> SET billing_mode_and_throughput
+      gsi_update := <gsiname> SET warm_throughput
+
+   ALTER TABLE <name> UPDATE GSI ( gsi_update [, ...] )
+
+   ALTER TABLE <name> SET TTL DISABLED
+
+   ALTER TABLE <name> SET TTL ( attribute_name )
+
+   ALTER TABLE <name> SET PITR ENABLED
+
+   ALTER TABLE <name> SET PITR DISABLED
+
+   ALTER TABLE <name> ADD REPLICA <region> [replica_definition]
+   ALTER TABLE <name> UPDATE REPLICA <region> replica_definition
+   ALTER TABLE <name> DROP REPLICA <region>
+   ALTER TABLE <name> SET DELETION PROTECTION [ENABLED|DISABLED]
+   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]
+   warm_throughput := WARM THROUGHPUT ( RR RCU, WW WCU )
