@@ -1,0 +1,35 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-show-misc-tests.txt — golden-parity family for CONNECT, SHOW CREATE
+# TABLE, and SHOW LIMITS (phase 2i, AI-2i-B / AI-2i-D).
+#
+# All three were "native only" in the command-coverage matrix (design doc
+# 2026-10-21-P2i-01, AI-2i-A). Expected outputs recorded from the original
+# ddbsh (production `ddbsh-old` oracle, D-2i-2) where a byte-exact golden is
+# stable; SHOW LIMITS uses a structural regex (see below).
+#
+#   iconnect   — CONNECT "<region>": reconnects the client and prints the
+#                CONNECT status token. Deterministic (no live resource).
+#   isct       — SHOW CREATE TABLE: seeded (creates a real table, shows its
+#                reconstructed DDL, drops it, all in one -c). The reconstructed
+#                DDL carries no ARN/timestamp, so the golden is byte-exact and
+#                stable. Self-cleaning.
+#   ishow-limits — SHOW LIMITS: DescribeLimits returns account- and table-level
+#                capacity maxima plus the account's provisioned totals. Those
+#                numbers are account-specific and can drift (e.g. a concurrent
+#                provisioned table changes the totals), so a byte-exact oracle
+#                golden is not stable. Per the design's normalization directive,
+#                SHOW LIMITS is covered with a PASS_REGULAR_EXPRESSION asserting
+#                the report STRUCTURE (the fixed labels and the numeric fields),
+#                independent of the specific limit values.
+#
+# WARNING: isct creates and drops a REAL DynamoDB table (ddbsh_sct) per run.
+
+add_test(NAME iconnect COMMAND ddbshtest -q -T ${RD_REIMPL}/iconnect.exp -c "connect \"us-east-1\";")
+
+add_test(NAME isct COMMAND ddbshtest -q -T ${RD_REIMPL}/isct.exp -c "create table ddbsh_sct ( pk number, rk number ) primary key (pk hash, rk range); show create table ddbsh_sct; drop table ddbsh_sct;")
+
+add_test(NAME ishow-limits COMMAND ddbshtest -q -c "show limits")
+set_property(TEST ishow-limits PROPERTY PASS_REGULAR_EXPRESSION
+    "Region: .*\nAccount Max \\(RCU, WCU\\): [0-9]+, [0-9]+\nTable Max \\(RCU, WCU\\):  [0-9]+, [0-9]+\nTotal Tables \\(RCU, WCU\\): [0-9]+, [0-9]+\nTotal GSI \\(RCU, WCU\\): [0-9]+, [0-9]+\nTotal \\(RCU, WCU\\): [0-9]+, [0-9]+")
