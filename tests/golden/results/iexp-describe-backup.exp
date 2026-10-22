@@ -1,0 +1,3 @@
+DescribeBackup({
+   "BackupArn":   "arn:aws:dynamodb:us-east-1:632195519165:table/foo/backup/01234567890123-abcdef00"
+})

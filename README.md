@@ -27,10 +27,11 @@ a library with an SDK-free, terminal-free public API (headers under
 and history, config-file loading, signal handling, and wiring a concrete AWS SDK
 client into the library.
 
-Current version: **0.9.4**. The reimplementation is delivered in phases; the
-command surface below is what the new engine drives today. The full command
-reference further down this document describes the complete `ddbsh` behavior
-that the reimplementation targets.
+Current version: **0.9.19**. The reimplementation drives the full standard
+`ddbsh` command surface (every non-global-tables command) end to end against
+real DynamoDB; global tables are the sole deferred family. The command surface
+below lists what the engine drives today. The full command reference further
+down this document describes the complete `ddbsh` behavior.
 
 > The "Building the software" section below describes the **original** upstream
 > source layout (`cmake ../dynamodb-shell/ddbsh`). For the reimplementation, use
@@ -62,10 +63,9 @@ Install the library (headers + lib) and CLI to a prefix:
 cmake --install build --prefix /path/to/prefix
 ```
 
-## Supported commands (this phase)
+## Supported commands
 
-The new engine currently drives this command set end to end against real
-DynamoDB:
+The engine drives this command set end to end against real DynamoDB:
 
 - `CONNECT`, `QUIT` — control.
 - `CREATE TABLE`, `DROP TABLE` — DDL (on-demand default, waiters unless
@@ -84,18 +84,25 @@ DynamoDB:
 - `SELECT` — the full SQL→API decision matrix (GetItem vs Query vs Scan, base
   table and `.index`), the WHERE expression tree, `CONSISTENT`, projections, and
   `RETURN CONSUMED CAPACITY`.
+- `ALTER TABLE` — billing mode / throughput, GSI create/update/drop, stream,
+  table class, SSE, deletion protection, warm throughput, `SET TTL`, `SET PITR`,
+  and replica updates (UpdateTable / UpdateTimeToLive / UpdateContinuousBackups).
+- Transactions — `BEGIN .. COMMIT|ROLLBACK` mapping to TransactGetItems (all
+  reads, each reducible to a GetItem) or TransactWriteItems
+  (Put/Update/Delete/ConditionCheck).
+- Backups and restore — `BACKUP TABLE ... CALLED`, `DROP BACKUP`,
+  `DESCRIBE BACKUP`, `RESTORE ... FROM BACKUP`, `RESTORE ... TO PITR`.
+- `SHOW LIMITS`, `SHOW BACKUPS`, `SHOW CREATE TABLE` — introspection.
+- Return-values display (`RETURN ...`) and rate limiting (`WITH RATELIMIT`),
+  including the token-bucket throttle on paginated read/write enumeration.
 - `SHOW VERSION`.
 - `EXPLAIN <any supported command>` — prints the serialized API request(s)
   instead of executing.
 
-**Deferred to later phases:** transactions
-(`BEGIN..COMMIT`), `ALTER TABLE`, backups (`BACKUP`/`DROP BACKUP`/
-`DESCRIBE BACKUP`/`RESTORE`), `SHOW LIMITS`/`SHOW BACKUPS`/`SHOW CREATE TABLE`,
-return-values display, and rate-limiting (a `WITH RATELIMIT` clause is parsed
-and forces `ReturnConsumedCapacity=TOTAL` on the request for EXPLAIN fidelity,
-but no token-bucket throttling runs yet). The parser may recognize other
-deferred commands and return a clear "not implemented in this build" error
-rather than a parse error.
+**Deferred to a later phase:** global tables (`ALTER TABLE ... REPLICA`
+multi-region provisioning and the `ddbsh-gt-*` suite), which require a live
+multi-region setup. The parser may recognize other unimplemented syntax and
+return a clear "not implemented in this build" error rather than a parse error.
 
 ## isql-mode input
 
@@ -179,9 +186,12 @@ account), so it never touches the real-DDB gate.
 Run the test suite via `devtools/run-tests` from the orchestration repo. Since
 the Step-2 exit gate, every non-global-tables golden family runs against the
 new engine (the shipping `ddbsh` binary driven through the external harness in
-`tests/golden/`); the gate exit propagates. The original C++11 sources under
-`oracle/` are retained as the golden/`.exp`/`ddbsh-wait` source but are no
-longer built or run. The native GoogleTest unit tests (offline, `FakeDDBClient`)
+`tests/golden/`); the gate exit propagates. The original C++11 engine was
+removed from the tree during the phase-2i oracle retirement (preserved in git
+history under the `oracle-archive-v0.8.1` tag); its golden contract was
+relocated to a single command-family tree at `tests/golden/` and remains the
+regression source. The
+native GoogleTest unit tests (offline, `FakeDDBClient`)
 build with the project (`ddbsh-tests`) and run alongside as the deterministic
 backend-free fidelity signal.
 

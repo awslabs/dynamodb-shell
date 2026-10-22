@@ -1,0 +1,4 @@
+SHOW CREATE TABLE [IF NOT EXISTS][NOWAIT] <table>
+
+   Show the CREATE TABLE command to create the table.
+

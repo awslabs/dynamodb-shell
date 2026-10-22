@@ -13,19 +13,19 @@
 # The compiler is NOT hardcoded (choose via CMakePresets or -DCMAKE_CXX_COMPILER).
 # C++23 is required for std::expected (D12).
 #
-# NOTE (2a reorg, P2a-01 D-Q3): the reimplementation now owns the top-level
-# tree (include/ src/ cli/ tests/). The original C++11 golden build — the
-# fidelity oracle exercised by devtools/run-tests against real DynamoDB — was
-# relocated to oracle/CMakeLists.txt and is intentionally NOT wired into this
-# build (it uses the retired TEST_HARNESS allocator and C++11 idioms that would
-# not survive this tree's -Werror). The original sources are ported into src/
-# per sub-phase (2b-2e); until a family is ported, the oracle remains the
-# regression contract. See the P2a-01 discussion for the reorg rationale.
+# NOTE (2a reorg, P2a-01 D-Q3; 2i oracle retirement): the reimplementation owns
+# the whole tree (include/ src/ cli/ tests/). The original C++11 ddbsh engine —
+# the fidelity oracle and golden-regeneration source — was removed from the
+# working tree during phase 2i and is preserved only in git history under the
+# oracle-archive-v0.8.1 tag. Its golden contract was relocated to
+# tests/golden and remains the regression contract, exercised by
+# devtools/run-tests (the standalone tests/golden CMake project) against real
+# DynamoDB.
 
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.9.17
+        VERSION 0.9.23
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -54,6 +54,26 @@ else()
     if(DDBSH_WARNINGS_AS_ERRORS)
         target_compile_options(ddbsh_warnings INTERFACE -Werror)
     endif()
+endif()
+
+# --- Coverage instrumentation (phase 2i, AI-2i-C) ---------------------------
+# Opt-in line/branch coverage for a dedicated measurement build. OFF by default
+# so the normal build and the -Werror gate are unaffected. When ON, every one
+# of OUR targets (engine library, cli-core, cli, tests) is instrumented via the
+# ddbsh_warnings interface they all link; third-party code (AWS SDK, GoogleTest)
+# is untouched. Use a separate build directory (e.g. build-coverage) and report
+# with gcovr/lcov. Not supported with MSVC (use a GCC/Clang build for coverage).
+#   cmake -S . -B build-coverage -DDDBSH_COVERAGE=ON -DDDBSH_WARNINGS_AS_ERRORS=OFF ...
+#   cmake --build build-coverage
+#   (run the suite) ; gcovr --gcov-executable gcc14-gcov ...
+option(DDBSH_COVERAGE "Build with gcov/lcov coverage instrumentation" OFF)
+if(DDBSH_COVERAGE)
+    if(MSVC)
+        message(FATAL_ERROR "DDBSH_COVERAGE requires a GCC/Clang toolchain (not MSVC)")
+    endif()
+    # -O0 keeps line mapping faithful; --coverage sets both compile and link.
+    target_compile_options(ddbsh_warnings INTERFACE --coverage -O0 -g)
+    target_link_options(ddbsh_warnings INTERFACE --coverage)
 endif()
 
 # --- flex + bison (reentrant scanner + C++ lalr1.cc parser, D3) -------------
@@ -185,6 +205,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/show_tables_exec_test.cpp
                    tests/describe_exec_test.cpp
                    tests/explain_exec_test.cpp
+                   tests/connect_reconnect_test.cpp
                    tests/cli_exit_code_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"

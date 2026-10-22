@@ -1,0 +1,6 @@
+RESTORE - Restore a backup
+
+   RESTORE TABLE <table> FROM BACKUP <arn> - Restore a table from a backup.
+
+   RESTORE TABLE <table> FROM <arn> TO PITR <timestamp> - Restore a table from a backup at a point in time.
+

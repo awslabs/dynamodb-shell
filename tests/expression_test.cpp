@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "ddbsh/value.hpp"
+#include "expressions/attribute_serialize.hpp"
 #include "expressions/logical_and.hpp"
 #include "expressions/logical_comparison.hpp"
 #include "expressions/logical_filter_predicates.hpp"
@@ -130,6 +131,66 @@ TEST(BeginsWith, SerializesWithFunctionForm) {
     SymbolTable st("aaa");
     LogicalBeginsWith bw("rk", str("abc"));
     EXPECT_EQ(bw.serialize(&st), "begins_with(#aaaa1, :vaaa1)");
+}
+
+// ---- attribute_type: N/S/B type-token rendering (B22) ----------------------
+
+// attribute_type(path, type) renders as attribute_type(#a, :v) where :v is a
+// STRING value carrying the DynamoDB scalar-type token "N"/"S"/"B" (the grammar
+// maps NUMBER/STRING/BINARY to these tokens; arch §6). This mirrors the
+// original CLogicalAttributeType, which built the value via
+// `av.SetS(ScalarAttributeTypeMapper::GetNameForScalarAttributeType(...))`.
+// Golden isel-9..63 pin the N and S forms at the EXPLAIN level; the BINARY ("B")
+// branch is exercised by NO golden, so this case pins all three at the
+// expression level — including the EAV value content (type S, token text) — to
+// close the B22 verify-then-pin item.
+TEST(AttributeType, RendersScalarTypeTokenAsStringValue) {
+    for (const std::string& tok : {std::string("N"), std::string("S"), std::string("B")}) {
+        SymbolTable st("aaa");
+        LogicalAttributeType at("x", tok);
+        EXPECT_EQ(at.serialize(&st), "attribute_type(#aaaa1, :vaaa1)");
+        const auto& values = st.get_values();
+        ASSERT_EQ(values.size(), 1u);
+        const Value& v = values.at(":vaaa1");
+        EXPECT_EQ(v.type, Value::Type::S);
+        EXPECT_EQ(v.s, tok);
+    }
+}
+
+// ---- serialize_attribute: the null-symbol-table literal serialize path (B21) -
+
+// The ported LogicalExpression::serialize() accepts a null SymbolTable*, in
+// which case right-hand Values serialize LITERALLY via serialize_attribute()
+// (mirroring the original's AttributeValue::SerializeAttribute(), newlines
+// stripped — arch §6/§10). VERIFIED (by inspection of every planner/executor
+// serializer call site — select_planner.cpp, write_common.hpp,
+// update_executor.cpp, delete_executor.cpp, transact_build.cpp): no in-scope
+// command execution path ever passes a null symbol table, so this branch is
+// unreachable in production. It is retained only for faithfulness of the ported
+// base class (whose serialize() signature accepts a null table). These cases
+// pin its byte output as the engine's own contract so the retained-for-fidelity
+// code cannot silently rot. It is NOT golden-relevant (no command surfaces it).
+TEST(SerializeAttribute, NullSymbolTablePathBytes) {
+    EXPECT_EQ(serialize_attribute(Value::string_value("foo")), "{\"S\":\"foo\"}");
+    EXPECT_EQ(serialize_attribute(Value::number_value("5")), "{\"N\":\"5\"}");
+    EXPECT_EQ(serialize_attribute(Value::bool_value(true)), "{\"BOOL\":true}");
+    EXPECT_EQ(serialize_attribute(Value::bool_value(false)), "{\"BOOL\":false}");
+    EXPECT_EQ(serialize_attribute(Value::null_value()), "{\"NULL\":true}");
+
+    Value list;
+    list.type = Value::Type::L;
+    list.list = {Value::number_value("3"), Value::string_value("x")};
+    EXPECT_EQ(serialize_attribute(list), "{\"L\":[{\"N\":\"3\"},{\"S\":\"x\"}]}");
+
+    Value map;
+    map.type = Value::Type::M;
+    map.map = {{"a", Value::number_value("1")}};
+    EXPECT_EQ(serialize_attribute(map), "{\"M\":{\"a\":{\"N\":\"1\"}}}");
+
+    // Embedded quote / newline are escaped (the newline becomes a two-char \n,
+    // so the downstream newline-strip removes nothing).
+    EXPECT_EQ(serialize_attribute(Value::string_value("a\"b")), "{\"S\":\"a\\\"b\"}");
+    EXPECT_EQ(serialize_attribute(Value::string_value("a\nb")), "{\"S\":\"a\\nb\"}");
 }
 
 // ---- Where capability probes (the GetItem/Query/Scan decision) -------------

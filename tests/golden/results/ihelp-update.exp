@@ -1,0 +1,12 @@
+UPDATE - Update items in a table
+
+   UPDATE <name> SET <update_set> [where clause] [ratelimit][return_values]
+
+   UPDATE <name> REMOVE <remove list> [where clause] [ratelimit][return_values]
+
+ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |
+             WITH RATELIMIT ( RR RCU ) |
+             WITH RATELIMIT ( WW WCU )
+
+return_values: RETURN VALUES [ALL OLD|ALL NEW|UPDATED OLD|UPDATED NEW]
+

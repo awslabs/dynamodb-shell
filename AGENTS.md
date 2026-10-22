@@ -24,9 +24,15 @@ A SQL-like interactive CLI for Amazon DynamoDB, delivered as:
   loading, signal handling, and wiring a concrete AWS SDK client into the
   library. No lexing/parsing/execution logic lives here.
 
-The original C++11 `ddbsh` (awslabs upstream) is retained under `oracle/` as the
-**fidelity oracle** — the byte-for-byte golden-output reference. It is never
-edited; its binary is exposed as **`ddbsh-old`** for manual comparison.
+The original C++11 `ddbsh` (awslabs upstream) served as the **fidelity oracle**
+— the byte-for-byte golden-output reference and golden-regeneration source —
+through phase 2i. Its engine sources were removed from the working tree during
+the phase-2i oracle retirement and are preserved only in git history under the
+**`oracle-archive-v0.8.1`** tag. Its golden contract (family files, `.exp`
+results, `.sql` seeds, `ddbsh-wait`) was relocated out of oracle/ and
+consolidated into a single command-family tree at `tests/golden/` (phase 2j,
+AI-2j-5) and
+remains the regression contract.
 
 ## Repository layout
 
@@ -41,8 +47,10 @@ src/               engine library implementation
 cli/               the ddbsh CLI (readline + AWS SDK client seam)
 tests/             native GoogleTest unit tests + boundary_check.sh
   golden/          golden-parity CTest project (drives the shipping binary)
+    suite/         the original ddbsh golden suite (family .txt, results/*.exp,
+                   .sql seeds, ddbsh-wait) — the fidelity regression contract
+    reimpl/        golden families authored for the reimplementation (phase 2i)
 examples/          embed_demo.cpp — standalone library-embedding sample
-oracle/            pristine original C++11 ddbsh (the fidelity oracle)
 devtools/          run-tests (the ONLY sanctioned test entry point)
 ```
 
@@ -53,14 +61,12 @@ builds for local development. Keep them distinct — do not conflate them:
 
 | Directory              | Produced by            | Contains                                        |
 |------------------------|------------------------|-------------------------------------------------|
-| `build/`               | run-tests (oracle)     | oracle `ddbsh-old` (v0.8.x) + `ddbshtest`       |
 | `build-engine/`        | run-tests (new engine) | the shipping `ddbsh` CLI (new C++23 engine)     |
 | `build-golden/`        | run-tests (golden)     | configure-only golden-parity CTest project      |
 | `build-golden-full/`   | run-tests --full-engine| golden project with every family on the engine  |
 | `build-preset/linux-*` | CMakePresets           | local dev builds (debug/release/sanitize)       |
 
-All are git-ignored (`build*`). Preset builds live under `build-preset/` (not
-`build/`) specifically so `build/` is unambiguously the oracle.
+All are git-ignored (`build*`). Preset builds live under `build-preset/`.
 
 ## Canonical commands
 
@@ -98,9 +104,9 @@ flex/bison translation units are the only `-Wno-error` exceptions.
   Never invoke `ctest`, the test binary, or a suite runner directly for a phase
   gate. Since the Step-2 exit gate (2h-1) the script builds ONLY the new engine
   and runs every non-global-tables golden family against it via the golden
-  harness (the gate exit propagates); the original C++11 `oracle/` tree is
-  retained as the golden/`.exp`/`ddbsh-wait` source but is no longer built or
-  run. Artifacts land in `discussions/` named by HEAD short hash.
+  harness (the gate exit propagates); the original C++11 engine was removed from
+  the tree (phase-2i retirement, tag `oracle-archive-v0.8.1`) and its golden
+  contract consolidated into a single command-family tree at `tests/golden/` as the sole surviving source. Artifacts land in `discussions/` named by HEAD short hash.
 - **Full-engine mode:** `devtools/run-tests --full-engine` registers the same
   family set as the default gate but forces the exit code to 0, so it is a
   MEASUREMENT (read the parity figure from the printed counts / artifact) rather
@@ -119,8 +125,9 @@ flex/bison translation units are the only `-Wno-error` exceptions.
 
 ## Fidelity discipline (the regression contract)
 
-- The original `oracle/tests/` golden `.exp` files define behavior. The
-  reimplementation must reproduce the same stdout for the same commands.
+- The original ddbsh golden `.exp` files (now in `tests/golden/results/`) define
+  behavior. The reimplementation must reproduce the same stdout for the same
+  commands.
 - Preserve exactly: the deterministic expression-alias scheme
   (`#a<prefix><n>` / `:v<prefix><n>`), the SQL→API decision matrix
   (GetItem/Query/Scan), item rendering (alpha-sorted attrs, quote-if-needed,
@@ -162,25 +169,19 @@ still parses `;`-terminated statements.
   errors "Table not found". The deterministic, backend-free EXPLAIN signal is
   the native `FakeDDBClient` tests, not the shipping binary against a bare
   account.
-- **Two binaries, two names.** The new shipping CLI builds as `ddbsh`
-  (`build-engine/ddbsh`); the oracle builds as `ddbsh-old` (`build/ddbsh-old`),
-  so the shipping-binary name `ddbsh` is unambiguous and the two installs do not
-  collide (D-A). The library file is `libddbsh`; no collision with the engine
-  executable.
-- **The oracle (`oracle/`) is pristine.** Never modify its C++ source. The
-  `ddbsh` -> `ddbsh-old` rename is a CMake target + `install()` change (build
-  glue), the one allowed oracle edit class.
-- **AWS SDK toolchain.** The prebuilt SDK is gcc14; the oracle and engine must
-  link with the matching toolchain (`CC=gcc14-gcc CXX=gcc14-g++`), as
-  `devtools/run-tests` and the CMakePresets do.
+- **Shipping binary name.** The CLI builds as `ddbsh` (`build-engine/ddbsh`);
+  the library file is `libddbsh`, so there is no collision between the engine
+  executable and the library (D-A).
+- **AWS SDK toolchain.** The prebuilt SDK is gcc14; the engine must link with
+  the matching toolchain (`CC=gcc14-gcc CXX=gcc14-g++`), as `devtools/run-tests`
+  and the CMakePresets do.
 
 ## Git workflow
 
 - Work on `dev/<slug>` branches. **Never commit to `main`. Never push.** The
   human merges and pushes.
 - Commit early and often; imperative first line ≤72 chars.
-- Every source file carries the Apache-2.0 header (see `oracle/LICENSE` /
-  repo `LICENSE`).
+- Every source file carries the Apache-2.0 header (see repo `LICENSE`).
 
 ## Versioning
 

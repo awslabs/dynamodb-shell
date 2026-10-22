@@ -21,6 +21,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -45,6 +46,19 @@ namespace ddbsh {
 struct ParsedBatch {
     std::vector<Statement> statements;
     std::optional<Error> error;
+};
+
+/// A small, SDK-free, terminal-free snapshot of the session's current
+/// connection state, for an embedder that renders a prompt. The engine reports
+/// only the raw state (region + whether an endpoint override is in effect); the
+/// CLI owns the presentation policy (the `> ` suffix and the `(*)` override
+/// marker), keeping terminal/formatting concerns out of the library (tenet 3 /
+/// D-2j-2a). The region/endpoint change live when a CONNECT statement executes,
+/// so a CLI that re-reads this before each prompt reflects a CONNECT
+/// immediately (arch §4/§11, B10).
+struct ConnectionHint {
+    std::string region;
+    bool endpoint_overridden = false;
 };
 
 /// The engine session: parse text into a Statement, execute a Statement
@@ -106,6 +120,13 @@ public:
 
     /// Convenience: parse then execute (streaming to `sink`).
     Result<void> run(std::string_view text, OutcomeSink& sink);
+
+    /// Report the session's current connection state for an embedder's prompt
+    /// (see ConnectionHint). Reads the per-session config, which a CONNECT
+    /// statement updates live, so a CLI re-reading this before each prompt
+    /// reflects a CONNECT immediately (B10 / D-2j-2a). Terminal-free: the
+    /// engine returns state, not a rendered string.
+    ConnectionHint connection_hint() const;
 
 private:
     struct Impl;

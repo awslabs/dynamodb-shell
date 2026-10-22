@@ -1,0 +1,28 @@
+CREATE
+PutItem({
+   "TableName":   "ddbsh_iexp_insert",
+   "Item":   {
+      "a":   {
+         "N":   "2"
+      },
+      "pk":   {
+         "N":   "1"
+      }
+   },
+   "ConditionExpression":   "attribute_not_exists(#aaaa1)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk"
+   }
+})
+PutItem({
+   "TableName":   "ddbsh_iexp_insert",
+   "Item":   {
+      "a":   {
+         "N":   "2"
+      },
+      "pk":   {
+         "N":   "1"
+      }
+   }
+})
+DROP

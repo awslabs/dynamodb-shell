@@ -10,14 +10,17 @@
 # used (human decisions 2026-08-17/22).
 #
 # Step-2 exit gate (2h-1, 2026-10-19): the golden family route is COMPLETE.
-# Every non-global-tables family runs against the NEW engine (the shipping
-# `ddbsh` binary driven through the external harness in tests/golden/). The 2b
-# two-sub-run scaffold (routed families on the new engine, the complement on the
-# original C++11 oracle) is retired: there is one engine build, one golden
-# registration (all non-GT families), and the gate exit propagates. The oracle/
-# tree stays as the golden/.exp/ddbsh-wait source (family .txt files, results/
-# goldens, .sql seeds, ddbsh-wait), but the oracle EXECUTABLE is no longer built
-# or run.
+# Every family runs against the NEW engine (the shipping `ddbsh` binary driven
+# through the external harness in tests/golden/). The 2b two-sub-run scaffold
+# (routed families on the new engine, the complement on the original C++11
+# engine) is retired: there is one engine build, one golden registration (all
+# families, including the real multi-region global-tables family un-deferred in
+# phase 2j), and the gate exit propagates. The old C++11 engine was removed from
+# the working tree during the phase-2i oracle retirement (preserved in git
+# history under the oracle-archive-v0.8.1 tag); the golden contract it came with
+# was relocated out of oracle/ and consolidated into a single command-family
+# tree at tests/golden/ (families/ manifests, results/ goldens, data/ .sql
+# seeds, ddbsh-wait) and is the sole surviving artifact.
 #
 # The native GoogleTest suite (offline, FakeDDBClient) runs alongside as the
 # deterministic backend-free fidelity signal; a native failure fails the gate.
@@ -38,11 +41,12 @@
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
 #
 # Modes:
-#   default        every non-global-tables family runs on the new engine; the
-#                  gate exit propagates (a golden or native failure fails the
-#                  run). This is the phase gate.
-#   --full-engine  same registration (all non-GT families on the new engine),
-#                  but a MEASUREMENT: the exit code is forced to 0 so the parity
+#   default        every family runs on the new engine (including the real
+#                  multi-region global-tables family as of phase 2j); the gate
+#                  exit propagates (a golden or native failure fails the run).
+#                  This is the phase gate.
+#   --full-engine  same registration (all families on the new engine), but a
+#                  MEASUREMENT: the exit code is forced to 0 so the parity
 #                  figure is read from the printed counts / artifact rather than
 #                  the gate. Retained from the 2a exposure mode (D-2a-3) for
 #                  measurement runs; since 2h-1 it registers the same families as
@@ -100,12 +104,13 @@ SUITE="$(printf '%s' "$SUITE" | tr -c 'A-Za-z0-9._-' '-')"
 
 # --- Repo / build resolution ------------------------------------------------
 HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-# The fidelity oracle is the original C++11 ddbsh, relocated to oracle/ when the
-# reimplementation took over the top-level tree (P2a-01 D-Q3). Since the 2h-1
-# exit gate the oracle executable is no longer built or run; only its tests/
-# tree (family .txt files, results/*.exp goldens, .sql seeds, ddbsh-wait) is
-# consumed by the golden harness, via -DORACLE_TESTS_DIR below.
-SRC_DIR="$REPO_DIR/oracle"
+# The golden contract (family .txt files, results/*.exp goldens, .sql seeds,
+# ddbsh-wait) was relocated out of oracle/ during the phase-2i oracle retirement
+# (the old C++11 engine it came with was removed; see the oracle-archive-v0.8.1
+# git tag) and consolidated into a single command-family tree at
+# tests/golden/ during phase 2j (AI-2j-5). It is consumed by the golden harness
+# via -DGOLDEN_DIR below.
+GOLDEN_DIR_PATH="$REPO_DIR/tests/golden"
 DISCUSSIONS_DIR="$REPO_DIR/discussions"
 mkdir -p "$DISCUSSIONS_DIR"
 
@@ -132,9 +137,11 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 export AWS_REGION="$REGION"
 
 # --- Golden suite wiring (2h-1 exit gate) -----------------------------------
-# The route is complete: every non-global-tables family runs on the new engine
-# (the shipping `ddbsh` binary driven through the external harness in
-# tests/golden/). There is no oracle sub-run and no routed/complement split.
+# The route is complete: every family runs on the new engine (the shipping
+# `ddbsh` binary driven through the external harness in tests/golden/). There is
+# no oracle sub-run and no routed/complement split. As of phase 2j the
+# global-tables family (real multi-region: primary us-east-2, replica us-west-1)
+# is included too (AI-2j-2), gated by region-aware ddbsh-wait settling polls.
 ENGINE_SRC="$REPO_DIR"
 ENGINE_BUILD="${DDBSH_ENGINE_BUILD_DIR:-$REPO_DIR/build-engine}"
 GOLDEN_SRC="$REPO_DIR/tests/golden"
@@ -160,12 +167,12 @@ if [ ! -x "$ENGINE_BIN" ]; then
     exit 1
 fi
 
-# --- Configure: golden parity project (reuses the oracle family files) ------
-echo "=== Configuring golden-parity project (all non-GT families -> new engine) ==="
+# --- Configure: golden parity project (drives the relocated golden suite) ---
+echo "=== Configuring golden-parity project (all families -> new engine) ==="
 cmake -S "$GOLDEN_SRC" -B "$GOLDEN_BUILD" \
     -DDDBSH_SHELL_BIN="$ENGINE_BIN" \
     -DDDBSH_SDK_LIB="$DDBSH_SDK_LIB" \
-    -DORACLE_TESTS_DIR="$SRC_DIR/tests"
+    -DGOLDEN_DIR="$GOLDEN_DIR_PATH"
 
 # --- Target echo + verification ---------------------------------------------
 # No endpoint override => the real regional DynamoDB endpoint.
@@ -192,9 +199,10 @@ if [ "$ACCESS_KEY_ID" = "(unresolved)" ]; then
 fi
 
 # --- Run --------------------------------------------------------------------
-# A single golden run: every non-global-tables family on the new engine via the
-# harness. CTEST_ARGS (e.g. -R isel) filter the registered set. The pass/fail is
-# the suite result (unless --full-engine forces RC=0 as a measurement).
+# A single golden run: every family on the new engine via the harness
+# (including the global-tables family as of phase 2j). CTEST_ARGS (e.g. -R isel)
+# filter the registered set. The pass/fail is the suite result (unless
+# --full-engine forces RC=0 as a measurement).
 ENGINE_LOG="${LOG_FILE%.log}-engine.log"
 
 echo "=== Running golden families on the new engine ===" | tee -a "$SUMMARY_FILE"

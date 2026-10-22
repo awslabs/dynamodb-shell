@@ -1,0 +1,28 @@
+CreateTable({
+   "AttributeDefinitions":   [{
+         "AttributeName":   "pk",
+         "AttributeType":   "N"
+      }, {
+         "AttributeName":   "gsipk",
+         "AttributeType":   "N"
+      }],
+   "TableName":   "foo",
+   "KeySchema":   [{
+         "AttributeName":   "pk",
+         "KeyType":   "HASH"
+      }],
+   "GlobalSecondaryIndexes":   [{
+         "IndexName":   "myidx",
+         "KeySchema":   [{
+               "AttributeName":   "gsipk",
+               "KeyType":   "HASH"
+            }],
+         "Projection":   {
+            "ProjectionType":   "ALL"
+         }
+      }],
+   "BillingMode":   "PAY_PER_REQUEST",
+   "TableClass":   "STANDARD",
+   "DeletionProtectionEnabled":   false
+})
+CREATE

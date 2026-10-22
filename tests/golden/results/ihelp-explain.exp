@@ -1,0 +1,5 @@
+EXPLAIN <dml_command>
+
+   EXPLAIN will accept any DML command (SELECT, INSERT, UPDATE, DELETE, REPLACE, UPSERT, ..) and provide
+   the caller with the DynamoDB API calls that must be performed to effectuate that SQL.
+
