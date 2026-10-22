@@ -358,7 +358,8 @@ TEST(Planner, CompositeGsiPartialSkPrefixIsQuery) {
         plan_ok(session, client, "select * from t.g where a = 1 and b = 2 and c = 3;");
     ASSERT_EQ(plan.api, SelectApi::query);
     const auto& r = plan.query;
-    EXPECT_EQ(r.key_condition_expression, "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3");
+    EXPECT_EQ(r.key_condition_expression,
+              "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3");
     EXPECT_FALSE(r.filter_expression.has_value());
 }
 

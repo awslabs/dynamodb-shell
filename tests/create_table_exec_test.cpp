@@ -189,8 +189,7 @@ TEST(CreateTableExec, CompositeBasePrimaryKeyRejected) {
     ddbsh::test::FakeDDBClient client;
     ddbsh::Session session = make_session(client);
 
-    auto out = session.run(
-        "create table t ( a string, b string ) primary key ( (a, b) hash );");
+    auto out = session.run("create table t ( a string, b string ) primary key ( (a, b) hash );");
     ASSERT_FALSE(out.has_value());
     EXPECT_EQ(out.error().message,
               "Composite keys are supported only on GSIs. A table primary key must have "

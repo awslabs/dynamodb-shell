@@ -47,8 +47,7 @@ public:
 
     // Base table only; EXACTLY the full key and nothing else. The base key is
     // single (|pk|==1, |rk|<=1); a composite key never GetItems.
-    bool can_getitem(const std::vector<std::string>& pk,
-                     const std::vector<std::string>& rk) const {
+    bool can_getitem(const std::vector<std::string>& pk, const std::vector<std::string>& rk) const {
         if (pk.size() != 1) {
             return false;
         }

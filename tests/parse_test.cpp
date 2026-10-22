@@ -323,15 +323,15 @@ TEST(Parse, CreateTableCompositeGsiAllShapes) {
     // group followed by the role word; a single-attribute key stays bare.
     ddbsh::test::FakeDDBClient client;
     ddbsh::Session session = make_session(client);
-    auto stmt = parse_ok(
-        session,
-        "create table t ( a string, b string, c string, d string, x string ) "
-        "primary key ( x hash ) "
-        "gsi ( "
-        "  g1 on ( (a, b, c) hash ) projecting all, "          // multi-PK only
-        "  g2 on ( (a, b) hash, (c, d) range ) projecting all, "  // multi-PK + multi-SK
-        "  g3 on ( a hash, (b, c) range ) projecting keys only, "  // single-PK + multi-SK
-        "  g4 on ( (a, b) hash, c range ) projecting all );");  // multi-PK + single-SK
+    auto stmt =
+        parse_ok(session,
+                 "create table t ( a string, b string, c string, d string, x string ) "
+                 "primary key ( x hash ) "
+                 "gsi ( "
+                 "  g1 on ( (a, b, c) hash ) projecting all, "              // multi-PK only
+                 "  g2 on ( (a, b) hash, (c, d) range ) projecting all, "   // multi-PK + multi-SK
+                 "  g3 on ( a hash, (b, c) range ) projecting keys only, "  // single-PK + multi-SK
+                 "  g4 on ( (a, b) hash, c range ) projecting all );");     // multi-PK + single-SK
     const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
     ASSERT_EQ(ct.gsis.size(), 4u);
     EXPECT_EQ(ct.gsis[0].key_schema.hash, (std::vector<std::string>{"a", "b", "c"}));

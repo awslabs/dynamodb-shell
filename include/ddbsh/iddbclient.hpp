@@ -427,8 +427,9 @@ struct ListTablesOut {
 // .cpp). Fields the full DESCRIBE report also needs (PITR, autoscaling, the
 // per-index detail/stream/sse) land when DESCRIBE ports (next 2b follow-on).
 struct TableKeySchema {
-    std::vector<std::string> hash_keys;   ///< partition (HASH) key attrs, composite order
-    std::vector<std::string> range_keys;  ///< sort (RANGE) key attrs, composite order (may be empty)
+    std::vector<std::string> hash_keys;  ///< partition (HASH) key attrs, composite order
+    std::vector<std::string>
+        range_keys;  ///< sort (RANGE) key attrs, composite order (may be empty)
 };
 
 /// Warm-throughput description for the DESCRIBE report (table-level and

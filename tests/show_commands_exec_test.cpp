@@ -291,8 +291,9 @@ TEST(ShowCreateTableExec, CompositeGsiKeyRoundTrips) {
     auto out = session.run("show create table t;");
     ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
     const std::string ddl = render(*out);
-    EXPECT_NE(ddl.find("GSI (\"g\" ON ( (\"a\", \"b\") HASH, (\"c\", \"d\") RANGE ) PROJECTING ALL"),
-              std::string::npos)
+    EXPECT_NE(
+        ddl.find("GSI (\"g\" ON ( (\"a\", \"b\") HASH, (\"c\", \"d\") RANGE ) PROJECTING ALL"),
+        std::string::npos)
         << ddl;
 
     // The reconstructed DDL must re-parse (round-trip).
