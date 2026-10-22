@@ -48,7 +48,7 @@ ddbsh::DescribeTableOut table_pk(const std::string& name, const std::string& pk,
                                  const std::string& rk = "") {
     ddbsh::DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{pk, rk};
+    t.key_schema = ddbsh::test::make_key_schema(pk, rk);
     return t;
 }
 

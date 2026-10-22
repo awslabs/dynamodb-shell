@@ -244,8 +244,8 @@ TEST(AlterTableExec, CreateGsiCarriesAttributeDefsAndCreateAction) {
     EXPECT_EQ(gu.action, GsiUpdate::Action::create);
     EXPECT_EQ(gu.index_name, "g1");
     ASSERT_TRUE(gu.key_schema.has_value());
-    EXPECT_EQ(gu.key_schema->hash, "b");
-    EXPECT_FALSE(gu.key_schema->range.has_value());
+    EXPECT_EQ(gu.key_schema->hash, (std::vector<std::string>{"b"}));
+    EXPECT_TRUE(gu.key_schema->range.empty());
     ASSERT_TRUE(gu.projection.has_value());
     EXPECT_EQ(gu.projection->type, ProjectionType::all);
     EXPECT_FALSE(gu.billing.has_value());

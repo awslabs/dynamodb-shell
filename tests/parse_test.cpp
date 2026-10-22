@@ -210,8 +210,8 @@ TEST(Parse, CreateTableMinimalHashOnly) {
     ASSERT_EQ(ct.attribute_definitions.size(), 1u);
     EXPECT_EQ(ct.attribute_definitions[0].name, "id");
     EXPECT_EQ(ct.attribute_definitions[0].type, ddbsh::engine::ScalarType::n);
-    EXPECT_EQ(ct.key_schema.hash, "id");
-    EXPECT_FALSE(ct.key_schema.range.has_value());
+    EXPECT_EQ(ct.key_schema.hash, (std::vector<std::string>{"id"}));
+    EXPECT_TRUE(ct.key_schema.range.empty());
     EXPECT_FALSE(ct.billing.has_value());
     EXPECT_FALSE(ct.warm.has_value());
     EXPECT_TRUE(ct.gsis.empty());
@@ -235,9 +235,8 @@ TEST(Parse, CreateTableIfNotExistsNowaitHashRange) {
     ASSERT_EQ(ct.attribute_definitions.size(), 2u);
     EXPECT_EQ(ct.attribute_definitions[0].type, ddbsh::engine::ScalarType::s);
     EXPECT_EQ(ct.attribute_definitions[1].type, ddbsh::engine::ScalarType::n);
-    EXPECT_EQ(ct.key_schema.hash, "pk");
-    ASSERT_TRUE(ct.key_schema.range.has_value());
-    EXPECT_EQ(*ct.key_schema.range, "sk");
+    EXPECT_EQ(ct.key_schema.hash, (std::vector<std::string>{"pk"}));
+    EXPECT_EQ(ct.key_schema.range, (std::vector<std::string>{"sk"}));
 }
 
 TEST(Parse, CreateTableRangeHashReordersToHashFirst) {
@@ -247,9 +246,8 @@ TEST(Parse, CreateTableRangeHashReordersToHashFirst) {
     auto stmt =
         parse_ok(session, "create table t ( a string, b string ) primary key ( a range, b hash );");
     const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
-    EXPECT_EQ(ct.key_schema.hash, "b");
-    ASSERT_TRUE(ct.key_schema.range.has_value());
-    EXPECT_EQ(*ct.key_schema.range, "a");
+    EXPECT_EQ(ct.key_schema.hash, (std::vector<std::string>{"b"}));
+    EXPECT_EQ(ct.key_schema.range, (std::vector<std::string>{"a"}));
 }
 
 TEST(Parse, CreateTableProvisionedThroughput) {
@@ -320,6 +318,44 @@ TEST(Parse, CreateTableWarmThroughput) {
     EXPECT_EQ(ct.warm->write_units_per_second, 200);
 }
 
+TEST(Parse, CreateTableCompositeGsiAllShapes) {
+    // phase 4a: a 2+ attribute key role is a parenthesized, comma-separated
+    // group followed by the role word; a single-attribute key stays bare.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(
+        session,
+        "create table t ( a string, b string, c string, d string, x string ) "
+        "primary key ( x hash ) "
+        "gsi ( "
+        "  g1 on ( (a, b, c) hash ) projecting all, "          // multi-PK only
+        "  g2 on ( (a, b) hash, (c, d) range ) projecting all, "  // multi-PK + multi-SK
+        "  g3 on ( a hash, (b, c) range ) projecting keys only, "  // single-PK + multi-SK
+        "  g4 on ( (a, b) hash, c range ) projecting all );");  // multi-PK + single-SK
+    const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
+    ASSERT_EQ(ct.gsis.size(), 4u);
+    EXPECT_EQ(ct.gsis[0].key_schema.hash, (std::vector<std::string>{"a", "b", "c"}));
+    EXPECT_TRUE(ct.gsis[0].key_schema.range.empty());
+    EXPECT_EQ(ct.gsis[1].key_schema.hash, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(ct.gsis[1].key_schema.range, (std::vector<std::string>{"c", "d"}));
+    EXPECT_EQ(ct.gsis[2].key_schema.hash, (std::vector<std::string>{"a"}));
+    EXPECT_EQ(ct.gsis[2].key_schema.range, (std::vector<std::string>{"b", "c"}));
+    EXPECT_EQ(ct.gsis[3].key_schema.hash, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(ct.gsis[3].key_schema.range, (std::vector<std::string>{"c"}));
+}
+
+TEST(Parse, AlterTableAddCompositeGsi) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto stmt = parse_ok(session,
+                         "alter table t ( a string, b number ) create gsi "
+                         "g5 on ( (a, b) hash ) projecting all;");
+    const auto& at = node_of<ddbsh::engine::AlterTableCmd>(stmt);
+    ASSERT_EQ(at.gsi_updates.size(), 1u);
+    ASSERT_TRUE(at.gsi_updates[0].key_schema.has_value());
+    EXPECT_EQ(at.gsi_updates[0].key_schema->hash, (std::vector<std::string>{"a", "b"}));
+}
+
 TEST(Parse, CreateTableGsiAndLsi) {
     ddbsh::test::FakeDDBClient client;
     ddbsh::Session session = make_session(client);
@@ -331,7 +367,7 @@ TEST(Parse, CreateTableGsiAndLsi) {
     const auto& ct = node_of<ddbsh::engine::CreateTableCmd>(stmt);
     ASSERT_EQ(ct.gsis.size(), 1u);
     EXPECT_EQ(ct.gsis[0].name, "gsi1");
-    EXPECT_EQ(ct.gsis[0].key_schema.hash, "g");
+    EXPECT_EQ(ct.gsis[0].key_schema.hash, (std::vector<std::string>{"g"}));
     EXPECT_EQ(ct.gsis[0].projection.type, ddbsh::engine::ProjectionType::all);
     ASSERT_EQ(ct.lsis.size(), 1u);
     EXPECT_EQ(ct.lsis[0].name, "lsi1");
@@ -552,7 +588,7 @@ TEST(Parse, SelectWhereEquality) {
     const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
     ASSERT_NE(sel.where, nullptr);
     // Full key equality on a hash-only table is a GetItem (arch §8).
-    EXPECT_TRUE(sel.where->can_getitem("id", ""));
+    EXPECT_TRUE(sel.where->can_getitem({"id"}, {}));
     EXPECT_EQ(scan_filter_of(sel), "#aaaa1 = :vaaa1");
 }
 

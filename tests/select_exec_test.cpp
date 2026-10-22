@@ -35,14 +35,14 @@ using ddbsh::ValueMap;
 DescribeTableOut table_a_b(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", "b"};
+    t.key_schema = TableKeySchema{{"a"}, {"b"}};
     return t;
 }
 
 DescribeTableOut table_a(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", ""};
+    t.key_schema = TableKeySchema{{"a"}, {}};
     return t;
 }
 

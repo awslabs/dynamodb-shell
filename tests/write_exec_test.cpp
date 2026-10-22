@@ -34,7 +34,7 @@ using ddbsh::TableKeySchema;
 DescribeTableOut table_pk(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"id", ""};
+    t.key_schema = TableKeySchema{{"id"}, {}};
     return t;
 }
 

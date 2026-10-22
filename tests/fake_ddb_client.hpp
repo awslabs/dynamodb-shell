@@ -27,6 +27,18 @@
 
 namespace ddbsh::test {
 
+/// Build a single-key TableKeySchema from scalar attribute names (phase 4a
+/// generalized the type to ordered lists). An empty `range` yields no sort
+/// key. Composite-key tests populate the vectors directly.
+inline ddbsh::TableKeySchema make_key_schema(std::string hash, std::string range = "") {
+    ddbsh::TableKeySchema ks;
+    ks.hash_keys.push_back(std::move(hash));
+    if (!range.empty()) {
+        ks.range_keys.push_back(std::move(range));
+    }
+    return ks;
+}
+
 /// A minimal fake: describe_table serves schemas registered with set_table();
 /// get_item/query/scan serve canned items (with optional multi-page cursors)
 /// and consumed capacity. Extended per sub-phase as execution ports need.

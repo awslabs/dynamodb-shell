@@ -48,14 +48,14 @@ std::string render(const ExecOutcome& outcome) {
 DescribeTableOut table_pk(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", ""};
+    t.key_schema = TableKeySchema{{"a"}, {}};
     return t;
 }
 
 DescribeTableOut table_pk_rk(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", "b"};
+    t.key_schema = TableKeySchema{{"a"}, {"b"}};
     return t;
 }
 

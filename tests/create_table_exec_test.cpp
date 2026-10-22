@@ -37,7 +37,7 @@ using ddbsh::TableKeySchema;
 DescribeTableOut table_pk(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", ""};
+    t.key_schema = TableKeySchema{{"a"}, {}};
     return t;
 }
 
@@ -65,8 +65,8 @@ TEST(CreateTableExec, ProvisionedCreatesAndWaits) {
     ASSERT_EQ(req.attribute_definitions.size(), 1u);
     EXPECT_EQ(req.attribute_definitions[0].name, "a");
     EXPECT_EQ(req.attribute_definitions[0].type, ScalarType::n);
-    EXPECT_EQ(req.key_schema.hash, "a");
-    EXPECT_FALSE(req.key_schema.range.has_value());
+    EXPECT_EQ(req.key_schema.hash, (std::vector<std::string>{"a"}));
+    EXPECT_TRUE(req.key_schema.range.empty());
     ASSERT_TRUE(req.billing.has_value());
     EXPECT_EQ(req.billing->mode, BillingMode::provisioned);
     EXPECT_EQ(req.billing->rcu, 200);
@@ -97,9 +97,8 @@ TEST(CreateTableExec, HashRangeKeySchemaCaptured) {
         session.run("create table t ( a number, b string ) primary key ( a hash, b range );");
     ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
     const auto& req = client.create_requests()[0];
-    EXPECT_EQ(req.key_schema.hash, "a");
-    ASSERT_TRUE(req.key_schema.range.has_value());
-    EXPECT_EQ(*req.key_schema.range, "b");
+    EXPECT_EQ(req.key_schema.hash, (std::vector<std::string>{"a"}));
+    EXPECT_EQ(req.key_schema.range, (std::vector<std::string>{"b"}));
 }
 
 TEST(CreateTableExec, NowaitSkipsWaiter) {
@@ -160,12 +159,57 @@ TEST(CreateTableExec, GsiAndLsiCaptured) {
     const auto& req = client.create_requests()[0];
     ASSERT_EQ(req.gsis.size(), 1u);
     EXPECT_EQ(req.gsis[0].name, "myindex");
-    EXPECT_EQ(req.gsis[0].key_schema.hash, "c");
+    EXPECT_EQ(req.gsis[0].key_schema.hash, (std::vector<std::string>{"c"}));
     ASSERT_EQ(req.lsis.size(), 1u);
     EXPECT_EQ(req.lsis[0].name, "myidx");
-    EXPECT_EQ(req.lsis[0].key_schema.hash, "a");
-    ASSERT_TRUE(req.lsis[0].key_schema.range.has_value());
-    EXPECT_EQ(*req.lsis[0].key_schema.range, "c");
+    EXPECT_EQ(req.lsis[0].key_schema.hash, (std::vector<std::string>{"a"}));
+    EXPECT_EQ(req.lsis[0].key_schema.range, (std::vector<std::string>{"c"}));
+}
+
+TEST(CreateTableExec, CompositeGsiCaptured) {
+    // phase 4a: a composite GSI key is accepted and threaded into the request.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table t ( a string, b string, c string, d string, x string ) "
+        "primary key ( x hash ) "
+        "gsi ( g on ( (a, b) hash, (c, d) range ) projecting all );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.create_requests().size(), 1u);
+    const auto& req = client.create_requests()[0];
+    ASSERT_EQ(req.gsis.size(), 1u);
+    EXPECT_EQ(req.gsis[0].key_schema.hash, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(req.gsis[0].key_schema.range, (std::vector<std::string>{"c", "d"}));
+}
+
+TEST(CreateTableExec, CompositeBasePrimaryKeyRejected) {
+    // A composite key on a base-table primary key is rejected client-side
+    // (GSI-only; ratified D-4a-1/-8). No CreateTable request is issued.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table t ( a string, b string ) primary key ( (a, b) hash );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message,
+              "Composite keys are supported only on GSIs. A table primary key must have "
+              "one partition key and an optional sort key.");
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
+TEST(CreateTableExec, CompositeLsiRejected) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table t ( x string, a string, b string ) primary key ( x hash ) "
+        "lsi ( l1 on ( x hash, (a, b) range ) projecting all );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message,
+              "Composite keys are supported only on GSIs. LSI l1 must have "
+              "one partition key and an optional sort key.");
+    EXPECT_TRUE(client.create_requests().empty());
 }
 
 }  // namespace

@@ -124,7 +124,10 @@ TEST(Between, SerializesAsKeyLegalRangePredicate) {
     SymbolTable st("aaa");
     LogicalBetween b("rk", num("1"), num("9"));
     EXPECT_EQ(b.serialize(&st), "#aaaa1 BETWEEN :vaaa1 AND :vaaa2");
-    EXPECT_EQ(b.count_query_rk("rk"), 1);
+    // A non-negated BETWEEN on a sort-key prefix attribute is query-safe.
+    const std::vector<std::string> pk{"pk"};
+    const std::vector<std::string> sk{"rk"};
+    EXPECT_TRUE(b.query_safe(KeySchemaView{pk, sk}));
 }
 
 TEST(BeginsWith, SerializesWithFunctionForm) {
@@ -197,35 +200,35 @@ TEST(SerializeAttribute, NullSymbolTablePathBytes) {
 
 TEST(Where, FullKeyEqualityIsGetItem) {
     // pk = 1 AND rk = 2  ->  GetItem. The planner probes can_getitem() FIRST,
-    // so can_query_table() is never consulted for a full key; the original
-    // encoded that ordering with assert(!can_getitem) inside can_query_table.
-    // We drop the assert (D12), so can_query_table() also returns true here —
-    // GetItem precedence is a planner-ordering contract, not mutual exclusion.
+    // so plan_query() is never consulted for a full key; the original encoded
+    // that ordering with assert(!can_getitem) inside can_query_table. We drop
+    // the assert (D12), so plan_query() also succeeds here — GetItem precedence
+    // is a planner-ordering contract, not mutual exclusion.
     auto tree = LogicalAnd::make_and(eq("pk", "=", num("1")), eq("rk", "=", num("2")));
     Where w(std::move(tree));
-    EXPECT_TRUE(w.can_getitem("pk", "rk"));
+    EXPECT_TRUE(w.can_getitem({"pk"}, {"rk"}));
 }
 
 TEST(Where, HashOnlyEqualityIsQuery) {
     // pk = 1 (table has only a hash key)  ->  Query
     Where w(eq("pk", "=", num("1")));
-    EXPECT_TRUE(w.can_getitem("pk", ""));  // hash-only full key is a GetItem
+    EXPECT_TRUE(w.can_getitem({"pk"}, {}));  // hash-only full key is a GetItem
 }
 
 TEST(Where, HashEqualityPlusRangePredicateIsQueryNotGetItem) {
     // pk = 1 AND rk > 5  ->  Query (not GetItem: rk is not an equality key)
     auto tree = LogicalAnd::make_and(eq("pk", "=", num("1")), eq("rk", ">", num("5")));
     Where w(std::move(tree));
-    EXPECT_FALSE(w.can_getitem("pk", "rk"));
-    EXPECT_TRUE(w.can_query_table("pk", "rk"));
+    EXPECT_FALSE(w.can_getitem({"pk"}, {"rk"}));
+    EXPECT_TRUE(w.plan_query({"pk"}, {"rk"}).has_value());
 }
 
 TEST(Where, RangeInequalityOnKeyIsNotQuerySafe) {
     // pk = 1 AND rk != 5  ->  Scan (a != on the range key is not key-legal)
     auto tree = LogicalAnd::make_and(eq("pk", "=", num("1")), eq("rk", "!=", num("5")));
     Where w(std::move(tree));
-    EXPECT_FALSE(w.can_getitem("pk", "rk"));
-    EXPECT_FALSE(w.can_query_table("pk", "rk"));
+    EXPECT_FALSE(w.can_getitem({"pk"}, {"rk"}));
+    EXPECT_FALSE(w.plan_query({"pk"}, {"rk"}).has_value());
 }
 
 TEST(Where, PkEqualityUnderTopLevelOrForcesScan) {
@@ -233,8 +236,8 @@ TEST(Where, PkEqualityUnderTopLevelOrForcesScan) {
     // key attribute is not query-safe; the whole predicate is a scan filter).
     auto tree = LogicalOr::make_or(eq("pk", "=", num("1")), eq("pk", "=", num("2")));
     Where w(std::move(tree));
-    EXPECT_FALSE(w.can_getitem("pk", "rk"));
-    EXPECT_FALSE(w.can_query_table("pk", "rk"));
+    EXPECT_FALSE(w.can_getitem({"pk"}, {"rk"}));
+    EXPECT_FALSE(w.plan_query({"pk"}, {"rk"}).has_value());
 }
 
 TEST(Where, QueryKeyConditionAndFilterSplit) {
@@ -242,8 +245,10 @@ TEST(Where, QueryKeyConditionAndFilterSplit) {
     SymbolTable st("aaa");
     auto tree = LogicalAnd::make_and(eq("pk", "=", num("1")), eq("attr", "=", num("7")));
     Where w(std::move(tree));
-    std::string kce = w.query_key_condition_expression("pk", "rk", &st);
-    std::string filter = w.query_filter_expression("pk", "rk", &st);
+    auto plan = w.plan_query({"pk"}, {"rk"});
+    ASSERT_TRUE(plan.has_value());
+    std::string kce = w.query_key_condition_expression(*plan, &st);
+    std::string filter = w.query_filter_expression(*plan, &st);
     EXPECT_EQ(kce, "#aaaa1 = :vaaa1");
     EXPECT_EQ(filter, "#aaaa2 = :vaaa2");
 }
@@ -251,7 +256,7 @@ TEST(Where, QueryKeyConditionAndFilterSplit) {
 TEST(Where, GudKeyMapHoldsKeyAttributesOnly) {
     auto tree = LogicalAnd::make_and(eq("pk", "=", num("1")), eq("rk", "=", str("x")));
     Where w(std::move(tree));
-    KeyMap key = w.get_gud_key("pk", "rk");
+    KeyMap key = w.get_gud_key({"pk"}, {"rk"});
     ASSERT_EQ(key.size(), 2u);
     EXPECT_EQ(key.at("pk").type, Value::Type::N);
     EXPECT_EQ(key.at("pk").s, "1");

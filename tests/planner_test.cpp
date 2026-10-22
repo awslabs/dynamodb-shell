@@ -40,7 +40,7 @@ using ddbsh::engine::SelectPlan;
 DescribeTableOut table_a_b(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", "b"};
+    t.key_schema = TableKeySchema{{"a"}, {"b"}};
     return t;
 }
 
@@ -48,7 +48,7 @@ DescribeTableOut table_a_b(const std::string& name) {
 DescribeTableOut table_a(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"a", ""};
+    t.key_schema = TableKeySchema{{"a"}, {}};
     return t;
 }
 
@@ -277,7 +277,7 @@ TEST(Planner, IndexHashEqualityIsQueryWithIndexName) {
     ddbsh::test::FakeDDBClient client;
     DescribeTableOut t = table_a_b("t");
     t.global_secondary_indexes.push_back(
-        SecondaryIndexSchema{.index_name = "myindex", .key_schema = TableKeySchema{"g", ""}});
+        SecondaryIndexSchema{.index_name = "myindex", .key_schema = TableKeySchema{{"g"}, {}}});
     client.set_table(t);
     ddbsh::Session session = make_session(client);
 
@@ -294,7 +294,7 @@ TEST(Planner, IndexNonKeyPredicateIsScanWithIndexName) {
     ddbsh::test::FakeDDBClient client;
     DescribeTableOut t = table_a_b("t");
     t.local_secondary_indexes.push_back(
-        SecondaryIndexSchema{.index_name = "myidx", .key_schema = TableKeySchema{"a", "l"}});
+        SecondaryIndexSchema{.index_name = "myidx", .key_schema = TableKeySchema{{"a"}, {"l"}}});
     client.set_table(t);
     ddbsh::Session session = make_session(client);
 
@@ -305,6 +305,119 @@ TEST(Planner, IndexNonKeyPredicateIsScanWithIndexName) {
     EXPECT_EQ(*r.index_name, "myidx");
     ASSERT_TRUE(r.filter_expression.has_value());
     EXPECT_EQ(*r.filter_expression, "attribute_exists(#aaaa1)");
+}
+
+// ---- Composite (multipart) GSI keys (phase 4a) -----------------------------
+
+// A base table (pk `a`, sk `b`) carrying a GSI `g` with a composite partition
+// key (a, b) and a composite sort key (c, d) — the "multi-PK + multi-SK" shape.
+DescribeTableOut table_composite_gsi(const std::string& name) {
+    DescribeTableOut t = table_a_b(name);
+    SecondaryIndexSchema g;
+    g.index_name = "g";
+    g.key_schema.hash_keys = {"a", "b"};
+    g.key_schema.range_keys = {"c", "d"};
+    t.global_secondary_indexes.push_back(std::move(g));
+    return t;
+}
+
+TEST(Planner, CompositeGsiFullPkNoSkIsQuery) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan = plan_ok(session, client, "select * from t.g where a = 1 and b = 2;");
+    ASSERT_EQ(plan.api, SelectApi::query);
+    const auto& r = plan.query;
+    ASSERT_TRUE(r.index_name.has_value());
+    EXPECT_EQ(*r.index_name, "g");
+    EXPECT_EQ(r.key_condition_expression, "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2");
+    EXPECT_FALSE(r.filter_expression.has_value());
+}
+
+TEST(Planner, CompositeGsiFullPkFullSkPrefixRangeOnLastIsQuery) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan =
+        plan_ok(session, client, "select * from t.g where a = 1 and b = 2 and c = 3 and d > 4;");
+    ASSERT_EQ(plan.api, SelectApi::query);
+    const auto& r = plan.query;
+    EXPECT_EQ(r.key_condition_expression,
+              "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3 AND #aaaa4 > :vaaa4");
+    EXPECT_FALSE(r.filter_expression.has_value());
+}
+
+TEST(Planner, CompositeGsiPartialSkPrefixIsQuery) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan =
+        plan_ok(session, client, "select * from t.g where a = 1 and b = 2 and c = 3;");
+    ASSERT_EQ(plan.api, SelectApi::query);
+    const auto& r = plan.query;
+    EXPECT_EQ(r.key_condition_expression, "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3");
+    EXPECT_FALSE(r.filter_expression.has_value());
+}
+
+TEST(Planner, CompositeGsiPartialPkIsScan) {
+    // `b` (a partition-key attr) missing -> plan_query fails -> Scan, whole
+    // predicate becomes the FilterExpression.
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan = plan_ok(session, client, "select * from t.g where a = 1 and c = 3;");
+    ASSERT_EQ(plan.api, SelectApi::scan);
+    const auto& r = plan.scan;
+    ASSERT_TRUE(r.index_name.has_value());
+    EXPECT_EQ(*r.index_name, "g");
+    ASSERT_TRUE(r.filter_expression.has_value());
+    EXPECT_EQ(*r.filter_expression, "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2");
+}
+
+TEST(Planner, CompositeGsiSkGapIsScan) {
+    // `c` (sk1) absent but `d` (sk2) present -> gap -> Scan.
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan =
+        plan_ok(session, client, "select * from t.g where a = 1 and b = 2 and d = 4;");
+    ASSERT_EQ(plan.api, SelectApi::scan);
+    EXPECT_TRUE(plan.scan.filter_expression.has_value());
+}
+
+TEST(Planner, CompositeGsiRangeOnNonLastSkIsScan) {
+    // `c` is a non-last prefix element carrying a range op -> Scan.
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan =
+        plan_ok(session, client, "select * from t.g where a = 1 and b = 2 and c > 3 and d = 4;");
+    ASSERT_EQ(plan.api, SelectApi::scan);
+    EXPECT_TRUE(plan.scan.filter_expression.has_value());
+}
+
+TEST(Planner, CompositeGsiMultiPkOnlyIsQuery) {
+    // A GSI whose key is a composite partition key (a, b, c) and no sort key.
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut t = table_a_b("t");
+    SecondaryIndexSchema g;
+    g.index_name = "g";
+    g.key_schema.hash_keys = {"a", "b", "c"};
+    t.global_secondary_indexes.push_back(std::move(g));
+    client.set_table(t);
+    ddbsh::Session session = make_session(client);
+
+    SelectPlan plan =
+        plan_ok(session, client, "select * from t.g where a = 1 and b = 2 and c = 3;");
+    ASSERT_EQ(plan.api, SelectApi::query);
+    EXPECT_EQ(plan.query.key_condition_expression,
+              "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3");
 }
 
 // ---- ReturnConsumedCapacity / ratelimit ------------------------------------
