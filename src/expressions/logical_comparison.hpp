@@ -43,10 +43,6 @@ public:
         return (m_lhs == lhs && !is_negated() && m_op == "=") ? 1 : 0;
     }
 
-    int count_query_rk(const std::string& lhs) const override {
-        return (m_lhs == lhs && !is_negated()) ? 1 : 0;
-    }
-
     KeyMap get_gud_key(const std::string& pk, const std::string& rk) const override {
         KeyMap rv;
         if (count_gud_key(pk) || count_gud_key(rk)) {
@@ -62,17 +58,16 @@ private:
         return lhs + " " + m_op + " " + rhs;
     }
 
-    std::string do_query_key_condition_expression(const std::string& pk, const std::string& rk,
+    std::string do_query_key_condition_expression(const KeySchemaView& ks,
                                                   SymbolTable* st) override {
-        if (m_lhs == pk || m_lhs == rk) {
+        if (key_contains(ks.pk, m_lhs) || key_contains(ks.sk, m_lhs)) {
             return do_serialize(st);
         }
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& pk, const std::string& rk,
-                                           SymbolTable* st) override {
-        if (!(pk == m_lhs || rk == m_lhs)) {
+    std::string do_query_filter_expression(const KeySchemaView& ks, SymbolTable* st) override {
+        if (!key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs)) {
             return do_serialize(st);
         }
         return "";
@@ -91,15 +86,15 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        if (m_lhs != pk && m_lhs != rk) {
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        if (!key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs)) {
             return true;
         }
-        if (m_lhs == pk) {
+        if (key_contains(ks.pk, m_lhs)) {
             // A partition-key predicate is query-legal only as a non-negated `=`.
             return m_op == "=" && !is_negated();
         }
-        // m_lhs == rk: a negated `=` (i.e. `!=`) on the range key is not legal.
+        // lhs is a sort-key prefix attr: a negated `=` (i.e. `!=`) is illegal.
         if (m_op == "=" && is_negated()) {
             return false;
         }

@@ -753,17 +753,21 @@ Aws::DynamoDB::Model::ScalarAttributeType to_sdk(ScalarType t) {
     return Aws::DynamoDB::Model::ScalarAttributeType::S;
 }
 
-// Build the [HASH, (RANGE)] KeySchemaElement list (the canonical order the
-// original always emitted).
+// Build the KeySchemaElement list in canonical [HASH…, RANGE…] order (all
+// partition-key elements first in composite order, then all sort-key
+// elements). This is the only order that round-trips through DescribeTable and
+// the shape DynamoDB expects for composite GSI keys (phase 4a).
 Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement> to_sdk_key_schema(const KeySchema& ks) {
     Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement> out;
-    Aws::DynamoDB::Model::KeySchemaElement hash;
-    hash.SetAttributeName(ks.hash);
-    hash.SetKeyType(Aws::DynamoDB::Model::KeyType::HASH);
-    out.push_back(hash);
-    if (ks.range.has_value()) {
+    for (const auto& name : ks.hash) {
+        Aws::DynamoDB::Model::KeySchemaElement hash;
+        hash.SetAttributeName(name);
+        hash.SetKeyType(Aws::DynamoDB::Model::KeyType::HASH);
+        out.push_back(hash);
+    }
+    for (const auto& name : ks.range) {
         Aws::DynamoDB::Model::KeySchemaElement range;
-        range.SetAttributeName(*ks.range);
+        range.SetAttributeName(name);
         range.SetKeyType(Aws::DynamoDB::Model::KeyType::RANGE);
         out.push_back(range);
     }
@@ -1514,17 +1518,18 @@ Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
 
 namespace {
 
-// Load a HASH/RANGE key schema from an SDK KeySchemaElement list into the
-// SDK-free TableKeySchema (ignores any future key types, as the planner only
-// needs pk/rk; the original logged-and-failed on unknown types).
+// Load a key schema from an SDK KeySchemaElement list into the SDK-free
+// TableKeySchema, accumulating every HASH element into hash_keys and every
+// RANGE element into range_keys in the SDK's returned (composite) order. A
+// composite GSI key (phase 4a) yields multiple HASH and/or RANGE entries.
 TableKeySchema load_key_schema(
     const Aws::Vector<Aws::DynamoDB::Model::KeySchemaElement>& key_schema) {
     TableKeySchema out;
     for (const auto& element : key_schema) {
         if (element.GetKeyType() == Aws::DynamoDB::Model::KeyType::HASH) {
-            out.hash_key = element.GetAttributeName().c_str();
+            out.hash_keys.emplace_back(element.GetAttributeName().c_str());
         } else if (element.GetKeyType() == Aws::DynamoDB::Model::KeyType::RANGE) {
-            out.range_key = element.GetAttributeName().c_str();
+            out.range_keys.emplace_back(element.GetAttributeName().c_str());
         }
     }
     return out;

@@ -27,6 +27,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include "ddbsh/value.hpp"
 #include "expressions/symbol_table.hpp"
@@ -35,6 +36,29 @@ namespace ddbsh::engine {
 
 /// A primary-key map (attribute name -> Value) for GetItem/Update/Delete keys.
 using KeyMap = std::map<std::string, Value>;
+
+/// The key attributes a WHERE tree is evaluated against for a Query (phase 4a
+/// generalizes the original's scalar pk/rk pair to ordered lists for composite
+/// GSI keys). `pk` is every partition-key attribute; `sk` is the gap-free
+/// sort-key PREFIX that is key-condition-eligible for this clause (computed by
+/// Where::plan_query). A leaf renders into the KeyConditionExpression iff its
+/// lhs is in pk ∪ sk, else into the FilterExpression. A single-attribute key
+/// reduces to `pk == {p}`, `sk == {}` or `{r}` — byte-identical to the old
+/// scalar path.
+struct KeySchemaView {
+    const std::vector<std::string>& pk;
+    const std::vector<std::string>& sk;
+};
+
+/// Membership test: is `name` one of the attributes in `list`?
+inline bool key_contains(const std::vector<std::string>& list, const std::string& name) {
+    for (const auto& entry : list) {
+        if (entry == name) {
+            return true;
+        }
+    }
+    return false;
+}
 
 class LogicalExpression {
 public:
@@ -53,18 +77,16 @@ public:
         return m_negate ? "NOT (" + do_serialize(st) + ")" : do_serialize(st);
     }
 
-    std::string query_key_condition_expression(const std::string& pk, const std::string& rk,
-                                               SymbolTable* st) {
-        std::string rv = do_query_key_condition_expression(pk, rk, st);
+    std::string query_key_condition_expression(const KeySchemaView& ks, SymbolTable* st) {
+        std::string rv = do_query_key_condition_expression(ks, st);
         if (!rv.empty()) {
             return m_negate ? "NOT (" + rv + ")" : rv;
         }
         return rv;
     }
 
-    std::string query_filter_expression(const std::string& pk, const std::string& rk,
-                                        SymbolTable* st) {
-        std::string rv = do_query_filter_expression(pk, rk, st);
+    std::string query_filter_expression(const KeySchemaView& ks, SymbolTable* st) {
+        std::string rv = do_query_filter_expression(ks, st);
         if (!rv.empty()) {
             return m_negate ? "NOT (" + rv + ")" : rv;
         }
@@ -104,14 +126,12 @@ public:
     virtual KeyMap get_gud_key(const std::string& /*pk*/, const std::string& /*rk*/) const {
         return {};
     }
-    /// Count of nodes that are query-legal range-key predicates for `lhs`.
-    virtual int count_query_rk(const std::string& /*lhs*/) const { return 0; }
 
     /// True if the whole subtree is legal inside a Query for the given key
-    /// schema (arch §8); AND/OR descend, leaves answer for their own lhs.
-    bool query_safe(const std::string& pk, const std::string& rk) const {
-        return do_query_safe(pk, rk);
-    }
+    /// schema (arch §8); AND/OR descend, leaves answer for their own lhs. The
+    /// view carries the partition-key list and the eligible sort-key prefix
+    /// (phase 4a).
+    bool query_safe(const KeySchemaView& ks) const { return do_query_safe(ks); }
 
 protected:
     bool m_negate = false;
@@ -120,15 +140,13 @@ protected:
 
 private:
     virtual std::string do_serialize(SymbolTable* st) = 0;
-    virtual std::string do_query_key_condition_expression(const std::string& pk,
-                                                          const std::string& rk,
+    virtual std::string do_query_key_condition_expression(const KeySchemaView& ks,
                                                           SymbolTable* st) = 0;
-    virtual std::string do_query_filter_expression(const std::string& pk, const std::string& rk,
-                                                   SymbolTable* st) = 0;
+    virtual std::string do_query_filter_expression(const KeySchemaView& ks, SymbolTable* st) = 0;
     virtual std::string do_update_delete_condition_check(const std::string& pk,
                                                          const std::string& rk, SymbolTable* st,
                                                          bool top) = 0;
-    virtual bool do_query_safe(const std::string& pk, const std::string& rk) const = 0;
+    virtual bool do_query_safe(const KeySchemaView& ks) const = 0;
 };
 
 }  // namespace ddbsh::engine

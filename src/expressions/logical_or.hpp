@@ -99,15 +99,13 @@ private:
         return rv;
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/,
-                                                  const std::string& /*rk*/,
+    std::string do_query_key_condition_expression(const KeySchemaView& /*ks*/,
                                                   SymbolTable* /*st*/) override {
         // Nothing under an OR can be part of a KeyConditionExpression.
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& /*rk*/,
-                                           SymbolTable* st) override {
+    std::string do_query_filter_expression(const KeySchemaView& /*ks*/, SymbolTable* st) override {
         // The entire OR subtree belongs in the FilterExpression.
         return do_serialize(st);
     }
@@ -132,13 +130,21 @@ private:
         return rv;
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        // An OR subtree that references a key attribute forces a Scan.
-        if (count(pk) > 0 || (!rk.empty() && count(rk) > 0)) {
-            return false;
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        // An OR subtree that references any key attribute (partition or
+        // eligible sort-key prefix) forces a Scan.
+        for (const auto& p : ks.pk) {
+            if (count(p) > 0) {
+                return false;
+            }
+        }
+        for (const auto& s : ks.sk) {
+            if (count(s) > 0) {
+                return false;
+            }
         }
         for (const auto& child : m_exprlist) {
-            if (!child->query_safe(pk, rk)) {
+            if (!child->query_safe(ks)) {
                 return false;
             }
         }

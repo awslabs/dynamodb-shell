@@ -106,23 +106,25 @@ inline std::string project_base_keys(const std::string& base_pk, const std::stri
 }
 
 /// Build the bulk-enumeration Query/Scan request (port of
-/// CSelectHelper::query_request / scan_request for the write path). `is_query`
-/// selects Query vs Scan (the executor decided via can_query_*). `key_pk/key_rk`
-/// is the key schema to evaluate the WHERE against (index schema when an index
-/// is targeted, base otherwise); `base_pk/base_rk` is the base-table key used
-/// for the projection. `st` is the read SymbolTable (minted from the read
-/// prefix). The minting order — projection, then key condition, then filter —
-/// matches the original exactly (byte-fidelity, iut-3 / iut-25).
+/// CSelectHelper::query_request / scan_request for the write path). A present
+/// `qplan` (from Where::plan_query against the key schema the WHERE is
+/// evaluated against — the index schema when an index is targeted, base
+/// otherwise) selects Query; its absence selects Scan. `base_pk/base_rk` is the
+/// base-table key used for the projection so the per-item write can address the
+/// base table even when the read runs on an index (D-2c-9). `st` is the read
+/// SymbolTable (minted from the read prefix). The minting order — projection,
+/// then key condition, then filter — matches the original exactly
+/// (byte-fidelity, iut-3 / iut-25).
 inline WriteReadPlan build_write_read(const std::string& table,
                                       const std::optional<std::string>& index, const Where* where,
-                                      bool is_query, const std::string& key_pk,
-                                      const std::string& key_rk, const std::string& base_pk,
-                                      const std::string& base_rk, bool ratelimit, SymbolTable& st) {
+                                      const std::optional<QueryKeyPlan>& qplan,
+                                      const std::string& base_pk, const std::string& base_rk,
+                                      bool ratelimit, SymbolTable& st) {
     const ddbsh::ReturnConsumedCapacity rcc =
         ratelimit ? ddbsh::ReturnConsumedCapacity::total : ddbsh::ReturnConsumedCapacity::none;
 
     WriteReadPlan plan;
-    if (is_query) {
+    if (qplan.has_value()) {
         plan.api = WriteReadApi::query;
         QueryIn& r = plan.query;
         r.table_name = table;
@@ -132,8 +134,8 @@ inline WriteReadPlan build_write_read(const std::string& table,
         r.consistent_read = false;
         r.return_consumed_capacity = rcc;
         r.projection_expression = project_base_keys(base_pk, base_rk, st);
-        r.key_condition_expression = where->query_key_condition_expression(key_pk, key_rk, &st);
-        std::string filter = where->query_filter_expression(key_pk, key_rk, &st);
+        r.key_condition_expression = where->query_key_condition_expression(*qplan, &st);
+        std::string filter = where->query_filter_expression(*qplan, &st);
         if (!filter.empty()) {
             r.filter_expression = std::move(filter);
         }

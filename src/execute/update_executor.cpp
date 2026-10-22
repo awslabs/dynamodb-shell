@@ -103,8 +103,10 @@ Result<void> execute_update(const UpdateCmd& cmd, IDDBClient& client,
     if (!base.has_value()) {
         return fail(base.error());
     }
-    const std::string base_pk = base->pk;
-    const std::string base_rk = base->rk;
+    const std::vector<std::string> base_pk_list = base->pk;
+    const std::vector<std::string> base_rk_list = base->rk;
+    const std::string base_pk = base_pk_list.empty() ? std::string() : base_pk_list[0];
+    const std::string base_rk = base_rk_list.empty() ? std::string() : base_rk_list[0];
     const Where* where = cmd.where.get();
 
     // Write template FIRST (consumes the first alias prefix), per D-2c-10.
@@ -124,9 +126,9 @@ Result<void> execute_update(const UpdateCmd& cmd, IDDBClient& client,
     }
 
     // ---- single conditional write (full base-table key) --------------------
-    if (where != nullptr && where->can_update_item(base_pk, base_rk)) {
+    if (where != nullptr && where->can_update_item(base_pk_list, base_rk_list)) {
         UpdateItemIn request = write_template;
-        request.key = key_of(where->get_gud_key(base_pk, base_rk));
+        request.key = key_of(where->get_gud_key(base_pk_list, base_rk_list));
         if (explain) {
             auto body = client.explain_request(request);
             if (!body.has_value()) {
@@ -163,27 +165,24 @@ Result<void> execute_update(const UpdateCmd& cmd, IDDBClient& client,
     }
 
     // ---- bulk enumeration (Query/Scan + per-item UpdateItem) ---------------
-    // Resolve the key schema the WHERE is evaluated against: the index schema
-    // when a `.index` is targeted, the base-table schema otherwise.
-    std::string key_pk = base_pk;
-    std::string key_rk = base_rk;
-    bool is_query = false;
+    // Resolve the key schema the WHERE is evaluated against and plan the read:
+    // the index schema when a `.index` is targeted, the base-table schema
+    // otherwise. A present plan selects Query enumeration, its absence Scan.
+    std::optional<QueryKeyPlan> qplan;
     if (!cmd.index.has_value()) {
-        is_query = where != nullptr && where->can_query_table(base_pk, base_rk);
+        qplan = where != nullptr ? where->plan_query(base_pk_list, base_rk_list) : std::nullopt;
     } else {
         auto idx = get_key_schema(client, cmd.table, *cmd.index);
         if (!idx.has_value()) {
             return fail(idx.error());
         }
-        key_pk = idx->pk;
-        key_rk = idx->rk;
-        is_query = where != nullptr && where->can_query_index(key_pk, key_rk);
+        qplan = where != nullptr ? where->plan_query(idx->pk, idx->rk) : std::nullopt;
     }
 
     // Enumeration read SymbolTable from the NEXT prefix (D-2c-10).
     SymbolTable read_st(next_prefix());
-    WriteReadPlan read = build_write_read(cmd.table, cmd.index, where, is_query, key_pk, key_rk,
-                                          base_pk, base_rk, cmd.ratelimit.has_value(), read_st);
+    WriteReadPlan read = build_write_read(cmd.table, cmd.index, where, qplan, base_pk, base_rk,
+                                          cmd.ratelimit.has_value(), read_st);
 
     ExplainOutcome explain_out;
     BulkWriteOutcome acct{verb, 0, 0, 0, std::nullopt};

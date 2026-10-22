@@ -172,6 +172,17 @@ using ddbsh::TableClass;
 using ddbsh::Tag;
 using ddbsh::WarmThroughput;
 
+/// One parsed key role (phase 4a): a HASH or RANGE group of one or more
+/// attribute names in composite order. The grammar collects these in written
+/// order and buckets each into a KeySchema via add_key_role, so a single bare
+/// attribute (legacy form), a parenthesized composite group, and the legacy
+/// RANGE-before-HASH spelling all reconstruct the canonical [HASH…, RANGE…]
+/// KeySchema.
+struct KeyRole {
+    bool is_hash = true;
+    std::vector<std::string> attrs;
+};
+
 /// CREATE TABLE [IF NOT EXISTS] [NOWAIT] <name> ( attr type, ... ) PRIMARY KEY
 /// ( ... ) [billing] [warm] [gsi] [lsi] [stream] [sse] [class] [deletion] [tags]
 struct CreateTableCmd {

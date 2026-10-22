@@ -66,7 +66,7 @@ Result<void> execute_insert_streaming(const InsertCmd& cmd, IDDBClient& client,
     if (!schema.has_value()) {
         return fail(schema.error());
     }
-    const std::string& pk = schema->pk;
+    const std::string pk = schema->pk.empty() ? std::string() : schema->pk[0];
 
     if (auto valid = validate_insert_rows(cmd); !valid.has_value()) {
         return fail(valid.error());
@@ -123,7 +123,7 @@ Result<ExecOutcome> execute_insert_explain(const InsertCmd& cmd, IDDBClient& cli
     if (!schema.has_value()) {
         return fail(schema.error());
     }
-    const std::string& pk = schema->pk;
+    const std::string pk = schema->pk.empty() ? std::string() : schema->pk[0];
 
     if (auto valid = validate_insert_rows(cmd); !valid.has_value()) {
         return fail(valid.error());

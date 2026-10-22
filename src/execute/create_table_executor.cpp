@@ -9,6 +9,33 @@ namespace ddbsh::engine {
 
 namespace {
 
+/// A single (non-composite) key schema: at most one partition and at most one
+/// sort attribute. Composite (multi-attribute) keys are a GSI-only feature
+/// (phase 4a); base-table primary keys and LSIs must be single-key.
+bool is_single_key(const KeySchema& ks) {
+    return ks.hash.size() <= 1 && ks.range.size() <= 1;
+}
+
+/// Reject a composite key on a base-table primary key or an LSI (GSI-only
+/// constraint, ratified D-4a-1/-8). Runs before the CreateTable request is
+/// built so the shell never sends an illegal schema to the service. The error
+/// strings are authored (no oracle; human-audited, D-4a-8).
+Result<void> validate_key_schemas(const CreateTableCmd& cmd) {
+    if (!is_single_key(cmd.key_schema)) {
+        return fail(Errc::invalid_argument,
+                    "Composite keys are supported only on GSIs. A table primary key must have "
+                    "one partition key and an optional sort key.");
+    }
+    for (const auto& lsi : cmd.lsis) {
+        if (!is_single_key(lsi.key_schema)) {
+            return fail(Errc::invalid_argument,
+                        "Composite keys are supported only on GSIs. LSI " + lsi.name +
+                            " must have one partition key and an optional sort key.");
+        }
+    }
+    return {};
+}
+
 /// Copy the parsed table definition into the client-seam CreateTableIn request.
 /// The command-level flags (if_not_exists / nowait) are NOT part of the request
 /// — they drive the executor's control flow, not the CreateTable call.
@@ -32,6 +59,10 @@ CreateTableIn make_request(const CreateTableCmd& cmd) {
 }  // namespace
 
 Result<ExecOutcome> execute_create_table(const CreateTableCmd& cmd, IDDBClient& client) {
+    if (auto valid = validate_key_schemas(cmd); !valid.has_value()) {
+        return fail(valid.error());
+    }
+
     // IF NOT EXISTS: probe the table first. When it already exists, skip the
     // CreateTable call and succeed with the CREATE token (the original's
     // `if (m_if_not_exists && table_exists(...))` branch — it issues no request
@@ -63,6 +94,10 @@ Result<ExecOutcome> execute_create_table(const CreateTableCmd& cmd, IDDBClient& 
 }
 
 Result<ExecOutcome> execute_create_table_explain(const CreateTableCmd& cmd, IDDBClient& client) {
+    if (auto valid = validate_key_schemas(cmd); !valid.has_value()) {
+        return fail(valid.error());
+    }
+
     ExplainOutcome outcome;
     // The original prints the CREATE token even in EXPLAIN mode (outside the
     // explain branch, create_table.cpp).

@@ -5,9 +5,12 @@
 
 #include "planner/select_planner.hpp"
 
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include "expressions/symbol_table.hpp"
+#include "expressions/where.hpp"
 #include "planner/get_key_schema.hpp"
 
 namespace ddbsh::engine {
@@ -81,17 +84,20 @@ Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
     if (!resolved.has_value()) {
         return fail(resolved.error());
     }
-    const std::string& pk = resolved->pk;
-    const std::string& rk = resolved->rk;
+    const std::vector<std::string>& pk = resolved->pk;
+    const std::vector<std::string>& rk = resolved->rk;
 
     const bool has_index = cmd.index.has_value();
     const Where* where = cmd.where.get();
 
     // Access-pattern probes, in the original's order (select_helper.cpp
-    // can_getitem/can_query). A SELECT with no WHERE falls through to Scan.
+    // can_getitem/can_query). GetItem is base-table only (indexes never
+    // GetItem). A SELECT with no WHERE falls through to Scan. plan_query is the
+    // generalized Query probe (phase 4a): its presence selects Query (on the
+    // base table or the index), its absence falls through to Scan.
     const bool can_getitem = !has_index && where != nullptr && where->can_getitem(pk, rk);
-    const bool can_query = where != nullptr && ((!has_index && where->can_query_table(pk, rk)) ||
-                                                (has_index && where->can_query_index(pk, rk)));
+    const std::optional<QueryKeyPlan> qplan =
+        (where != nullptr) ? where->plan_query(pk, rk) : std::nullopt;
 
     // One symbol table per SELECT (matching one CSymbolTable per request). The
     // aliasing call order — projection, then key condition, then filter —
@@ -119,7 +125,7 @@ Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
     const ddbsh::ReturnConsumedCapacity rcc =
         cmd.ratelimit.has_value() ? ddbsh::ReturnConsumedCapacity::total : to_client_rcc(cmd.rcc);
 
-    if (can_query) {
+    if (qplan.has_value()) {
         plan.api = SelectApi::query;
         QueryIn& r = plan.query;
         r.table_name = cmd.table;
@@ -131,8 +137,8 @@ Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
         if (!cmd.projection.empty()) {
             r.projection_expression = serialize_projection(cmd.projection, st);
         }
-        r.key_condition_expression = where->query_key_condition_expression(pk, rk, &st);
-        std::string filter = where->query_filter_expression(pk, rk, &st);
+        r.key_condition_expression = where->query_key_condition_expression(*qplan, &st);
+        std::string filter = where->query_filter_expression(*qplan, &st);
         if (!filter.empty()) {
             r.filter_expression = std::move(filter);
         }

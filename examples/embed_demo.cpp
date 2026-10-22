@@ -64,7 +64,7 @@ public:
     InMemoryClient() {
         // One table: Movies, keyed (year HASH, title RANGE).
         schema_.table_name = "Movies";
-        schema_.key_schema = ddbsh::TableKeySchema{"year", "title"};
+        schema_.key_schema = ddbsh::TableKeySchema{{"year"}, {"title"}};
         schema_.table_status = "ACTIVE";
         schema_.table_id = "00000000-0000-0000-0000-000000000000";
         schema_.table_arn = "arn:aws:dynamodb:us-east-1:000000000000:table/Movies";
@@ -248,7 +248,11 @@ private:
     // Extract the table's key attributes (year, title) from a full item.
     ddbsh::ValueMap key_of_item(const ddbsh::ValueMap& item) const {
         ddbsh::ValueMap key;
-        for (const auto& want : {schema_.key_schema.hash_key, schema_.key_schema.range_key}) {
+        std::vector<std::string> wanted = schema_.key_schema.hash_keys;
+        for (const auto& r : schema_.key_schema.range_keys) {
+            wanted.push_back(r);
+        }
+        for (const auto& want : wanted) {
             if (want.empty()) {
                 continue;
             }

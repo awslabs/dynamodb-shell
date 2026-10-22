@@ -15,16 +15,19 @@
 #define DDBSH_SRC_PLANNER_GET_KEY_SCHEMA_HPP
 
 #include <string>
+#include <vector>
 
 #include "ddbsh/iddbclient.hpp"
 #include "ddbsh/result.hpp"
 
 namespace ddbsh::engine {
 
-/// The resolved partition (pk) and sort (rk, "" if none) key attribute names.
+/// The resolved partition (pk) and sort (rk) key attribute names, in composite
+/// order. Base tables and LSIs always yield |pk|==1 and |rk|<=1; a composite
+/// GSI may yield up to 4 pk and 4 rk attributes (phase 4a).
 struct ResolvedKeySchema {
-    std::string pk;
-    std::string rk;
+    std::vector<std::string> pk;
+    std::vector<std::string> rk;
 };
 
 /// Resolve the key schema for `table` (when `index` is empty) or for the named
