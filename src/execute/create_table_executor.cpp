@@ -16,21 +16,38 @@ bool is_single_key(const KeySchema& ks) {
     return ks.hash.size() <= 1 && ks.range.size() <= 1;
 }
 
-/// Reject a composite key on a base-table primary key or an LSI (GSI-only
-/// constraint, ratified D-4a-1/-8). Runs before the CreateTable request is
-/// built so the shell never sends an illegal schema to the service. The error
-/// strings are authored (no oracle; human-audited, D-4a-8).
+/// Every key schema — base-table primary key, LSI, or GSI — must name at least
+/// one partition (HASH) attribute. The generalized `key_schema` grammar rule
+/// (phase 4a) accepts a role list with no HASH role (e.g. `( a range )`), which
+/// the original's three fixed alternatives rejected at parse time; validate it
+/// client-side so the shell gives a clear error instead of sending an empty
+/// HASH list to the service. The error strings are authored (no oracle;
+/// human-audited, D-4a-8).
 Result<void> validate_key_schemas(const CreateTableCmd& cmd) {
+    if (cmd.key_schema.hash.empty()) {
+        return fail(Errc::invalid_argument,
+                    "A table primary key must specify a partition (HASH) key.");
+    }
     if (!is_single_key(cmd.key_schema)) {
         return fail(Errc::invalid_argument,
                     "Composite keys are supported only on GSIs. A table primary key must have "
                     "one partition key and an optional sort key.");
     }
     for (const auto& lsi : cmd.lsis) {
+        if (lsi.key_schema.hash.empty()) {
+            return fail(Errc::invalid_argument,
+                        "LSI " + lsi.name + " must specify a partition (HASH) key.");
+        }
         if (!is_single_key(lsi.key_schema)) {
             return fail(Errc::invalid_argument,
                         "Composite keys are supported only on GSIs. LSI " + lsi.name +
                             " must have one partition key and an optional sort key.");
+        }
+    }
+    for (const auto& gsi : cmd.gsis) {
+        if (gsi.key_schema.hash.empty()) {
+            return fail(Errc::invalid_argument,
+                        "GSI " + gsi.name + " must specify a partition (HASH) key.");
         }
     }
     return {};

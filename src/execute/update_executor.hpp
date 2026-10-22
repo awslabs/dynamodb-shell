@@ -10,8 +10,11 @@
 // CUpdateCommand::run() exactly:
 //   * full base-table key in the WHERE (can_update_item)  -> ONE UpdateItem
 //     with the condition (read=0);
-//   * else, no index -> can_query_table ? Query : Scan to ENUMERATE keys;
-//   * else (table.index) -> can_query_index ? Query : Scan on the index.
+//   * else -> Where::plan_query(key schema) chooses the enumeration access
+//     pattern: a QueryKeyPlan (full-PK equality + gap-free key-legal sort-key
+//     prefix) -> Query, otherwise -> Scan. A `table.index` target routes the
+//     read through the (possibly composite GSI) index; the write hits the base
+//     table.
 // Each enumerated row's base-table key drives one per-item UpdateItem; the
 // residual WHERE predicate re-asserts on every write (optimistic concurrency).
 // A ConditionalCheckFailed is DATA (a ccf counter increment), not an error

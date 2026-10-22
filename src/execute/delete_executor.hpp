@@ -7,8 +7,11 @@
 // (command/delete.cpp, arch §7/§8). The dispatch parallels UPDATE:
 //   * full base-table key (can_delete_item) -> ONE DeleteItem with the
 //     condition (read=0);
-//   * else, no index -> can_query_table ? Query : Scan to enumerate keys;
-//   * else (table.index) -> can_query_index ? Query : Scan on the index.
+//   * else -> Where::plan_query(key schema) chooses the enumeration access
+//     pattern: a QueryKeyPlan (full-PK equality + gap-free key-legal sort-key
+//     prefix) -> Query, otherwise -> Scan. A `table.index` target routes the
+//     read through the (possibly composite GSI) index; the write hits the base
+//     table.
 // No WHERE => delete all (full scan + per-item DeleteItem). A
 // ConditionalCheckFailed is a ccf counter increment, not an error (D-2c-7/-8);
 // success emits ONE BulkWriteOutcome{del, read, modified, ccf}.

@@ -44,8 +44,9 @@ struct AttributeDef {
 ///
 /// Multi-attribute (composite) keys are a DynamoDB GSI feature (up to 4 HASH +
 /// 4 RANGE; phase 4a). Base-table primary keys and LSIs stay single HASH +
-/// optional RANGE — enforced by validation (schema_validation.hpp), not by the
-/// type, so one representation serves all three positions.
+/// optional RANGE — enforced by validation (validate_key_schemas in
+/// src/execute/create_table_executor.cpp), not by the type, so one
+/// representation serves all three positions.
 struct KeySchema {
     std::vector<std::string> hash;   ///< composite partition key, size 1..4
     std::vector<std::string> range;  ///< composite sort key, size 0..4

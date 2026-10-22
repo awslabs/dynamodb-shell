@@ -34,9 +34,30 @@ UpdateTableIn make_request(const AlterTableCmd& cmd) {
 constexpr char kOnDemandGsiIgnored[] =
     "Setting table to on-demand, ignoring specifications for indices.";
 
+/// Every ADD-GSI key schema must name at least one partition (HASH) attribute.
+/// The generalized `key_schema` grammar rule (phase 4a) accepts a role list
+/// with no HASH role; reject it client-side so the shell gives a clear error
+/// rather than sending an empty HASH list to the service. Composite (multi-
+/// attribute) GSI keys are allowed here (GSI-only feature); only the missing-
+/// partition-key case is rejected. The error string is authored (no oracle;
+/// human-audited, D-4a-8).
+Result<void> validate_gsi_updates(const AlterTableCmd& cmd) {
+    for (const auto& update : cmd.gsi_updates) {
+        if (update.action == GsiUpdate::Action::create && update.key_schema &&
+            update.key_schema->hash.empty()) {
+            return fail(Errc::invalid_argument,
+                        "GSI " + update.index_name + " must specify a partition (HASH) key.");
+        }
+    }
+    return {};
+}
+
 }  // namespace
 
 Result<ExecOutcome> execute_alter_table(const AlterTableCmd& cmd, IDDBClient& client) {
+    if (auto valid = validate_gsi_updates(cmd); !valid.has_value()) {
+        return fail(valid.error());
+    }
     auto updated = client.update_table(make_request(cmd));
     if (!updated.has_value()) {
         return fail(updated.error());
@@ -49,6 +70,9 @@ Result<ExecOutcome> execute_alter_table(const AlterTableCmd& cmd, IDDBClient& cl
 }
 
 Result<ExecOutcome> execute_alter_table_explain(const AlterTableCmd& cmd, IDDBClient& client) {
+    if (auto valid = validate_gsi_updates(cmd); !valid.has_value()) {
+        return fail(valid.error());
+    }
     auto body = client.explain_request(make_request(cmd));
     if (!body.has_value()) {
         return fail(body.error());

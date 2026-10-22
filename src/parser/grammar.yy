@@ -975,7 +975,8 @@ primary_key:
  * (add_key_role), so the canonical [HASH…, RANGE…] emission order is
  * reconstructed. ONE rule serves base-table primary keys, GSIs and LSIs; the
  * GSI-only restriction on composite keys is enforced semantically by the
- * executor's validation (schema_validation.hpp), not the grammar, so it yields
+ * executor's validation (validate_key_schemas in
+ * src/execute/create_table_executor.cpp), not the grammar, so it yields
  * a clear error rather than a bare `syntax error` (phase 4a). */
 key_schema:
       '(' key_role_list ')'  { $$ = std::move($2); }

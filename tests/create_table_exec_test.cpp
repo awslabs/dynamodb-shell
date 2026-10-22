@@ -211,4 +211,41 @@ TEST(CreateTableExec, CompositeLsiRejected) {
     EXPECT_TRUE(client.create_requests().empty());
 }
 
+TEST(CreateTableExec, BasePrimaryKeyMissingHashRejected) {
+    // The generalized key_schema grammar accepts a role list with no HASH role;
+    // reject it client-side with a clear error rather than sending an empty HASH
+    // list to the service (reviewer S2, phase 4a).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("create table t ( a string ) primary key ( a range );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message, "A table primary key must specify a partition (HASH) key.");
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
+TEST(CreateTableExec, LsiMissingHashRejected) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table t ( x string, a string ) primary key ( x hash ) "
+        "lsi ( l1 on ( a range ) projecting all );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message, "LSI l1 must specify a partition (HASH) key.");
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
+TEST(CreateTableExec, GsiMissingHashRejected) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table t ( x string, a string ) primary key ( x hash ) "
+        "gsi ( g on ( a range ) projecting all );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message, "GSI g must specify a partition (HASH) key.");
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
 }  // namespace
