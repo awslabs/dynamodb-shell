@@ -185,6 +185,49 @@ TEST(Parse, SyntaxErrorIsParseErrorWithLocation) {
         << result.error().message;
 }
 
+TEST(Parse, SyntaxErrorCarriesCaretDiagnostic) {
+    // P4a-02 item 3: a syntax error appends a compiler-style caret line — the
+    // offending source line, then spaces + '^' under the error column (the
+    // first character of the offending lexeme). The classic
+    // "[line, col] syntax error at <tok>" line is preserved as the first line.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto result = session.parse("select * from");  // ends abruptly
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ddbsh::Errc::parse_error);
+    const std::string& msg = result.error().message;
+    // Three lines: diagnostic, source line, caret line.
+    const auto first_nl = msg.find('\n');
+    ASSERT_NE(first_nl, std::string::npos) << msg;
+    EXPECT_NE(msg.find("syntax error"), std::string::npos) << msg;
+    // The source line is echoed verbatim.
+    EXPECT_NE(msg.find("select * from"), std::string::npos) << msg;
+    // The last line is an indent of spaces ending in a single caret.
+    const auto last_nl = msg.rfind('\n');
+    ASSERT_NE(last_nl, std::string::npos);
+    const std::string caret_line = msg.substr(last_nl + 1);
+    ASSERT_FALSE(caret_line.empty());
+    EXPECT_EQ(caret_line.back(), '^') << msg;
+    EXPECT_EQ(caret_line.find_first_not_of(" \t^"), std::string::npos) << msg;
+}
+
+TEST(Parse, SyntaxErrorCaretPointsAtOffendingToken) {
+    // The caret aligns under the first character of the offending lexeme. For
+    // "select foo bar" the parser faults at `bar`; the caret column equals the
+    // byte offset of `bar` in the echoed source line.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto result = session.parse("select foo bar;");
+    ASSERT_FALSE(result.has_value());
+    const std::string& msg = result.error().message;
+    const auto last_nl = msg.rfind('\n');
+    ASSERT_NE(last_nl, std::string::npos);
+    const std::string caret_line = msg.substr(last_nl + 1);
+    // "select foo bar;" — `bar` begins at 0-based index 11, so 11 leading
+    // spaces then the caret.
+    EXPECT_EQ(caret_line, std::string(11, ' ') + "^") << msg;
+}
+
 TEST(Parse, ExplainIsNotAllowedOnShow) {
     // EXPLAIN wraps ddl/dml only (as the original did); EXPLAIN SHOW is invalid.
     ddbsh::test::FakeDDBClient client;

@@ -1,0 +1,86 @@
+CREATE
+Scan({
+   "TableName":   "ddbsh_mpgsi_sel",
+   "IndexName":   "firstgsi",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "3"
+      }
+   },
+   "ConsistentRead":   false
+})
+Scan({
+   "TableName":   "ddbsh_mpgsi_sel",
+   "IndexName":   "firstgsi",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#abaa1 = :vbaa1 AND #abaa2 = :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "a",
+      "#abaa2":   "b"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "3"
+      },
+      ":vbaa2":   {
+         "N":   "4"
+      }
+   },
+   "ConsistentRead":   false
+})
+Query({
+   "TableName":   "ddbsh_mpgsi_sel",
+   "IndexName":   "firstgsi",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#acaa1 = :vcaa1 AND #acaa2 = :vcaa2 AND #acaa3 = :vcaa3",
+   "ExpressionAttributeNames":   {
+      "#acaa1":   "a",
+      "#acaa2":   "b",
+      "#acaa3":   "c"
+   },
+   "ExpressionAttributeValues":   {
+      ":vcaa1":   {
+         "N":   "3"
+      },
+      ":vcaa2":   {
+         "N":   "4"
+      },
+      ":vcaa3":   {
+         "N":   "5"
+      }
+   }
+})
+Query({
+   "TableName":   "ddbsh_mpgsi_sel",
+   "IndexName":   "firstgsi",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#adaa1 = :vdaa1 AND #adaa2 = :vdaa2 AND #adaa3 = :vdaa3 AND #adaa4 = :vdaa4",
+   "ExpressionAttributeNames":   {
+      "#adaa1":   "a",
+      "#adaa2":   "b",
+      "#adaa3":   "c",
+      "#adaa4":   "d"
+   },
+   "ExpressionAttributeValues":   {
+      ":vdaa1":   {
+         "N":   "3"
+      },
+      ":vdaa2":   {
+         "N":   "4"
+      },
+      ":vdaa3":   {
+         "N":   "5"
+      },
+      ":vdaa4":   {
+         "N":   "6"
+      }
+   }
+})
+DROP

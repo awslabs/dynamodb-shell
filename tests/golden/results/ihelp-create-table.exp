@@ -7,7 +7,13 @@ CREATE TABLE - Creates a DynamoDB table.
 
    attribute_type := NUMBER|STRING|BINARY
    primary_key := PRIMARY KEY key_schema
-   key_schema := ( attribute_name HASH [, attribute_name RANGE])
+   key_schema := ( key_role [, key_role] )
+   key_role := key_attribute HASH | key_attribute RANGE
+   key_attribute := attribute_name | ( attribute_name [, attribute_name ...] )
+      A bare attribute_name is a single-attribute key. A parenthesized,
+      comma-separated group of attribute names is a multi-part (composite)
+      key. Composite HASH and/or RANGE keys are supported on GSIs ONLY
+      (a base-table primary key is single-attribute per role).
 
    billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)
    provisioned := ( RR RCU, WW WCU )
@@ -15,6 +21,8 @@ CREATE TABLE - Creates a DynamoDB table.
    gsi_list := GSI ( gsi_spec )
    gsi_spec := gsi [, gsi ...]
    gsi := gsi_name ON key_schema index_projection [billing_mode_and_throughput][warm_throughput]
+      A GSI key_schema may use composite (multi-part) HASH and RANGE keys,
+      for example: GSI ( g ON ( (a, b, c) HASH, (d, e) RANGE ) PROJECTING ALL )
    index_projection := (PROJECTING ALL) | (PROJECTING KEYS ONLY) | (PROJECTING INCLUDE projection_list)
    projection_list := ( attribute [, attribute ...] )
 

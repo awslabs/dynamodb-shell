@@ -143,6 +143,54 @@ TEST(ExplainSelect, MissingTableIsError) {
     EXPECT_FALSE(outcome.has_value());
 }
 
+// ---- Composite (multipart) GSI EXPLAIN SELECT (phase 4a, P4a-02 item 6) -----
+// A deterministic, offline backstop for the seeded golden iexp-select-mpgsi:
+// the index `firstgsi` has a composite HASH (a, b, c) and composite RANGE
+// (d, e). A Query requires `=` on EVERY partition-key component; a partial
+// composite hash demotes to Scan. Mirrors the golden's four shapes.
+DescribeTableOut table_composite_gsi(const std::string& name) {
+    DescribeTableOut t;
+    t.table_name = name;
+    t.key_schema = TableKeySchema{{"a"}, {}};
+    ddbsh::SecondaryIndexSchema g;
+    g.index_name = "firstgsi";
+    g.key_schema.hash_keys = {"a", "b", "c"};
+    g.key_schema.range_keys = {"d", "e"};
+    t.global_secondary_indexes.push_back(std::move(g));
+    return t;
+}
+
+TEST(ExplainSelect, CompositeGsiPartialHashSelectsScan) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    auto session = make_session(client);
+
+    for (const char* q : {"explain select * from t.firstgsi where a = 3;",
+                          "explain select * from t.firstgsi where a = 3 and b = 4;"}) {
+        auto outcome = session.run(q);
+        ASSERT_TRUE(outcome.has_value()) << q;
+        const auto& e = std::get<ExplainOutcome>(*outcome);
+        ASSERT_EQ(e.blocks.size(), 1u) << q;
+        EXPECT_EQ(e.blocks[0].api_name, "Scan") << q;
+    }
+}
+
+TEST(ExplainSelect, CompositeGsiFullHashSelectsQuery) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_composite_gsi("t"));
+    auto session = make_session(client);
+
+    for (const char* q :
+         {"explain select * from t.firstgsi where a = 3 and b = 4 and c = 5;",
+          "explain select * from t.firstgsi where a = 3 and b = 4 and c = 5 and d = 6;"}) {
+        auto outcome = session.run(q);
+        ASSERT_TRUE(outcome.has_value()) << q;
+        const auto& e = std::get<ExplainOutcome>(*outcome);
+        ASSERT_EQ(e.blocks.size(), 1u) << q;
+        EXPECT_EQ(e.blocks[0].api_name, "Query") << q;
+    }
+}
+
 // ---- INSERT / REPLACE EXPLAIN: one PutItem block per row -------------------
 
 TEST(ExplainInsert, OneBlockPerRowNoTrailingStatus) {

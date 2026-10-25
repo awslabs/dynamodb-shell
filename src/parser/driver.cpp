@@ -10,6 +10,7 @@
 
 #include "parser/driver.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -101,7 +102,69 @@ void Driver::set_error(const std::string& message) {
     // the original yyerror emitted (parser.y: logerror("[%d, %d] %s at %s")).
     std::string composed = "[" + std::to_string(line_) + ", " + std::to_string(column_) + "] " +
                            message + " at " + last_lexeme_;
+    // Follow it with a compiler-style caret diagnostic (P4a-02 item 3): the
+    // offending source line, then a '^' pointing at the exact error column.
+    // This is an additive diagnostic beyond the original's single error line;
+    // no golden pins the syntax-error bytes (the suite matches "syntax error
+    // at <tok>" as a substring regex), so parity is preserved.
+    std::string caret = build_caret();
+    if (!caret.empty()) {
+        composed += "\n";
+        composed += caret;
+    }
     error_ = Error{Errc::parse_error, std::move(composed), std::nullopt, std::nullopt};
+}
+
+std::string Driver::build_caret() const {
+    // Locate the start offset of the 1-based line_ within the borrowed input.
+    std::size_t line_start = 0;
+    int cur = 1;
+    while (cur < line_ && line_start <= input_.size()) {
+        std::size_t nl = input_.find('\n', line_start);
+        if (nl == std::string_view::npos) {
+            break;
+        }
+        line_start = nl + 1;
+        ++cur;
+    }
+    if (line_start > input_.size()) {
+        return {};
+    }
+    // Extract the offending physical line (without its trailing newline / CR).
+    std::size_t nl = input_.find('\n', line_start);
+    std::string_view src_line = input_.substr(
+        line_start, nl == std::string_view::npos ? std::string_view::npos : nl - line_start);
+    if (!src_line.empty() && src_line.back() == '\r') {
+        src_line.remove_suffix(1);
+    }
+    if (src_line.empty()) {
+        return {};
+    }
+    // Caret column (1-based): the first character of the offending lexeme, i.e.
+    // the current cursor (one past the lexeme) backed up over the lexeme. An
+    // empty lexeme (end of input) points the caret at the cursor itself.
+    std::size_t col = static_cast<std::size_t>(column_);
+    std::size_t lexeme_len = last_lexeme_.size();
+    std::size_t caret_col = (col > lexeme_len) ? col - lexeme_len : col;
+    if (caret_col < 1) {
+        caret_col = 1;
+    }
+    // Indentation up to the caret: copy the source line's leading characters,
+    // turning everything but tabs into spaces so a tab-rendered line still
+    // lines up under a terminal.
+    std::string indent;
+    std::size_t limit = std::min<std::size_t>(caret_col - 1, src_line.size());
+    indent.reserve(limit);
+    for (std::size_t ix = 0; ix < limit; ++ix) {
+        indent.push_back(src_line[ix] == '\t' ? '\t' : ' ');
+    }
+    std::string out;
+    out.reserve(src_line.size() + indent.size() + 2);
+    out.append(src_line);
+    out.push_back('\n');
+    out.append(indent);
+    out.push_back('^');
+    return out;
 }
 
 void Driver::set_semantic_error(std::string message) {

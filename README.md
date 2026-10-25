@@ -120,6 +120,79 @@ The engine drives this command set end to end against real DynamoDB:
   a GSI-only feature: a composite key on a base-table primary key or an LSI is
   rejected client-side with a clear error.
 
+  **SELECT planning against a composite GSI (Query vs Scan).** The rule in full:
+  a **Query** requires an `=` condition on **every** partition-key component; the
+  sort-key conditions must form a gap-free left-to-right prefix (no skipping),
+  each `=` except the last, which may be a range operator. Any missing
+  partition-key component, a gap in the sort-key prefix, or a range operator on a
+  non-last sort-key component demotes the plan to a **Scan** with the predicate
+  as a `FilterExpression`. Given:
+
+  ```sql
+  CREATE TABLE foo ( a number, b number, c number, d number, e number )
+    PRIMARY KEY ( a hash )
+    GSI ( firstgsi ON ( (a, b, c) hash, (d, e) range ) PROJECTING ALL );
+  ```
+
+  the composite HASH is `(a, b, c)` and the composite RANGE is `(d, e)`:
+
+  | Predicate | API | Why |
+  |---|---|---|
+  | `a = 3` | Scan | partial composite hash → FilterExpression |
+  | `a = 3 and b = 4` | Scan | partial composite hash → FilterExpression |
+  | `a = 3 and b = 4 and c = 5` | Query | full composite hash → KeyConditionExpression |
+  | `a = 3 and b = 4 and c = 5 and d = 6` | Query | full hash + leading range component |
+
+  A partial-hash predicate becomes a Scan with a `FilterExpression`:
+
+  ```
+  ddbsh$ explain select * from foo.firstgsi where a = 3;
+  Scan({
+     "TableName":   "foo",
+     "IndexName":   "firstgsi",
+     "ReturnConsumedCapacity":   "NONE",
+     "FilterExpression":   "#aaaa1 = :vaaa1",
+     "ExpressionAttributeNames":   {
+        "#aaaa1":   "a"
+     },
+     "ExpressionAttributeValues":   {
+        ":vaaa1":   {
+           "N":   "3"
+        }
+     },
+     "ConsistentRead":   false
+  })
+  ```
+
+  A full-hash predicate becomes a Query with a `KeyConditionExpression`:
+
+  ```
+  ddbsh$ explain select * from foo.firstgsi where a = 3 and b = 4 and c = 5;
+  Query({
+     "TableName":   "foo",
+     "IndexName":   "firstgsi",
+     "ConsistentRead":   false,
+     "ReturnConsumedCapacity":   "NONE",
+     "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3",
+     "ExpressionAttributeNames":   {
+        "#aaaa1":   "a",
+        "#aaaa2":   "b",
+        "#aaaa3":   "c"
+     },
+     "ExpressionAttributeValues":   {
+        ":vaaa1":   {
+           "N":   "3"
+        },
+        ":vaaa2":   {
+           "N":   "4"
+        },
+        ":vaaa3":   {
+           "N":   "5"
+        }
+     }
+  })
+  ```
+
 **Deferred to a later phase:** global tables (`ALTER TABLE ... REPLICA`
 multi-region provisioning and the `ddbsh-gt-*` suite), which require a live
 multi-region setup. The parser may recognize other unimplemented syntax and
@@ -148,12 +221,41 @@ us-east-1> SELECT * FROM Movies
        ...> go
 ```
 
+To terminate with a **blank line** instead of the word `go`, start the shell
+with `-t` (no argument), or run `set terminator` with no value mid-session:
+
+```
+$ ddbsh -t
+us-east-1> SELECT * FROM Movies WHERE year = 2014;
+       ...>
+```
+
+A custom terminator word is set with `-t STR` (e.g. `-t ;;`) or `set terminator
+STR`.
+
 This isql batch input is a **deliberate, documented divergence** (tenets 2 and
 8) from the original `ddbsh`, which executed each statement as soon as it read a
 bare unquoted `;` interactively. The divergence is additive and lives only at
 the CLI layer: the engine still parses `;`-terminated statements, so the golden
 `.exp` command strings (all `;`-terminated and flushed by EOF) produce
 byte-identical output.
+
+## Syntax error diagnostics
+
+A syntax error reports the `[line, column]` location and the offending token,
+and — below the offending input line — a compiler-style caret (`^`) pointing at
+the exact error column:
+
+```
+ddbsh$ create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
+[1, 68] syntax error at ,
+create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
+                                                                  ^
+```
+
+(Here the GSI key schema needs its own outer parens around the role list:
+`g ON ( (a, b) hash, (c) range )`.) The caret is an additive diagnostic; the
+`[line, column] syntax error at <token>` line is unchanged.
 
 ## CLI flags, config, and environment
 
@@ -290,12 +392,31 @@ Cloning into 'dynamodb-shell'...
 
 % cmake ../dynamodb-shell/ddbsh
 
-% make
+% cmake --build . --parallel $(nproc)
 ```
 
 #### More build steps
 
 1. Building the SDK. I have found the following to work reliably.
+
+> **AWS SDK version.** ddbsh requires the AWS SDK for C++ `dynamodb`, `iam`, and
+> `sts` components. Use a recent release (the project is developed against
+> **1.11.916** or newer).
+>
+> **Generator-agnostic commands.** The steps below use CMake's build/install
+> drivers (`cmake --build` / `cmake --install`) instead of `make` /
+> `make install`, so they work whether CMake generated Makefiles **or** Ninja.
+> On a box whose default generator is Ninja, no `Makefile` is produced and
+> `make` fails with "No targets specified and no makefile found."
+>
+> **Install prefix.** Pick a prefix and keep it consistent with where ddbsh's
+> `find_package(AWSSDK)` later resolves (its `CMAKE_PREFIX_PATH`). `sudo` is
+> needed only for a root-owned prefix such as `/usr/local`; a user-owned prefix
+> like `$HOME/.local/aws-sdk-cpp` needs no `sudo`. Verify the cache took the
+> prefix before installing: `cmake -LA . | grep CMAKE_INSTALL_PREFIX` — the AWS
+> SDK's top-level CMake has been observed to retain a stale
+> `CMAKE_INSTALL_PREFIX=/usr/local` from the first configure; re-run
+> `cmake . -DCMAKE_INSTALL_PREFIX=<prefix>` to make it stick.
 
 ```
 % git clone https://github.com/aws/aws-sdk-cpp.git
@@ -316,9 +437,9 @@ Cloning into 'dynamodb-shell'...
         -DENABLE_TESTING=OFF \
         -DFORCE_SHARED_CRT=OFF
 
-% make
+% cmake --build . --parallel $(nproc)
 
-% sudo make install
+% sudo cmake --install .
 
 ```
 
@@ -339,9 +460,9 @@ Cloning into 'dynamodb-shell'...
         -DENABLE_TESTING=OFF \
         -DFORCE_SHARED_CRT=OFF
 
-% make
+% cmake --build . --parallel $(nproc)
 
-% sudo make install
+% sudo cmake --install .
 
 ```
 
@@ -355,9 +476,9 @@ Cloning into 'dynamodb-shell'...
 
 % cmake ../dynamodb-shell/ddbsh -DCMAKE_BUILD_TYPE=Release
 
-% make
+% cmake --build . --parallel $(nproc)
 
-% sudo make install
+% sudo cmake --install .
 ```
 
 #### Running tests
@@ -365,7 +486,7 @@ Cloning into 'dynamodb-shell'...
 Once you complete a build you can run the unit tests as shown below.
 
 ```
-% make test
+% ctest --test-dir .
 Running tests...
 Test project /Users/amrithie/source/github/dynamodb-shell/build
         Start   1: ddbsh-basic-cli

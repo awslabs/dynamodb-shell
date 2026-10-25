@@ -77,3 +77,28 @@ add_test(NAME iexp-restore-pitr COMMAND ddbshtest -q -T ${RD}/iexp-restore-pitr.
 add_test(NAME iexp-insert-replace COMMAND ddbshtest -q -T ${RD}/iexp-insert-replace.exp -c "create table ddbsh_iexp_insert ( pk number ) primary key (pk hash); explain insert into ddbsh_iexp_insert (pk, a) values (1, 2); explain replace into ddbsh_iexp_insert (pk, a) values (1, 2); drop table ddbsh_iexp_insert;")
 
 add_test(NAME iexp-alter-ttl COMMAND ddbshtest -q -T ${RD}/iexp-alter-ttl.exp -c "create table ddbsh_ttl ( pk number ) primary key (pk hash); explain alter table ddbsh_ttl set ttl (expiry); drop table ddbsh_ttl;")
+
+# --- seeded EXPLAIN SELECT on a composite (multi-part) GSI (phase 4a, P4a-02
+# item 6) ---------------------------------------------------------------------
+# EXPLAIN SELECT is NOT backend-free: the planner resolves the index key schema
+# via DescribeTable (arch §11), so this is SEEDED — it creates a real table with
+# a composite GSI (CREATE waits for ACTIVE), runs the four EXPLAIN SELECT forms,
+# then drops it (self-contained lifecycle). The GSI `firstgsi` has a composite
+# HASH (a, b, c) and composite RANGE (d, e).
+#
+# The Query-vs-Scan matrix this pins (design doc 2026-10-25-P4a-02 item 5): a
+# Query requires `=` on EVERY partition-key component; sort-key conditions form
+# a gap-free left-to-right prefix. A missing hash component demotes to Scan +
+# FilterExpression.
+#   a = 3                              -> Scan  (partial composite hash)
+#   a = 3 and b = 4                    -> Scan  (partial composite hash)
+#   a = 3 and b = 4 and c = 5          -> Query (full composite hash)
+#   a = 3 and b = 4 and c = 5 and d = 6-> Query (full hash + leading range comp)
+#
+# These goldens are AUTHORED (the original ddbsh predates composite GSI keys)
+# and human-audited before merge (D-4a-10 / D-2i-5). EXPLAIN output is
+# deterministic (no -s).
+#
+# WARNING: creates and drops a REAL DynamoDB table (ddbsh_mpgsi_sel) on each run
+# (us-east-1). Self-cleaning.
+add_test(NAME iexp-select-mpgsi COMMAND ddbshtest -q -T ${RD}/iexp-select-mpgsi.exp -c "create table ddbsh_mpgsi_sel ( a number, b number, c number, d number, e number ) primary key ( a hash ) gsi ( firstgsi on ( (a, b, c) hash, (d, e) range ) projecting all ); explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3; explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3 and b = 4; explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3 and b = 4 and c = 5; explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3 and b = 4 and c = 5 and d = 6; drop table ddbsh_mpgsi_sel;")
