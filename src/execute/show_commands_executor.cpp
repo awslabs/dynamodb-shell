@@ -12,23 +12,41 @@ namespace ddbsh::engine {
 
 namespace {
 
-/// Render a HASH/RANGE key schema the way the original show_create_table.cpp
-/// get_key_description() did: per element `"attr" KEYTYPE`, a leading space
-/// before all but the first, a trailing comma after all but the last — yielding
-/// `"pk" HASH, "rk" RANGE`.
+/// Render a HASH/RANGE key schema as reparseable SHOW CREATE TABLE DDL. A
+/// single-attribute role stays bare — `"attr" KEYTYPE` — byte-identical to the
+/// original show_create_table.cpp get_key_description() so single-key goldens
+/// do not regress. A composite (2+ attr) role is a parenthesized, comma-
+/// separated list — `("a", "b") KEYTYPE` — matching the phase-4a SQLish
+/// grammar so the emitted DDL round-trips through the parser. Roles are
+/// separated by a leading space (all but the first) and a trailing comma (all
+/// but the last): `"pk" HASH, ("a", "b") RANGE`.
 std::string key_description(const TableKeySchema& ks) {
-    std::vector<std::pair<std::string, std::string>> elems;  // (attr, keytype)
-    elems.emplace_back(ks.hash_key, "HASH");
-    if (!ks.range_key.empty()) {
-        elems.emplace_back(ks.range_key, "RANGE");
+    std::vector<std::pair<std::vector<std::string>, std::string>> groups;  // (attrs, keytype)
+    if (!ks.hash_keys.empty()) {
+        groups.emplace_back(ks.hash_keys, "HASH");
+    }
+    if (!ks.range_keys.empty()) {
+        groups.emplace_back(ks.range_keys, "RANGE");
     }
     std::string out;
-    for (std::size_t ix = 0; ix < elems.size(); ++ix) {
+    for (std::size_t ix = 0; ix < groups.size(); ++ix) {
         if (ix != 0) {
             out += " ";
         }
-        out += "\"" + elems[ix].first + "\" " + elems[ix].second;
-        if (ix != elems.size() - 1) {
+        const auto& attrs = groups[ix].first;
+        if (attrs.size() == 1) {
+            out += "\"" + attrs[0] + "\" " + groups[ix].second;
+        } else {
+            out += "(";
+            for (std::size_t k = 0; k < attrs.size(); ++k) {
+                if (k != 0) {
+                    out += ", ";
+                }
+                out += "\"" + attrs[k] + "\"";
+            }
+            out += ") " + groups[ix].second;
+        }
+        if (ix != groups.size() - 1) {
             out += ",";
         }
     }

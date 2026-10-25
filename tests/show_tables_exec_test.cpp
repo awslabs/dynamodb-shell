@@ -46,7 +46,7 @@ std::string render(const ddbsh::ExecOutcome& outcome) {
 DescribeTableOut provisioned_table(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
-    t.key_schema = TableKeySchema{"pk", "rk"};
+    t.key_schema = TableKeySchema{{"pk"}, {"rk"}};
     t.table_status = "ACTIVE";
     t.table_id = "id-123";
     t.table_arn = "arn:aws:dynamodb:us-east-1:1:table/" + name;
@@ -54,10 +54,10 @@ DescribeTableOut provisioned_table(const std::string& name) {
     t.provisioned_throughput_set = true;
     t.table_class_summary = "STANDARD";
     t.global_secondary_indexes = {
-        SecondaryIndexSchema{.index_name = "g1", .key_schema = TableKeySchema{"a", ""}},
-        SecondaryIndexSchema{.index_name = "g2", .key_schema = TableKeySchema{"b", ""}}};
+        SecondaryIndexSchema{.index_name = "g1", .key_schema = TableKeySchema{{"a"}, {}}},
+        SecondaryIndexSchema{.index_name = "g2", .key_schema = TableKeySchema{{"b"}, {}}}};
     t.local_secondary_indexes = {
-        SecondaryIndexSchema{.index_name = "l1", .key_schema = TableKeySchema{"pk", "c"}}};
+        SecondaryIndexSchema{.index_name = "l1", .key_schema = TableKeySchema{{"pk"}, {"c"}}}};
     return t;
 }
 
@@ -82,7 +82,7 @@ TEST(ShowTables, InferredDefaultMarkersForOnDemandAndNoTableClass) {
     client.set_table_names({"od"});
     DescribeTableOut t;
     t.table_name = "od";
-    t.key_schema = TableKeySchema{"pk", ""};
+    t.key_schema = TableKeySchema{{"pk"}, {}};
     t.table_status = "ACTIVE";
     t.table_id = "idod";
     t.table_arn = "arnod";
@@ -106,7 +106,7 @@ TEST(ShowTables, ProvisionedFallbackWhenNoBillingSummary) {
     client.set_table_names({"p"});
     DescribeTableOut t;
     t.table_name = "p";
-    t.key_schema = TableKeySchema{"pk", ""};
+    t.key_schema = TableKeySchema{{"pk"}, {}};
     t.table_status = "ACTIVE";
     t.table_id = "idp";
     t.table_arn = "arnp";

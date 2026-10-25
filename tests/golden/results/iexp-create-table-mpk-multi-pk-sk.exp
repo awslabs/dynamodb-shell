@@ -1,0 +1,46 @@
+CreateTable({
+   "AttributeDefinitions":   [{
+         "AttributeName":   "a",
+         "AttributeType":   "N"
+      }, {
+         "AttributeName":   "b",
+         "AttributeType":   "N"
+      }, {
+         "AttributeName":   "c",
+         "AttributeType":   "N"
+      }, {
+         "AttributeName":   "d",
+         "AttributeType":   "N"
+      }, {
+         "AttributeName":   "x",
+         "AttributeType":   "N"
+      }],
+   "TableName":   "foo",
+   "KeySchema":   [{
+         "AttributeName":   "x",
+         "KeyType":   "HASH"
+      }],
+   "GlobalSecondaryIndexes":   [{
+         "IndexName":   "g",
+         "KeySchema":   [{
+               "AttributeName":   "a",
+               "KeyType":   "HASH"
+            }, {
+               "AttributeName":   "b",
+               "KeyType":   "HASH"
+            }, {
+               "AttributeName":   "c",
+               "KeyType":   "RANGE"
+            }, {
+               "AttributeName":   "d",
+               "KeyType":   "RANGE"
+            }],
+         "Projection":   {
+            "ProjectionType":   "ALL"
+         }
+      }],
+   "BillingMode":   "PAY_PER_REQUEST",
+   "TableClass":   "STANDARD",
+   "DeletionProtectionEnabled":   false
+})
+CREATE

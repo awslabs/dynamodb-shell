@@ -29,10 +29,6 @@ public:
 
     int count(const std::string& lhs) const override { return m_lhs == lhs ? 1 : 0; }
 
-    int count_query_rk(const std::string& lhs) const override {
-        return is_negated() ? 0 : count(lhs);
-    }
-
 private:
     std::string do_serialize(SymbolTable* st) override {
         std::string lhs = st ? st->new_attribute(m_lhs) : m_lhs;
@@ -41,17 +37,16 @@ private:
         return lhs + " BETWEEN " + lo + " AND " + hi;
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/, const std::string& rk,
+    std::string do_query_key_condition_expression(const KeySchemaView& ks,
                                                   SymbolTable* st) override {
-        if (m_lhs == rk && !is_negated()) {
+        if (key_contains(ks.sk, m_lhs) && !is_negated()) {
             return do_serialize(st);
         }
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& rk,
-                                           SymbolTable* st) override {
-        if (m_lhs != rk) {
+    std::string do_query_filter_expression(const KeySchemaView& ks, SymbolTable* st) override {
+        if (!key_contains(ks.sk, m_lhs)) {
             return do_serialize(st);
         }
         return "";
@@ -68,11 +63,13 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        if (m_lhs != pk && m_lhs != rk) {
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        if (!key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs)) {
             return true;
         }
-        return m_lhs == rk && !is_negated();
+        // A partition key supports only `=`; a sort-key BETWEEN is legal when
+        // non-negated.
+        return key_contains(ks.sk, m_lhs) && !is_negated();
     }
 
     std::string m_lhs;
@@ -90,10 +87,6 @@ public:
 
     int count(const std::string& lhs) const override { return m_lhs == lhs ? 1 : 0; }
 
-    int count_query_rk(const std::string& lhs) const override {
-        return is_negated() ? 0 : count(lhs);
-    }
-
 private:
     std::string do_serialize(SymbolTable* st) override {
         std::string lhs = st ? st->new_attribute(m_lhs) : m_lhs;
@@ -102,17 +95,16 @@ private:
         return "begins_with(" + lhs + ", " + rhs + ")";
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/, const std::string& rk,
+    std::string do_query_key_condition_expression(const KeySchemaView& ks,
                                                   SymbolTable* st) override {
-        if (m_lhs == rk && !is_negated()) {
+        if (key_contains(ks.sk, m_lhs) && !is_negated()) {
             return do_serialize(st);
         }
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& rk,
-                                           SymbolTable* st) override {
-        if (m_lhs != rk) {
+    std::string do_query_filter_expression(const KeySchemaView& ks, SymbolTable* st) override {
+        if (!key_contains(ks.sk, m_lhs)) {
             return do_serialize(st);
         }
         return "";
@@ -129,11 +121,12 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        if (m_lhs != pk && m_lhs != rk) {
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        if (!key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs)) {
             return true;
         }
-        return m_lhs == rk && !is_negated();
+        // begins_with is legal only on a non-negated sort-key prefix attribute.
+        return key_contains(ks.sk, m_lhs) && !is_negated();
     }
 
     std::string m_lhs;

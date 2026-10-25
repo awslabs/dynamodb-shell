@@ -244,8 +244,8 @@ TEST(AlterTableExec, CreateGsiCarriesAttributeDefsAndCreateAction) {
     EXPECT_EQ(gu.action, GsiUpdate::Action::create);
     EXPECT_EQ(gu.index_name, "g1");
     ASSERT_TRUE(gu.key_schema.has_value());
-    EXPECT_EQ(gu.key_schema->hash, "b");
-    EXPECT_FALSE(gu.key_schema->range.has_value());
+    EXPECT_EQ(gu.key_schema->hash, (std::vector<std::string>{"b"}));
+    EXPECT_TRUE(gu.key_schema->range.empty());
     ASSERT_TRUE(gu.projection.has_value());
     EXPECT_EQ(gu.projection->type, ProjectionType::all);
     EXPECT_FALSE(gu.billing.has_value());
@@ -272,6 +272,33 @@ TEST(AlterTableExec, CreateGsiWithOnDemandBilling) {
     ASSERT_TRUE(gu.billing->od.max_read_request_units.has_value());
     EXPECT_EQ(*gu.billing->od.max_read_request_units, 200);
     EXPECT_EQ(*gu.billing->od.max_write_request_units, 300);
+}
+
+TEST(AlterTableExec, CreateGsiMissingHashRejected) {
+    // The generalized key_schema grammar accepts a role list with no HASH role;
+    // ADD GSI must still name a partition key (reviewer S2, phase 4a).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table t (b number) create gsi g1 on (b range) projecting all;");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message, "GSI g1 must specify a partition (HASH) key.");
+    EXPECT_TRUE(client.update_table_requests().empty());
+}
+
+TEST(AlterTableExec, CreateCompositeGsiCaptured) {
+    // Composite GSI keys are allowed on ADD GSI (GSI-only feature, phase 4a).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "alter table t (a string, b number) create gsi g1 on ((a, b) hash) projecting all;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_table_requests().size(), 1u);
+    const auto& gu = client.update_table_requests()[0].gsi_updates[0];
+    ASSERT_TRUE(gu.key_schema.has_value());
+    EXPECT_EQ(gu.key_schema->hash, (std::vector<std::string>{"a", "b"}));
+    EXPECT_TRUE(gu.key_schema->range.empty());
 }
 
 TEST(AlterTableExec, DropGsiCarriesDropAction) {

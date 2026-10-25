@@ -48,14 +48,12 @@ private:
         return rv;
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/,
-                                                  const std::string& /*rk*/,
+    std::string do_query_key_condition_expression(const KeySchemaView& /*ks*/,
                                                   SymbolTable* /*st*/) override {
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& /*rk*/,
-                                           SymbolTable* st) override {
+    std::string do_query_filter_expression(const KeySchemaView& /*ks*/, SymbolTable* st) override {
         return do_serialize(st);
     }
 
@@ -65,8 +63,8 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        return m_lhs != pk && m_lhs != rk;
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        return !key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs);
     }
 
     std::string m_lhs;
@@ -91,14 +89,12 @@ private:
         return "contains(" + lhs + ", " + rhs + ")";
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/,
-                                                  const std::string& /*rk*/,
+    std::string do_query_key_condition_expression(const KeySchemaView& /*ks*/,
                                                   SymbolTable* /*st*/) override {
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& /*rk*/,
-                                           SymbolTable* st) override {
+    std::string do_query_filter_expression(const KeySchemaView& /*ks*/, SymbolTable* st) override {
         return do_serialize(st);
     }
 
@@ -108,8 +104,8 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        return m_lhs != pk && m_lhs != rk;
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        return !key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs);
     }
 
     std::string m_lhs;
@@ -134,14 +130,12 @@ private:
         return "attribute_type(" + lhs + ", " + type + ")";
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/,
-                                                  const std::string& /*rk*/,
+    std::string do_query_key_condition_expression(const KeySchemaView& /*ks*/,
                                                   SymbolTable* /*st*/) override {
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& /*rk*/,
-                                           SymbolTable* st) override {
+    std::string do_query_filter_expression(const KeySchemaView& /*ks*/, SymbolTable* st) override {
         return do_serialize(st);
     }
 
@@ -151,8 +145,8 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        return m_lhs != pk && m_lhs != rk;
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        return !key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs);
     }
 
     std::string m_lhs;
@@ -177,14 +171,12 @@ private:
         return "attribute_exists(" + lhs + ")";
     }
 
-    std::string do_query_key_condition_expression(const std::string& /*pk*/,
-                                                  const std::string& /*rk*/,
+    std::string do_query_key_condition_expression(const KeySchemaView& /*ks*/,
                                                   SymbolTable* /*st*/) override {
         return "";
     }
 
-    std::string do_query_filter_expression(const std::string& /*pk*/, const std::string& /*rk*/,
-                                           SymbolTable* st) override {
+    std::string do_query_filter_expression(const KeySchemaView& /*ks*/, SymbolTable* st) override {
         return do_serialize(st);
     }
 
@@ -194,8 +186,8 @@ private:
         return do_serialize(st);
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
-        return m_lhs != pk && m_lhs != rk;
+    bool do_query_safe(const KeySchemaView& ks) const override {
+        return !key_contains(ks.pk, m_lhs) && !key_contains(ks.sk, m_lhs);
     }
 
     std::string m_lhs;

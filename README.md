@@ -99,6 +99,27 @@ The engine drives this command set end to end against real DynamoDB:
 - `EXPLAIN <any supported command>` — prints the serialized API request(s)
   instead of executing.
 
+**Extensions (opt-in, additive):**
+
+- Multi-key (composite) Global Secondary Indexes — a GSI key role may name up
+  to 4 partition and 4 sort attributes. A role with 2+ attributes is written as
+  a parenthesized, comma-separated group followed by the role word; a
+  single-attribute key stays bare. List order is composite order. Example:
+
+  ```sql
+  CREATE TABLE t ( a string, b string, c string, d string, x string )
+    PRIMARY KEY ( x hash )
+    GSI ( g ON ( (a, b) hash, (c, d) range ) PROJECTING ALL );
+  ```
+
+  The same `(list) role` / bare-single syntax applies to `ALTER TABLE ... CREATE
+  GSI`. A `SELECT`/`UPDATE`/`DELETE` against such an index plans as a Query when
+  every partition-key attribute has an `=` condition and the sort-key conditions
+  form a gap-free left-to-right prefix (a range operator allowed only on the
+  last specified sort key); otherwise it degrades to a Scan. Composite keys are
+  a GSI-only feature: a composite key on a base-table primary key or an LSI is
+  rejected client-side with a clear error.
+
 **Deferred to a later phase:** global tables (`ALTER TABLE ... REPLICA`
 multi-region provisioning and the `ddbsh-gt-*` suite), which require a live
 multi-region setup. The parser may recognize other unimplemented syntax and

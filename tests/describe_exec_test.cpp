@@ -54,7 +54,7 @@ DescribeTableOut base_provisioned(const std::string& name) {
     DescribeTableOut t;
     t.table_name = name;
     t.table_status = "ACTIVE";
-    t.key_schema = TableKeySchema{"pk", "rk"};
+    t.key_schema = TableKeySchema{{"pk"}, {"rk"}};
     t.attribute_definitions = {AttributeDef{"pk", ScalarType::n},
                                AttributeDef{"rk", ScalarType::s}};
     t.creation_date_time = "2026-10-13T00:00:00Z";
@@ -102,7 +102,7 @@ TEST(Describe, OnDemandWithThroughputAndWarm) {
     DescribeTableOut t;
     t.table_name = "od";
     t.table_status = "ACTIVE";
-    t.key_schema = TableKeySchema{"a", ""};
+    t.key_schema = TableKeySchema{{"a"}, {}};
     t.attribute_definitions = {AttributeDef{"a", ScalarType::n}};
     t.creation_date_time = "2026-10-13T00:00:00Z";
     t.table_arn = "arn:od";
@@ -130,7 +130,7 @@ TEST(Describe, GsiProvisionedWithIncludeProjection) {
     DescribeTableOut t = base_provisioned("g");
     SecondaryIndexSchema gsi;
     gsi.index_name = "gsipka";
-    gsi.key_schema = TableKeySchema{"a", ""};
+    gsi.key_schema = TableKeySchema{{"a"}, {}};
     gsi.projection = Projection{ProjectionType::include, {"x", "y"}};
     gsi.projection_set = true;
     gsi.index_status = "ACTIVE";
@@ -156,7 +156,7 @@ TEST(Describe, GsiOnDemandMirrorsTableWithWarm) {
     DescribeTableOut t;
     t.table_name = "god";
     t.table_status = "ACTIVE";
-    t.key_schema = TableKeySchema{"pk", ""};
+    t.key_schema = TableKeySchema{{"pk"}, {}};
     t.attribute_definitions = {AttributeDef{"pk", ScalarType::n}, AttributeDef{"a", ScalarType::n}};
     t.creation_date_time = "2026-10-13T00:00:00Z";
     t.table_arn = "arn:god";
@@ -165,7 +165,7 @@ TEST(Describe, GsiOnDemandMirrorsTableWithWarm) {
     t.table_class_summary = "STANDARD";
     SecondaryIndexSchema gsi;
     gsi.index_name = "gsipka";
-    gsi.key_schema = TableKeySchema{"a", ""};
+    gsi.key_schema = TableKeySchema{{"a"}, {}};
     gsi.projection = Projection{ProjectionType::all, {}};
     gsi.projection_set = true;
     gsi.index_status = "ACTIVE";
@@ -193,8 +193,8 @@ TEST(Describe, MultipleLsisOnOneLine) {
     ddbsh::test::FakeDDBClient client;
     DescribeTableOut t = base_provisioned("l");
     t.local_secondary_indexes = {
-        SecondaryIndexSchema{.index_name = "l1", .key_schema = TableKeySchema{"pk", "c1"}},
-        SecondaryIndexSchema{.index_name = "l2", .key_schema = TableKeySchema{"pk", "c2"}},
+        SecondaryIndexSchema{.index_name = "l1", .key_schema = TableKeySchema{{"pk"}, {"c1"}}},
+        SecondaryIndexSchema{.index_name = "l2", .key_schema = TableKeySchema{{"pk"}, {"c2"}}},
     };
     client.set_table(t);
     ddbsh::Session session = make_session(client);

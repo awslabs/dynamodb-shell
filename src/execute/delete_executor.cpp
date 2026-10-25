@@ -55,8 +55,10 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     if (!base.has_value()) {
         return fail(base.error());
     }
-    const std::string base_pk = base->pk;
-    const std::string base_rk = base->rk;
+    const std::vector<std::string> base_pk_list = base->pk;
+    const std::vector<std::string> base_rk_list = base->rk;
+    const std::string base_pk = base_pk_list.empty() ? std::string() : base_pk_list[0];
+    const std::string base_rk = base_rk_list.empty() ? std::string() : base_rk_list[0];
     const Where* where = cmd.where.get();
 
     // Write template FIRST (first alias prefix), per D-2c-10.
@@ -74,9 +76,9 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     }
 
     // ---- single conditional delete (full base-table key) -------------------
-    if (where != nullptr && where->can_delete_item(base_pk, base_rk)) {
+    if (where != nullptr && where->can_delete_item(base_pk_list, base_rk_list)) {
         DeleteItemIn request = write_template;
-        request.key = key_of(where->get_gud_key(base_pk, base_rk));
+        request.key = key_of(where->get_gud_key(base_pk_list, base_rk_list));
         if (explain) {
             auto body = client.explain_request(request);
             if (!body.has_value()) {
@@ -111,24 +113,20 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     }
 
     // ---- bulk enumeration --------------------------------------------------
-    std::string key_pk = base_pk;
-    std::string key_rk = base_rk;
-    bool is_query = false;
+    std::optional<QueryKeyPlan> qplan;
     if (!cmd.index.has_value()) {
-        is_query = where != nullptr && where->can_query_table(base_pk, base_rk);
+        qplan = where != nullptr ? where->plan_query(base_pk_list, base_rk_list) : std::nullopt;
     } else {
         auto idx = get_key_schema(client, cmd.table, *cmd.index);
         if (!idx.has_value()) {
             return fail(idx.error());
         }
-        key_pk = idx->pk;
-        key_rk = idx->rk;
-        is_query = where != nullptr && where->can_query_index(key_pk, key_rk);
+        qplan = where != nullptr ? where->plan_query(idx->pk, idx->rk) : std::nullopt;
     }
 
     SymbolTable read_st(next_prefix());
-    WriteReadPlan read = build_write_read(cmd.table, cmd.index, where, is_query, key_pk, key_rk,
-                                          base_pk, base_rk, cmd.ratelimit.has_value(), read_st);
+    WriteReadPlan read = build_write_read(cmd.table, cmd.index, where, qplan, base_pk, base_rk,
+                                          cmd.ratelimit.has_value(), read_st);
 
     ExplainOutcome explain_out;
     BulkWriteOutcome acct{BulkWriteOutcome::Verb::del, 0, 0, 0, std::nullopt};

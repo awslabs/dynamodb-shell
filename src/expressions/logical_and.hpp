@@ -85,14 +85,6 @@ public:
         return ct;
     }
 
-    int count_query_rk(const std::string& lhs) const override {
-        int ct = 0;
-        for (const auto& child : m_exprlist) {
-            ct += child->count_query_rk(lhs);
-        }
-        return ct;
-    }
-
     KeyMap get_gud_key(const std::string& pk, const std::string& rk) const override {
         KeyMap rv;
         for (const auto& child : m_exprlist) {
@@ -119,14 +111,13 @@ private:
         return rv;
     }
 
-    std::string do_query_key_condition_expression(const std::string& pk, const std::string& rk,
+    std::string do_query_key_condition_expression(const KeySchemaView& ks,
                                                   SymbolTable* st) override {
-        return join(pk, rk, st, &LogicalExpression::query_key_condition_expression);
+        return join(ks, st, &LogicalExpression::query_key_condition_expression);
     }
 
-    std::string do_query_filter_expression(const std::string& pk, const std::string& rk,
-                                           SymbolTable* st) override {
-        return join(pk, rk, st, &LogicalExpression::query_filter_expression);
+    std::string do_query_filter_expression(const KeySchemaView& ks, SymbolTable* st) override {
+        return join(ks, st, &LogicalExpression::query_filter_expression);
     }
 
     std::string do_update_delete_condition_check(const std::string& pk, const std::string& rk,
@@ -149,9 +140,9 @@ private:
         return rv;
     }
 
-    bool do_query_safe(const std::string& pk, const std::string& rk) const override {
+    bool do_query_safe(const KeySchemaView& ks) const override {
         for (const auto& child : m_exprlist) {
-            if (!child->query_safe(pk, rk)) {
+            if (!child->query_safe(ks)) {
                 return false;
             }
         }
@@ -160,13 +151,12 @@ private:
 
     // Shared join for key-condition / filter: concatenate non-empty child
     // fragments with " AND ", wrapping in parens for a paren group.
-    using ChildExpr = std::string (LogicalExpression::*)(const std::string&, const std::string&,
-                                                         SymbolTable*);
-    std::string join(const std::string& pk, const std::string& rk, SymbolTable* st, ChildExpr fn) {
+    using ChildExpr = std::string (LogicalExpression::*)(const KeySchemaView&, SymbolTable*);
+    std::string join(const KeySchemaView& ks, SymbolTable* st, ChildExpr fn) {
         std::string rv;
         bool first = true;
         for (const auto& child : m_exprlist) {
-            std::string part = (child.get()->*fn)(pk, rk, st);
+            std::string part = (child.get()->*fn)(ks, st);
             if (!part.empty()) {
                 if (!first) {
                     rv += " AND ";

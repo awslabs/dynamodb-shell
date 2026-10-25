@@ -10,7 +10,7 @@ namespace ddbsh::engine {
 namespace {
 
 ResolvedKeySchema from_table_key(const TableKeySchema& ks) {
-    return ResolvedKeySchema{ks.hash_key, ks.range_key};
+    return ResolvedKeySchema{ks.hash_keys, ks.range_keys};
 }
 
 }  // namespace

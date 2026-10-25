@@ -40,11 +40,21 @@ std::string projection_type_name(ProjectionType t) {
 }
 
 /// Render a key schema as the original did (KeyTypeMapper name + " " + attr,
-/// joined by ", ", in [HASH, RANGE] order): "HASH pk" or "HASH pk, RANGE rk".
+/// joined by ", ", in [HASH…, RANGE…] order): "HASH pk" or
+/// "HASH pk, RANGE rk". A composite GSI key lists every element, e.g.
+/// "HASH a, HASH b, RANGE c, RANGE d" (phase 4a).
 std::string key_schema_text(const TableKeySchema& ks) {
-    std::string out = "HASH " + ks.hash_key;
-    if (!ks.range_key.empty()) {
-        out += ", RANGE " + ks.range_key;
+    std::string out;
+    bool first = true;
+    for (const auto& h : ks.hash_keys) {
+        out += (first ? "" : ", ");
+        first = false;
+        out += "HASH " + h;
+    }
+    for (const auto& r : ks.range_keys) {
+        out += (first ? "" : ", ");
+        first = false;
+        out += "RANGE " + r;
     }
     return out;
 }

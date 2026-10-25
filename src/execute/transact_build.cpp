@@ -41,11 +41,13 @@ Result<TransactGet> build_transact_get(const SelectCmd& cmd, IDDBClient& client,
     if (!schema.has_value()) {
         return fail(schema.error());  // hard error (e.g. table not found)
     }
-    const std::string& pk = schema->pk;
-    const std::string& rk = schema->rk;
+    const std::vector<std::string> pk_list = schema->pk;
+    const std::vector<std::string> rk_list = schema->rk;
+    const std::string pk = pk_list.empty() ? std::string() : pk_list[0];
+    const std::string rk = rk_list.empty() ? std::string() : rk_list[0];
     const Where* where = cmd.where.get();
 
-    if (cmd.index.has_value() || where == nullptr || !where->can_getitem(pk, rk)) {
+    if (cmd.index.has_value() || where == nullptr || !where->can_getitem(pk_list, rk_list)) {
         return fail(Errc::not_reducible_to_getitem, kSelectNotReducibleMessage);
     }
 
@@ -57,7 +59,7 @@ Result<TransactGet> build_transact_get(const SelectCmd& cmd, IDDBClient& client,
         get.projection_expression = serialize_projection(cmd.projection, st);
     }
     get.expression_attribute_names = names_of(st);
-    get.key = key_of(where->get_gud_key(pk, rk));
+    get.key = key_of(where->get_gud_key(pk_list, rk_list));
     return get;
 }
 
@@ -67,7 +69,7 @@ Result<std::vector<TransactPut>> build_transact_puts(
     if (!schema.has_value()) {
         return fail(schema.error());
     }
-    const std::string& pk = schema->pk;
+    const std::string pk = schema->pk.empty() ? std::string() : schema->pk[0];
 
     if (auto valid = validate_insert_rows(cmd); !valid.has_value()) {
         return fail(valid.error());
@@ -94,11 +96,13 @@ Result<TransactUpdate> build_transact_update(const UpdateCmd& cmd, IDDBClient& c
     if (!schema.has_value()) {
         return fail(schema.error());
     }
-    const std::string& pk = schema->pk;
-    const std::string& rk = schema->rk;
+    const std::vector<std::string> pk_list = schema->pk;
+    const std::vector<std::string> rk_list = schema->rk;
+    const std::string pk = pk_list.empty() ? std::string() : pk_list[0];
+    const std::string rk = rk_list.empty() ? std::string() : rk_list[0];
     const Where* where = cmd.where.get();
 
-    if (where == nullptr || !where->can_update_item(pk, rk)) {
+    if (where == nullptr || !where->can_update_item(pk_list, rk_list)) {
         // The original update.cpp txwrite() returns NULL with no log message.
         return fail(Errc::not_reducible_to_getitem, "");
     }
@@ -107,7 +111,7 @@ Result<TransactUpdate> build_transact_update(const UpdateCmd& cmd, IDDBClient& c
     UpdateItemIn req = make_update_request(cmd, pk, rk, st);
     TransactUpdate update;
     update.table_name = std::move(req.table_name);
-    update.key = key_of(where->get_gud_key(pk, rk));
+    update.key = key_of(where->get_gud_key(pk_list, rk_list));
     update.update_expression = std::move(req.update_expression);
     update.condition_expression = std::move(req.condition_expression);
     update.expression_attribute_names = std::move(req.expression_attribute_names);
@@ -122,11 +126,13 @@ Result<TransactDelete> build_transact_delete(const DeleteCmd& cmd, IDDBClient& c
     if (!schema.has_value()) {
         return fail(schema.error());
     }
-    const std::string& pk = schema->pk;
-    const std::string& rk = schema->rk;
+    const std::vector<std::string> pk_list = schema->pk;
+    const std::vector<std::string> rk_list = schema->rk;
+    const std::string pk = pk_list.empty() ? std::string() : pk_list[0];
+    const std::string rk = rk_list.empty() ? std::string() : rk_list[0];
     const Where* where = cmd.where.get();
 
-    if (where == nullptr || !where->can_delete_item(pk, rk)) {
+    if (where == nullptr || !where->can_delete_item(pk_list, rk_list)) {
         return fail(Errc::not_reducible_to_getitem, "");
     }
 
@@ -134,7 +140,7 @@ Result<TransactDelete> build_transact_delete(const DeleteCmd& cmd, IDDBClient& c
     DeleteItemIn req = make_delete_request(cmd, pk, rk, st);
     TransactDelete del;
     del.table_name = std::move(req.table_name);
-    del.key = key_of(where->get_gud_key(pk, rk));
+    del.key = key_of(where->get_gud_key(pk_list, rk_list));
     del.condition_expression = std::move(req.condition_expression);
     del.expression_attribute_names = std::move(req.expression_attribute_names);
     del.expression_attribute_values = std::move(req.expression_attribute_values);
@@ -158,8 +164,10 @@ Result<TransactConditionCheck> build_transact_condition_check(
     if (!schema.has_value()) {
         return fail(schema.error());
     }
-    const std::string& pk = schema->pk;
-    const std::string& rk = schema->rk;
+    const std::vector<std::string> pk_list = schema->pk;
+    const std::vector<std::string> rk_list = schema->rk;
+    const std::string pk = pk_list.empty() ? std::string() : pk_list[0];
+    const std::string rk = rk_list.empty() ? std::string() : rk_list[0];
     const Where* where = cmd.where.get();
     if (where == nullptr) {
         // The original would dereference a null where here; we abort safely
@@ -169,14 +177,14 @@ Result<TransactConditionCheck> build_transact_condition_check(
 
     TransactConditionCheck cc;
     cc.table_name = cmd.table;
-    cc.key = key_of(where->get_gud_key(pk, rk));
+    cc.key = key_of(where->get_gud_key(pk_list, rk_list));
 
     // Build the condition exactly as select_helper.cpp txwrite: the residual
     // filter, then ` AND `, then check_func() on either the pk (projection `*`)
     // or each projected attribute (concatenated with NO separator — the
     // original's quirk).
     SymbolTable st(next_prefix());
-    std::string filter = where->query_filter_expression(pk, rk, &st);
+    std::string filter = where->query_filter_expression(QueryKeyPlan{pk_list, rk_list}, &st);
     if (!filter.empty()) {
         filter += " AND ";
     }

@@ -237,7 +237,9 @@
 %type <ddbsh::engine::ScalarType> attribute_type
 %type <ddbsh::engine::AttributeDef> attribute_name_type
 %type <std::vector<ddbsh::engine::AttributeDef>> attribute_name_type_list
-%type <ddbsh::engine::KeySchema> key_schema primary_key
+%type <ddbsh::engine::KeySchema> key_schema primary_key key_role_list
+%type <ddbsh::engine::KeyRole> key_role
+%type <std::vector<std::string>> key_attr_group key_attr_name_list
 %type <ddbsh::engine::BillingModeAndThroughput> billing_mode_and_throughput
 %type <std::optional<ddbsh::engine::BillingModeAndThroughput>> optional_billing_mode_and_throughput
 %type <ddbsh::engine::WarmThroughput> warm_throughput
@@ -965,15 +967,48 @@ primary_key:
       K_PRIMARY K_KEY key_schema  { $$ = std::move($3); }
     ;
 
-/* The original always emits [HASH, RANGE] order regardless of the written
- * order; KeySchema{hash, optional range} captures that canonically. */
+/* A key role (HASH or RANGE) whose attribute list has 2+ members is written as
+ * a parenthesized, comma-separated group followed by the role word; a
+ * single-attribute key stays bare (today's form, unchanged). Roles may be
+ * written in any order (HASH-before-RANGE, or the legacy RANGE-before-HASH):
+ * the semantic action buckets each role into the KeySchema by role word
+ * (add_key_role), so the canonical [HASH…, RANGE…] emission order is
+ * reconstructed. ONE rule serves base-table primary keys, GSIs and LSIs; the
+ * GSI-only restriction on composite keys is enforced semantically by the
+ * executor's validation (validate_key_schemas in
+ * src/execute/create_table_executor.cpp), not the grammar, so it yields
+ * a clear error rather than a bare `syntax error` (phase 4a). */
 key_schema:
-      '(' string K_HASH ')'
-        { $$ = ddbsh::engine::KeySchema{std::move($2), std::nullopt}; }
-    | '(' string K_HASH ',' string K_RANGE ')'
-        { $$ = ddbsh::engine::KeySchema{std::move($2), std::move($5)}; }
-    | '(' string K_RANGE ',' string K_HASH ')'
-        { $$ = ddbsh::engine::KeySchema{std::move($5), std::move($2)}; }
+      '(' key_role_list ')'  { $$ = std::move($2); }
+    ;
+
+key_role_list:
+      key_role
+        {
+            ddbsh::engine::KeySchema ks;
+            ddbsh::add_key_role(ks, $1.is_hash, std::move($1.attrs));
+            $$ = std::move(ks);
+        }
+    | key_role_list ',' key_role
+        {
+            ddbsh::add_key_role($1, $3.is_hash, std::move($3.attrs));
+            $$ = std::move($1);
+        }
+    ;
+
+key_role:
+      key_attr_group K_HASH   { $$ = ddbsh::engine::KeyRole{true, std::move($1)}; }
+    | key_attr_group K_RANGE  { $$ = ddbsh::engine::KeyRole{false, std::move($1)}; }
+    ;
+
+key_attr_group:
+      string                      { $$ = std::vector<std::string>{std::move($1)}; }
+    | '(' key_attr_name_list ')'  { $$ = std::move($2); }
+    ;
+
+key_attr_name_list:
+      string                           { $$ = std::vector<std::string>{std::move($1)}; }
+    | key_attr_name_list ',' string    { $1.push_back(std::move($3)); $$ = std::move($1); }
     ;
 
 billing_mode_and_throughput:

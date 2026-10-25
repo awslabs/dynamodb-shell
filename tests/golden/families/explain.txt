@@ -39,6 +39,16 @@
 add_test(NAME iexp-create-table COMMAND ddbshtest -q -T ${RD}/iexp-create-table.exp -c "explain create table foo ( pk number, rk number ) primary key (pk hash, rk range);")
 add_test(NAME iexp-create-table-provisioned COMMAND ddbshtest -q -T ${RD}/iexp-create-table-provisioned.exp -c "explain create table foo ( pk number ) primary key (pk hash) billing mode provisioned ( 5 rcu, 10 wcu );")
 add_test(NAME iexp-create-table-gsi COMMAND ddbshtest -q -T ${RD}/iexp-create-table-gsi.exp -c "explain create table foo ( pk number, gsipk number ) primary key (pk hash) gsi (myidx on (gsipk hash) projecting all);")
+
+# Multi-key (composite) GSI keys (phase 4a, extension). Backend-free EXPLAIN
+# CREATE TABLE serialization: the GSI KeySchema lists every HASH element first
+# (composite order) then every RANGE element. The four composite shapes. These
+# goldens are AUTHORED (no oracle — the original ddbsh predates the feature) and
+# human-audited before merge (D-4a-10); EXPLAIN output is deterministic.
+add_test(NAME iexp-create-table-mpk-multi-pk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-multi-pk.exp -c "explain create table foo ( a number, b number, c number, x number ) primary key (x hash) gsi (g on ((a,b,c) hash) projecting all);")
+add_test(NAME iexp-create-table-mpk-multi-pk-sk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-multi-pk-sk.exp -c "explain create table foo ( a number, b number, c number, d number, x number ) primary key (x hash) gsi (g on ((a,b) hash, (c,d) range) projecting all);")
+add_test(NAME iexp-create-table-mpk-single-pk-multi-sk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-single-pk-multi-sk.exp -c "explain create table foo ( a number, b number, c number, x number ) primary key (x hash) gsi (g on (a hash, (b,c) range) projecting keys only);")
+add_test(NAME iexp-create-table-mpk-multi-pk-single-sk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-multi-pk-single-sk.exp -c "explain create table foo ( a number, b number, c number, z number, x number ) primary key (x hash) gsi (g on ((a,b) hash, c range) projecting include (z));")
 add_test(NAME iexp-drop-table COMMAND ddbshtest -q -T ${RD}/iexp-drop-table.exp -c "explain drop table foo;")
 add_test(NAME iexp-alter-billing-ondemand COMMAND ddbshtest -q -T ${RD}/iexp-alter-billing-ondemand.exp -c "explain alter table foo set billing mode on demand;")
 add_test(NAME iexp-alter-billing-provisioned COMMAND ddbshtest -q -T ${RD}/iexp-alter-billing-provisioned.exp -c "explain alter table foo set billing mode provisioned ( 5 rcu, 10 wcu );")

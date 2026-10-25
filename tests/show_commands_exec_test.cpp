@@ -220,7 +220,7 @@ TEST(ShowCreateTableExec, ProvisionedSingleKey) {
     td.table_name = "t";
     td.table_status = "ACTIVE";
     td.attribute_definitions = {{"id", ScalarType::s}, {"n", ScalarType::n}};
-    td.key_schema = {"id", ""};
+    td.key_schema = {{"id"}, {}};
     td.billing_mode_summary = "PROVISIONED";
     td.provisioned_read_capacity_units = 5;
     td.provisioned_write_capacity_units = 3;
@@ -242,11 +242,11 @@ TEST(ShowCreateTableExec, OnDemandWithGsiIncludeAndIfNotExistsNowait) {
     td.table_status = "ACTIVE";
     td.attribute_definitions = {
         {"pk", ScalarType::s}, {"sk", ScalarType::n}, {"gpk", ScalarType::s}};
-    td.key_schema = {"pk", "sk"};
+    td.key_schema = {{"pk"}, {"sk"}};
     td.billing_mode_summary = "PAY_PER_REQUEST";
     SecondaryIndexSchema gsi;
     gsi.index_name = "g1";
-    gsi.key_schema = {"gpk", ""};
+    gsi.key_schema = {{"gpk"}, {}};
     gsi.projection_set = true;
     gsi.projection.type = ProjectionType::include;
     gsi.projection.non_key_attributes = {"a", "b"};
@@ -264,6 +264,44 @@ TEST(ShowCreateTableExec, OnDemandWithGsiIncludeAndIfNotExistsNowait) {
         "TABLE CLASS STANDARD DELETION PROTECTION DISABLED\n");
 }
 
+TEST(ShowCreateTableExec, CompositeGsiKeyRoundTrips) {
+    // phase 4a: a composite GSI key renders as parenthesized SQLish groups that
+    // re-parse; a single-attribute group stays bare (no parentheses).
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut td;
+    td.table_name = "t";
+    td.table_status = "ACTIVE";
+    td.attribute_definitions = {{"x", ScalarType::s},
+                                {"a", ScalarType::s},
+                                {"b", ScalarType::s},
+                                {"c", ScalarType::s},
+                                {"d", ScalarType::s}};
+    td.key_schema = {{"x"}, {}};
+    td.billing_mode_summary = "PAY_PER_REQUEST";
+    SecondaryIndexSchema gsi;
+    gsi.index_name = "g";
+    gsi.key_schema.hash_keys = {"a", "b"};
+    gsi.key_schema.range_keys = {"c", "d"};
+    gsi.projection_set = true;
+    gsi.projection.type = ProjectionType::all;
+    td.global_secondary_indexes.push_back(gsi);
+    client.set_table(td);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("show create table t;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const std::string ddl = render(*out);
+    EXPECT_NE(
+        ddl.find("GSI (\"g\" ON ( (\"a\", \"b\") HASH, (\"c\", \"d\") RANGE ) PROJECTING ALL"),
+        std::string::npos)
+        << ddl;
+
+    // The reconstructed DDL must re-parse (round-trip).
+    auto reparsed = session.parse(ddl + ";");
+    EXPECT_TRUE(reparsed.has_value())
+        << "reparse failed: " << (reparsed.has_value() ? std::string{} : reparsed.error().message);
+}
+
 TEST(ShowCreateTableExec, StreamDisabledVsEnabled) {
     // Stream spec present but disabled => "STREAM DISABLED "; enabled => the
     // view type words (D-2f stream handling via stream_specification_set).
@@ -272,7 +310,7 @@ TEST(ShowCreateTableExec, StreamDisabledVsEnabled) {
     td.table_name = "t";
     td.table_status = "ACTIVE";
     td.attribute_definitions = {{"id", ScalarType::s}};
-    td.key_schema = {"id", ""};
+    td.key_schema = {{"id"}, {}};
     td.billing_mode_summary = "PAY_PER_REQUEST";
     td.stream_specification_set = true;
     td.stream_view_type = "NEW_AND_OLD_IMAGES";

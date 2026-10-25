@@ -37,13 +37,32 @@ struct AttributeDef {
     ScalarType type = ScalarType::s;
 };
 
-/// A key schema: a required HASH attribute and an optional RANGE attribute.
-/// The original always emits [HASH, RANGE] order regardless of written order
-/// (parser.y key_schema reorders), which this shape reproduces.
+/// A key schema: 1..4 partition (HASH) attributes and 0..4 sort (RANGE)
+/// attributes, in composite order (list order == composite order). A
+/// single-attribute key is a one-element `hash` with an empty `range` — the
+/// back-compatible shape the original always emitted in [HASH, RANGE] order.
+///
+/// Multi-attribute (composite) keys are a DynamoDB GSI feature (up to 4 HASH +
+/// 4 RANGE; phase 4a). Base-table primary keys and LSIs stay single HASH +
+/// optional RANGE — enforced by validation (validate_key_schemas in
+/// src/execute/create_table_executor.cpp), not by the type, so one
+/// representation serves all three positions.
 struct KeySchema {
-    std::string hash;
-    std::optional<std::string> range;
+    std::vector<std::string> hash;   ///< composite partition key, size 1..4
+    std::vector<std::string> range;  ///< composite sort key, size 0..4
 };
+
+/// Append the attributes of one parsed key role (HASH or RANGE group) into a
+/// KeySchema, preserving intra-group composite order. The grammar collects
+/// roles in any written order (HASH-before-RANGE or RANGE-before-HASH, legacy)
+/// and buckets each into the matching list, so the canonical [HASH…, RANGE…]
+/// emission order is reconstructed regardless of how it was written.
+inline void add_key_role(KeySchema& ks, bool is_hash, std::vector<std::string> attrs) {
+    std::vector<std::string>& dst = is_hash ? ks.hash : ks.range;
+    for (auto& attr : attrs) {
+        dst.push_back(std::move(attr));
+    }
+}
 
 /// Table/GSI billing mode (the original BillingMode).
 enum class BillingMode { pay_per_request, provisioned };
