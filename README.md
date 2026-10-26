@@ -63,6 +63,50 @@ Install the library (headers + lib) and CLI to a prefix:
 cmake --install build --prefix /path/to/prefix
 ```
 
+### macOS (Homebrew)
+
+Install the toolchain and dependencies with Homebrew:
+
+```sh
+brew install cmake bison flex readline zlib
+```
+
+Homebrew's `bison` and `flex` are **keg-only**: they are not symlinked onto your
+`PATH` because macOS ships its own (ancient) copies in `/usr/bin`. The system
+`bison` is version 2.3, which is too old for the C++ `lalr1.cc` parser skeleton
+this project uses, so you must make the Homebrew versions take precedence.
+
+Prepend them to your `PATH` for the current shell (and add to `~/.zshrc` to make
+it permanent):
+
+```sh
+# Apple Silicon (Homebrew prefix /opt/homebrew)
+export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
+
+# Intel (Homebrew prefix /usr/local)
+export PATH="/usr/local/opt/bison/bin:/usr/local/opt/flex/bin:$PATH"
+```
+
+Verify you are getting the Homebrew tools (bison ≥ 3.8, not 2.3):
+
+```sh
+which bison && bison --version
+which flex  && flex  --version
+```
+
+Alternatively, point CMake directly at the Homebrew binaries instead of changing
+your `PATH` (this also stops CMake from autodetecting `/usr/bin/bison`):
+
+```sh
+cmake -S . -B build \
+  -DBISON_EXECUTABLE="$(brew --prefix bison)/bin/bison" \
+  -DFLEX_EXECUTABLE="$(brew --prefix flex)/bin/flex"
+cmake --build build
+```
+
+If you installed the AWS SDK for C++ via Homebrew or to a custom prefix, add it
+to `CMAKE_PREFIX_PATH` as shown above (you can combine the flags).
+
 ## Supported commands
 
 The engine drives this command set end to end against real DynamoDB:
