@@ -736,6 +736,49 @@ TEST(AlterTableExec, CreateVsiVectorIndexSynonym) {
     EXPECT_TRUE(req.vector_index_updates[0].create.has_value());
 }
 
+TEST(AlterTableExec, CreateVsiNoSearchKeyNoParens) {
+    // B1 (phase 4b): a no-search-key vector index added via ALTER with NO
+    // attribute-list parens. No AttributeDefinitions are declared (the vector
+    // attribute is an L-of-N, not a scalar key type, D-4b-8); one Create
+    // VectorIndexUpdate carries the index.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "alter table docs create vsi embidx on embedding "
+        "dimensions 3 distance euclidean projecting all;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_table_requests().size(), 1u);
+    const auto& req = client.update_table_requests()[0];
+    EXPECT_TRUE(req.attribute_definitions.empty());
+    ASSERT_EQ(req.vector_index_updates.size(), 1u);
+    ASSERT_TRUE(req.vector_index_updates[0].create.has_value());
+    EXPECT_EQ(req.vector_index_updates[0].create->index_name, "embidx");
+    EXPECT_EQ(req.vector_index_updates[0].create->vector_attr, "embedding");
+    EXPECT_EQ(req.vector_index_updates[0].create->dimensions, 3);
+    EXPECT_TRUE(req.vector_index_updates[0].create->search_schema.empty());
+}
+
+TEST(AlterTableExec, CreateVsiNoSearchKeyEmptyParens) {
+    // B1 (phase 4b): the same no-search-key VSI add written with empty
+    // attribute-list parens `( )`. Equivalent to the no-parens arm.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "alter table docs ( ) create vector index embidx on embedding "
+        "dimensions 4 distance cosine projecting all;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_table_requests().size(), 1u);
+    const auto& req = client.update_table_requests()[0];
+    EXPECT_TRUE(req.attribute_definitions.empty());
+    ASSERT_EQ(req.vector_index_updates.size(), 1u);
+    ASSERT_TRUE(req.vector_index_updates[0].create.has_value());
+    EXPECT_EQ(req.vector_index_updates[0].create->index_name, "embidx");
+    EXPECT_EQ(req.vector_index_updates[0].create->dimensions, 4);
+    EXPECT_TRUE(req.vector_index_updates[0].create->search_schema.empty());
+}
+
 TEST(AlterTableExec, DropVsiCaptured) {
     ddbsh::test::FakeDDBClient client;
     ddbsh::Session session = make_session(client);

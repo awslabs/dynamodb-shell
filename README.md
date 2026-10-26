@@ -231,11 +231,20 @@ return a clear "not implemented in this build" error rather than a parse error.
   bracketed numeric list is the query vector (its length must equal the index
   `DIMENSIONS`), and a `WHERE` clause becomes the search filter (it may
   reference only the index's HASH / FILTER search-key attributes). Each result
-  row is shown with a trailing ` score <n>`:
+  row is shown with a trailing ` score <n>` (the similarity score the service
+  returns for that match):
 
   ```sql
   SELECT * FROM docs.embidx WHERE category = "news" NEAREST 5 TO [0.1, 0.2, 0.3];
   ```
+
+  **What a result row contains.** `SearchVectors` returns each match as the
+  index's *projected non-vector attributes* plus a similarity `Score`. It does
+  **not** echo back the stored vector itself — the vector is the index's search
+  key (potentially thousands of floats), so even `SELECT *` on a `PROJECTING
+  ALL` vector index does not show the vector attribute in the result rows. To
+  retrieve a stored vector, project its key and issue a follow-up point read:
+  `SELECT embedding FROM docs WHERE id = "d1";` (a GetItem on the base table).
 
 ## isql-mode input
 

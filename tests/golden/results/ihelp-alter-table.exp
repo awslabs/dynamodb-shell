@@ -23,10 +23,13 @@ ALTER TABLE - make changes to an existing table.
          e.g. CREATE GSI g ON ( (a, b) HASH, (c, d) RANGE ) PROJECTING ALL
    ALTER TABLE <name> DROP GSI <gsiname>
 
-   ALTER TABLE <name> ( attribute_name attribute_type [, ...] ) CREATE (VSI|VECTOR|VECTOR INDEX) vsi_spec
+   ALTER TABLE <name> [( attribute_name attribute_type [, ...] )] CREATE (VSI|VECTOR|VECTOR INDEX) vsi_spec
       vsi_spec := <name> ON vector_attribute DIMENSIONS n DISTANCE distance_function
                  [SEARCH KEY ( attr HASH|FILTER [, ...] )] index_projection
       distance_function := COSINE | EUCLIDEAN | DOT_PRODUCT
+      The leading attribute list declares the SEARCH KEY / projected key
+      attributes; it (with its parentheses) may be omitted, or given empty
+      as ( ), for a vector index with no SEARCH KEY.
       The 1.11.916 API supports create and drop only (no in-place update;
       modify a vector index by dropping and recreating it).
    ALTER TABLE <name> DROP (VSI|VECTOR|VECTOR INDEX) <vsiname>

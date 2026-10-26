@@ -772,6 +772,35 @@ alter_table_command:
             cmd.vector_index_updates.push_back(std::move(u));
             $$ = std::move(cmd);
         }
+    | K_ALTER K_TABLE string '(' ')' K_CREATE vsi_keyword vector_index
+        {
+            /* B1 (phase 4b): add a vector index with NO search-key / projected
+             * attributes to declare, written with empty attribute-list parens
+             * `( )`. A no-search-key VSI (e.g. PROJECTING ALL with no SEARCH
+             * KEY) declares no AttributeDefinitions: the vector attribute is an
+             * L-of-N, not a scalar key type (D-4b-8), so it must not appear in
+             * the attribute list. One Create VectorIndexUpdate carries the
+             * index; attribute_definitions stays empty. */
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            ddbsh::engine::VectorIndexUpdateDef u;
+            u.create = std::move($8);
+            cmd.vector_index_updates.push_back(std::move(u));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_CREATE vsi_keyword vector_index
+        {
+            /* B1 (phase 4b): add a no-search-key vector index written with no
+             * attribute-list parens at all. Equivalent to the empty-parens arm
+             * above; both reach a Create VectorIndexUpdate with an empty
+             * AttributeDefinitions set. */
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            ddbsh::engine::VectorIndexUpdateDef u;
+            u.create = std::move($6);
+            cmd.vector_index_updates.push_back(std::move(u));
+            $$ = std::move(cmd);
+        }
     | K_ALTER K_TABLE string K_DROP vsi_keyword string
         {
             /* DROP vsi|vector|vector index <name> (phase 4b). One Delete
