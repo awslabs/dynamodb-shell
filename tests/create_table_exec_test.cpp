@@ -248,6 +248,21 @@ TEST(CreateTableExec, GsiMissingHashRejected) {
     EXPECT_TRUE(client.create_requests().empty());
 }
 
+// ---- Composite GSI 4-attribute limit (phase 4b backlog, G1) ----------------
+
+TEST(CreateTableExec, CompositeGsiExceedingFourAttributesRejected) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table t ( x string, a string, b string, c string, d string, e string ) "
+        "primary key ( x hash ) "
+        "gsi ( g on ( (a, b, c, d, e) hash ) projecting all );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("4-attribute limit"), std::string::npos);
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
 // ---- Vector index (phase 4b) ----------------------------------------------
 
 TEST(CreateTableExec, VsiCaptured) {

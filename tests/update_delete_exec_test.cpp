@@ -413,4 +413,51 @@ TEST(UpdateExec, SetVectorAttributeRoundTripsToListOfNumbers) {
     EXPECT_EQ(v.list[1].s, "0.1");
 }
 
+// ---- Bulk write routed through a composite GSI (phase 4b backlog, G2) ------
+
+DescribeTableOut table_with_composite_gsi(const std::string& name) {
+    DescribeTableOut t;
+    t.table_name = name;
+    t.key_schema = ddbsh::test::make_key_schema("id");
+    SecondaryIndexSchema gsi;
+    gsi.index_name = "g";
+    gsi.key_schema.hash_keys = {"a", "b", "c"};
+    t.global_secondary_indexes.push_back(gsi);
+    return t;
+}
+
+TEST(UpdateExec, BulkUpdateThroughCompositeGsiEnumeratesViaIndex) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_composite_gsi("docs"));
+    // Enumerated rows carry the base-table key (id) so per-item UpdateItem can
+    // address the base table (the read is routed through the index).
+    client.set_items({key_row({{"id", "1"}}), key_row({{"id", "2"}})});
+    ddbsh::Session session = make_session(client);
+
+    // Full composite hash on the GSI => Query enumeration through index g.
+    auto out = session.run("update docs.g set score = 9 where a = 3 and b = 4 and c = 5;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "UPDATE (2 read, 2 modified, 0 ccf)\n");
+    EXPECT_EQ(client.read_calls(), 1);  // one Query page through the index
+    ASSERT_EQ(client.update_requests().size(), 2u);
+    // Per-item writes hit the base table, keyed by the enumerated base key.
+    EXPECT_EQ(client.update_requests()[0].table_name, "docs");
+    EXPECT_EQ(client.update_requests()[0].key[0].first, "id");
+}
+
+TEST(DeleteExec, BulkDeleteThroughCompositeGsiEnumeratesViaIndex) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_composite_gsi("docs"));
+    client.set_items({key_row({{"id", "1"}})});
+    ddbsh::Session session = make_session(client);
+
+    // Partial composite hash (a only) => Scan enumeration through index g.
+    auto out = session.run("delete from docs.g where a = 3;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "DELETE (1 read, 1 modified, 0 ccf)\n");
+    ASSERT_EQ(client.delete_item_requests().size(), 1u);
+    EXPECT_EQ(client.delete_item_requests()[0].table_name, "docs");
+    EXPECT_EQ(client.delete_item_requests()[0].key[0].first, "id");
+}
+
 }  // namespace

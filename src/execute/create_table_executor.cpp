@@ -49,6 +49,14 @@ Result<void> validate_key_schemas(const CreateTableCmd& cmd) {
             return fail(Errc::invalid_argument,
                         "GSI " + gsi.name + " must specify a partition (HASH) key.");
         }
+        // G1 (phase 4b backlog): DynamoDB allows up to 4 partition and 4 sort
+        // attributes on a composite GSI key; reject more client-side with a
+        // clear message instead of letting the service reject it.
+        if (gsi.key_schema.hash.size() > 4 || gsi.key_schema.range.size() > 4) {
+            return fail(Errc::invalid_argument,
+                        "GSI " + gsi.name +
+                            " key schema exceeds the 4-attribute limit per partition/sort key.");
+        }
     }
     // Vector-index validation (phase 4b, D-4b-8). The vector attribute is an
     // L-of-N, not a scalar key type, so it must NOT be declared in the top

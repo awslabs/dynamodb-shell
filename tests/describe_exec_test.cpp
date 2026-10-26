@@ -286,6 +286,28 @@ TEST(Describe, MissingTableIsError) {
     EXPECT_EQ(out.error().code, Errc::no_such_table);
 }
 
+// ---- Composite GSI read-back (phase 4b backlog, G3) ------------------------
+
+TEST(Describe, CompositeGsiKeySchemaReadBack) {
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut t = base_provisioned("docs");
+    SecondaryIndexSchema gsi;
+    gsi.index_name = "g";
+    gsi.key_schema.hash_keys = {"a", "b"};
+    gsi.key_schema.range_keys = {"c", "d"};
+    gsi.projection_set = true;
+    gsi.projection = Projection{ProjectionType::all, {}};
+    gsi.index_status = "ACTIVE";
+    t.global_secondary_indexes = {gsi};
+    client.set_table(t);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("describe docs;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_NE(render(*out).find("GSI g: ( HASH a, HASH b, RANGE c, RANGE d )"), std::string::npos)
+        << render(*out);
+}
+
 // ---- Vector index (phase 4b, D-4b-10) --------------------------------------
 
 TEST(Describe, VectorIndexSection) {

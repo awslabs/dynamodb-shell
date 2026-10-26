@@ -49,6 +49,13 @@ Result<void> validate_gsi_updates(const AlterTableCmd& cmd) {
             return fail(Errc::invalid_argument,
                         "GSI " + update.index_name + " must specify a partition (HASH) key.");
         }
+        // G1 (phase 4b backlog): enforce the 4-attribute composite-key limit.
+        if (update.action == GsiUpdate::Action::create && update.key_schema &&
+            (update.key_schema->hash.size() > 4 || update.key_schema->range.size() > 4)) {
+            return fail(Errc::invalid_argument,
+                        "GSI " + update.index_name +
+                            " key schema exceeds the 4-attribute limit per partition/sort key.");
+        }
     }
     return {};
 }
