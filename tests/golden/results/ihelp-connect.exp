@@ -1,0 +1,9 @@
+CONNECT - Connects to a DynamoDB region.
+
+   CONNECT <region>
+   CONNECT <region> WITH ENDPOINT <endpoint>
+
+   Here, <endpoint> is the URI for an internal (zeta) endpoint.
+   CONNECT us-east-1;
+   CONNECT us-east-1 with endpoint "https://..."
+

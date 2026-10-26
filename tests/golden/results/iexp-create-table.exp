@@ -1,0 +1,21 @@
+CreateTable({
+   "AttributeDefinitions":   [{
+         "AttributeName":   "pk",
+         "AttributeType":   "N"
+      }, {
+         "AttributeName":   "rk",
+         "AttributeType":   "N"
+      }],
+   "TableName":   "foo",
+   "KeySchema":   [{
+         "AttributeName":   "pk",
+         "KeyType":   "HASH"
+      }, {
+         "AttributeName":   "rk",
+         "KeyType":   "RANGE"
+      }],
+   "BillingMode":   "PAY_PER_REQUEST",
+   "TableClass":   "STANDARD",
+   "DeletionProtectionEnabled":   false
+})
+CREATE

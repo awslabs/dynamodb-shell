@@ -1,0 +1,9 @@
+CREATE
+UpdateTimeToLive({
+   "TableName":   "ddbsh_ttl",
+   "TimeToLiveSpecification":   {
+      "Enabled":   true,
+      "AttributeName":   "expiry"
+   }
+})
+DROP

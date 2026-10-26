@@ -30,7 +30,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake ../ddbsh/
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF
           make
 
       - name: Upload binaries as artifacts
@@ -39,5 +39,4 @@ jobs:
           name: binaries-linux
           path: |
                 build/ddbsh
-                build/ddbshtest
 

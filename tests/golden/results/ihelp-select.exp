@@ -1,0 +1,46 @@
+SELECT - Select item(s) from a table.
+
+SELECT [CONSISTENT] attribute_list | * FROM <table>[.<index>] [WHERE where_clause]
+       [vector_search] [return_consumed_capacity|ratelimit]]
+
+   vector_search := NEAREST <topk> TO [ number [, number ...] ]
+      When <index> is a vector index (VSI), NEAREST routes the SELECT to a
+      SearchVectors call: <topk> is the number of nearest items to return
+      and the bracketed numeric list is the query vector (its length must
+      equal the index DIMENSIONS). Each result row is shown with a trailing
+      ` score <n>` (the similarity score for the match). Each row carries
+      the attributes named in the projection plus the score; the stored
+      vector is omitted by `SELECT *` but IS returned when named in the
+      projection (SELECT id, embedding FROM t.vix NEAREST ...), in the same
+      SearchVectors call.
+      A WHERE clause becomes the search filter (it may
+      reference only the vector index's HASH / FILTER search-key attributes).
+      e.g. SELECT * FROM docs.embidx WHERE tenant = "acme" NEAREST 5 TO [0.1, 0.2, 0.3]
+
+   where_clause := logical_element [AND|OR logical_element]
+   logical_element := [NOT] logical_expression
+   logical_element := ( logical_element )
+   logical_element := lhs <comparison op> rhs
+   logical_element := lhs BETWEEN bound AND bound
+   logical_element := lhs IN ( list )
+   logical_element := ATTRIBUTE_EXISTS (attribute)
+   logical_element := ATTRIBUTE_TYPE (attribute, type)
+   logical_element := BEGINS WITH (attribute, prefix)
+   logical_element := CONTAINS (attribute, substring)
+   logical_element := SIZE (attribute) <comparison op> NUMBER
+
+   attribute_list - any attribute in the table, be it a scalar, boolean, null, list or map
+
+   return_consumed_capacity := RETURN CONSUMED CAPACITY INDEXES | RETURN CONSUMED CAPACITY TOTAL
+
+   ratelimit := WITH RATELIMIT ( RR RCU, WW WCU ) |
+                WITH RATELIMIT ( RR RCU ) |
+                WITH RATELIMIT ( WW WCU )
+
+       NOTES: 1. The WHERE clause for a NULL field uses the SQL syntax of <field> IS [NOT] NULL
+                 The equality operator cannot be used with NULL.
+              2. To reference list elements in projection or where clause uses 0 based indexing.
+              3. You can reference maps (dictionaries) in projection and where clause.
+              4. You can rate limit a select by specifying the optional ratelimit parameter.
+              5. You cannot specify both a rate limit and a return clause.
+

@@ -1,0 +1,5 @@
+DESCRIBE - Describe tables or backups.
+
+   See also DESCRIBE BACKUP
+   DESCRIBE provides metadata information about a table.
+

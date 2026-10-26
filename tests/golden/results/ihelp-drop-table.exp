@@ -1,0 +1,7 @@
+DROP TABLE - drops a DynamoDB table.
+
+   DROP TABLE [IF EXISTS] [NOWAIT] <table name>;
+
+   Drops a DynamoDB table. By default the operation blocks till the table is dropped, and will error
+   if the table does not exist. Use IF EXISTS and NO WAIT to change these behaviors.
+

@@ -1,0 +1,22 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Source-of-truth linting for the ddbsh reimplementation (coding-standards).
+# Scoped to our own sources; generated flex/bison output is excluded at the
+# build level. Kept deliberately modest for 2a and tightened per sub-phase.
+---
+Checks: >
+  -*,
+  bugprone-*,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-slicing,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-using,
+  performance-*,
+  readability-container-size-empty,
+  readability-redundant-*,
+  -bugprone-easily-swappable-parameters
+WarningsAsErrors: ''
+HeaderFilterRegex: '(include/ddbsh|src|cli)/.*'
+FormatStyle: file

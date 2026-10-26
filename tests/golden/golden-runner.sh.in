@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tests/golden/golden-runner.sh — the external golden harness (Option C, D23).
+#
+# This is REPLACEABLE TEST-RUNNER TOOLING, not compiled C++ and not part of the
+# engine or the CLI. It reproduces the original `ddbshtest` harness CLI surface
+# (-c / -f / -T / -R / -s / -q / -e / -d) by driving the SHIPPING `ddbsh`
+# binary as a subprocess with legitimate production flags, then doing the
+# capture -> (optional LC_ALL=C sort) -> diff against the golden `.exp` itself.
+# This lets the original golden family files (tests/*.txt) and golden results
+# (tests/results/*.exp) be reused VERBATIM against the new engine: the CTest
+# `add_test(... COMMAND ddbshtest ...)` lines resolve `ddbshtest` to this script
+# via an IMPORTED target in tests/golden/CMakeLists.txt (D24 family routing).
+#
+# Rationale (D23, human-approved "Option C"): the harness tests exactly what
+# ships (one input path, one build, no test-binary drift), keeps zero test logic
+# in the engine or CLI, and is trivially replaceable.
+#
+# The shell binary is resolved from DDBSH_SHELL_BIN (exported by
+# devtools/run-tests or the golden CMake project). DDBSH_SDK_LIB, if set, is
+# prepended to LD_LIBRARY_PATH so the AWS SDK shared libraries are found.
+#
+# Harness semantics (mirroring oracle ddbsh/main.cpp capture_output /
+# process_recording):
+#   * stdout and stderr of the shell are captured COMBINED (2>&1), matching the
+#     original's single-stream capture.
+#   * -q is ALWAYS passed to the shell (the original test binary defaults to
+#     quiet; the goldens contain no startup banner).
+#   * -e is forwarded when the test requests abort-on-error.
+#   * -s sorts the captured output with `LC_ALL=C sort` (data-plane results come
+#     back in DynamoDB hash order; EXPLAIN output is deterministic and unsorted).
+#   * -T <golden>: diff captured output against the golden; exit 0 on match,
+#     exit 1 on mismatch (CTest judges -T tests by exit code). If the golden is
+#     missing and DDBSH_RECORD_IF_MISSING is set, the captured output is written
+#     to the golden and the test passes (record-if-missing).
+#   * -R <record>: write the captured output to the record file (record mode).
+#   * no -T / -R: print the captured output to stdout so CTest's
+#     PASS_REGULAR_EXPRESSION / FAIL_REGULAR_EXPRESSION applies (used by the
+#     symbol-table family), and propagate the shell's exit code.
+
+set -u
+
+cmd=""
+file=""
+golden=""
+record=""
+have_cmd=0
+have_file=0
+sort_output=0
+abort_on_error=0
+# -q and -d are accepted for CLI-surface parity. -q is always forwarded (see
+# below); -d (debug) is a no-op in the current engine, so it is swallowed here.
+
+while getopts "c:f:T:R:sqed" opt; do
+    case "$opt" in
+        c) cmd="$OPTARG"; have_cmd=1 ;;
+        f) file="$OPTARG"; have_file=1 ;;
+        T) golden="$OPTARG" ;;
+        R) record="$OPTARG" ;;
+        s) sort_output=1 ;;
+        e) abort_on_error=1 ;;
+        q) : ;;  # always quiet; see shell_args below
+        d) : ;;  # debug no-op in the new engine
+        *) echo "golden-runner: bad option" >&2; exit 2 ;;
+    esac
+done
+
+# The shell binary and SDK library path are baked in at configure time
+# (configure_file substitutes @DDBSH_SHELL_BIN@ / @DDBSH_SDK_LIB@) so that a
+# standalone `ctest --test-dir <golden-build>` works with no environment setup.
+# Both are overridable at run time via the DDBSH_SHELL_BIN / DDBSH_SDK_LIB
+# environment variables (devtools/run-tests exports them).
+DEFAULT_SHELL_BIN="@DDBSH_SHELL_BIN@"
+DEFAULT_SDK_LIB="@DDBSH_SDK_LIB@"
+
+SHELL_BIN="${DDBSH_SHELL_BIN:-$DEFAULT_SHELL_BIN}"
+if [ -z "$SHELL_BIN" ] || [ ! -x "$SHELL_BIN" ]; then
+    echo "golden-runner: shell binary not set or not executable: '${SHELL_BIN}'" >&2
+    echo "  set DDBSH_SHELL_BIN or configure the golden project with -DDDBSH_SHELL_BIN=<path>" >&2
+    exit 2
+fi
+
+SDK_LIB="${DDBSH_SDK_LIB:-$DEFAULT_SDK_LIB}"
+if [ -n "$SDK_LIB" ]; then
+    export LD_LIBRARY_PATH="${SDK_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+# Assemble the shell invocation. -q suppresses the banner (goldens have none);
+# -e is forwarded only when the test asked for abort-on-error.
+shell_args=(-q)
+[ "$abort_on_error" -eq 1 ] && shell_args+=(-e)
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+if [ "$have_cmd" -eq 1 ]; then
+    "$SHELL_BIN" "${shell_args[@]}" -c "$cmd" >"$tmp" 2>&1
+    shell_rc=$?
+elif [ "$have_file" -eq 1 ]; then
+    "$SHELL_BIN" "${shell_args[@]}" -f "$file" >"$tmp" 2>&1
+    shell_rc=$?
+else
+    echo "golden-runner: neither -c nor -f supplied" >&2
+    exit 2
+fi
+
+# Optional deterministic sort of the captured output.
+if [ "$sort_output" -eq 1 ]; then
+    LC_ALL=C sort "$tmp" -o "$tmp"
+fi
+
+# -T: compare against the golden (CTest judges by exit code).
+if [ -n "$golden" ]; then
+    if [ ! -f "$golden" ]; then
+        if [ -n "${DDBSH_RECORD_IF_MISSING:-}" ]; then
+            cp "$tmp" "$golden"
+            echo "golden-runner: recorded missing golden $golden" >&2
+            exit 0
+        fi
+        echo "golden-runner: golden not found: $golden" >&2
+        exit 1
+    fi
+    if diff -u "$golden" "$tmp" >&2; then
+        exit 0
+    fi
+    echo "golden-runner: output did not match golden $golden" >&2
+    exit 1
+fi
+
+# -R: record mode.
+if [ -n "$record" ]; then
+    cp "$tmp" "$record"
+    exit 0
+fi
+
+# No -T / -R: emit the captured output so CTest's regex properties apply, and
+# propagate the shell's exit code.
+cat "$tmp"
+exit "$shell_rc"

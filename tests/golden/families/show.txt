@@ -1,0 +1,49 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# show.txt — golden-parity family for CONNECT, SHOW CREATE TABLE, SHOW LIMITS,
+# and SHOW VERSION (phase 2i, AI-2i-B / AI-2i-D; consolidated into the single
+# golden tree in phase 2j, AI-2j-5).
+#
+# All three were "native only" in the command-coverage matrix (design doc
+# 2026-10-21-P2i-01, AI-2i-A). Expected outputs recorded from the original
+# ddbsh (production `ddbsh-old` oracle, D-2i-2) where a byte-exact golden is
+# stable; SHOW LIMITS uses a structural regex (see below).
+#
+#   iconnect   — CONNECT "<region>": reconnects the client and prints the
+#                CONNECT status token. Deterministic (no live resource).
+#   isct       — SHOW CREATE TABLE: seeded (creates a real table, shows its
+#                reconstructed DDL, drops it, all in one -c). The reconstructed
+#                DDL carries no ARN/timestamp, so the golden is byte-exact and
+#                stable. Self-cleaning.
+#   ishow-limits — SHOW LIMITS: DescribeLimits returns account- and table-level
+#                capacity maxima plus the account's provisioned totals. Those
+#                numbers are account-specific and can drift (e.g. a concurrent
+#                provisioned table changes the totals), so a byte-exact oracle
+#                golden is not stable. Per the design's normalization directive,
+#                SHOW LIMITS is covered with a PASS_REGULAR_EXPRESSION asserting
+#                the report STRUCTURE (the fixed labels and the numeric fields),
+#                independent of the specific limit values.
+#
+# WARNING: isct creates and drops a REAL DynamoDB table (ddbsh_sct) per run.
+#
+# SHOW VERSION is a DELIBERATE, EXPECTED divergence from the oracle: the oracle
+# prints its own version ("ddbsh - version 0.8.1") and the reimplementation
+# prints ITS version ("ddbsh - version 0.9.x"). A byte-exact golden recorded
+# from the oracle could never match by design (design doc D-2i-3, SHOW VERSION
+# resolution #3). SHOW VERSION is therefore covered version-agnostically: the
+# test asserts the OUTPUT FORMAT (the fixed "ddbsh - version " prefix followed
+# by a dotted numeric version) via a PASS_REGULAR_EXPRESSION, independent of the
+# specific version number (arch §10: the version string drops trailing .0
+# segments).
+
+add_test(NAME ishow-version COMMAND ddbshtest -q -c "show version")
+set_property(TEST ishow-version PROPERTY PASS_REGULAR_EXPRESSION "ddbsh - version [0-9]+\\.[0-9]+(\\.[0-9]+)*")
+
+add_test(NAME iconnect COMMAND ddbshtest -q -T ${RD}/iconnect.exp -c "connect \"us-east-1\";")
+
+add_test(NAME isct COMMAND ddbshtest -q -T ${RD}/isct.exp -c "create table ddbsh_sct ( pk number, rk number ) primary key (pk hash, rk range); show create table ddbsh_sct; drop table ddbsh_sct;")
+
+add_test(NAME ishow-limits COMMAND ddbshtest -q -c "show limits")
+set_property(TEST ishow-limits PROPERTY PASS_REGULAR_EXPRESSION
+    "Region: .*\nAccount Max \\(RCU, WCU\\): [0-9]+, [0-9]+\nTable Max \\(RCU, WCU\\):  [0-9]+, [0-9]+\nTotal Tables \\(RCU, WCU\\): [0-9]+, [0-9]+\nTotal GSI \\(RCU, WCU\\): [0-9]+, [0-9]+\nTotal \\(RCU, WCU\\): [0-9]+, [0-9]+")

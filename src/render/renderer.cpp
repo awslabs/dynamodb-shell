@@ -1,0 +1,400 @@
+// Copyright 2026 ddbsh reimplementation contributors.
+// SPDX-License-Identifier: Apache-2.0
+//
+// renderer.cpp — byte-exact formatting of engine results.
+//
+// The Renderer owns ALL output formatting so byte-compat lives in one place
+// (P2a-03 §5). This implementation covers StatusOutcome / ReportOutcome /
+// EmptyOutcome, the error path, (W5) SelectOutcome, and (W5 part 2)
+// WriteOutcome — the item format
+// (alpha-sorted attributes, quote_if_required, TRUE/FALSE/NULL, the top-level
+// `: ` vs nested `:` asymmetry, lists/maps/empties), the
+// `SELECT (table, cu, rcu, wcu)` consumed-capacity line (arch §9), the per-row
+// INSERT/REPLACE status lines, and (W6) the EXPLAIN block
+// (ApiName({...}) per API call, explain_string 3-space indent / strip_newlines
+// compact form). Remaining write/report refinements land with their outcome
+// arms.
+
+#include "ddbsh/renderer.hpp"
+
+#include <algorithm>
+#include <cstring>
+#include <regex>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "ddbsh/value.hpp"
+
+namespace ddbsh::render {
+
+namespace {
+
+/// A status token renders as the token followed by a newline (arch §7/§9).
+std::string render_status(const StatusOutcome& s) {
+    return s.token + "\n";
+}
+
+/// A report renders its lines joined by newlines, each terminated by a
+/// newline (arch §9 multi-line reports).
+std::string render_report(const ReportOutcome& r) {
+    std::string out;
+    for (const auto& line : r.lines) {
+        out += line;
+        out += '\n';
+    }
+    return out;
+}
+
+// ---- SELECT item formatting (port of select_helper.cpp, arch §9) -----------
+
+/// A string renders bare unless it contains a space/tab/`,`/`:`/newline or any
+/// bracket/brace, in which case it is double-quoted (CSelectHelper::
+/// quote_if_required). strcspn returns the length of the leading run with none
+/// of those chars; if that run spans the whole string, no quoting is needed.
+std::string quote_if_required(const std::string& input) {
+    if (std::strcspn(input.c_str(), " \t,:\n[]{}") != input.size()) {
+        return "\"" + input + "\"";
+    }
+    return input;
+}
+
+/// Serialize one attribute Value (CSelectHelper::serialize_value). Nested maps
+/// use `:` with NO space after the key (contrast the top-level item `: `), and
+/// map keys are emitted alphabetically — the original iterated an Aws::Map
+/// (std::map, sorted); our ValueMap keeps source order, so we sort here.
+std::string serialize_value(const Value& v) {
+    switch (v.type) {
+        case Value::Type::S:
+            return quote_if_required(v.s);
+        case Value::Type::N:
+            return v.s;
+        case Value::Type::BOOL:
+            return v.boolean ? "TRUE" : "FALSE";
+        case Value::Type::NUL:
+            // A stored null attribute renders NULL (the original's "NOT NULL"
+            // branch is for the IS NOT NULL display path, not a stored value).
+            return "NULL";
+        case Value::Type::L: {
+            std::string out;
+            for (const auto& e : v.list) {
+                out += (out.empty() ? "[" : ", ") + serialize_value(e);
+            }
+            return out.empty() ? "[]" : out + "]";
+        }
+        case Value::Type::M: {
+            std::vector<const std::pair<std::string, Value>*> entries;
+            entries.reserve(v.map.size());
+            for (const auto& e : v.map) {
+                entries.push_back(&e);
+            }
+            std::sort(entries.begin(), entries.end(),
+                      [](const auto* a, const auto* b) { return a->first < b->first; });
+            std::string out;
+            for (const auto* e : entries) {
+                out += (out.empty() ? "{" : ", ") + quote_if_required(e->first) + ":" +
+                       serialize_value(e->second);
+            }
+            return out.empty() ? "{}" : out + "}";
+        }
+        default:
+            // Sets (SS/NS/BS) and binary (B) are not reachable via the in-scope
+            // commands; the original likewise rendered them "Unknown Type".
+            return "Unknown Type";
+    }
+}
+
+/// Render one item (CSelectHelper::show_item): `{name: value, ...}` with
+/// attribute names sorted alphabetically and the top-level `: ` separator.
+/// An empty item renders to the empty string (and is skipped by the caller).
+std::string show_item(const ItemRow& item) {
+    if (item.attributes.empty()) {
+        return {};
+    }
+    std::vector<const std::pair<std::string, Value>*> attrs;
+    attrs.reserve(item.attributes.size());
+    for (const auto& a : item.attributes) {
+        attrs.push_back(&a);
+    }
+    std::sort(attrs.begin(), attrs.end(),
+              [](const auto* a, const auto* b) { return a->first < b->first; });
+    std::string out;
+    for (const auto* a : attrs) {
+        out += (out.empty() ? "{" : ", ") + quote_if_required(a->first) + ": " +
+               serialize_value(a->second);
+    }
+    return out + "}";
+}
+
+/// Trim trailing zeros from a double's string form (util/trim_double.cpp): the
+/// consumed-capacity figures print without trailing `.000000`.
+std::string trim_double(const std::string& input) {
+    static const std::regex reg(R"(^([\d,]+)$|^([\d,]+)\.0*$|^([\d,]+\.[0-9]*?)0*$)");
+    return std::regex_replace(input, reg, "$1$2$3");
+}
+
+/// Format a totalized consumed-capacity figure as the `SELECT (...)` line
+/// (select.cpp display_consumed_capacity). Printed only when a table name and
+/// at least one capacity figure are set; each missing numeric field prints 0.
+std::string render_consumed_capacity(const ConsumedCapacity& cc) {
+    const bool any_capacity = cc.capacity_units.has_value() || cc.read_capacity_units.has_value() ||
+                              cc.write_capacity_units.has_value();
+    if (!cc.table_name.has_value() || !any_capacity) {
+        return {};
+    }
+    auto field = [](const std::optional<double>& v) {
+        return v.has_value() ? trim_double(std::to_string(*v)) : std::string{"0"};
+    };
+    std::string capacity = *cc.table_name;
+    capacity += ", " + field(cc.capacity_units);
+    capacity += ", " + field(cc.read_capacity_units);
+    capacity += ", " + field(cc.write_capacity_units);
+    return "SELECT (" + capacity + ")\n";
+}
+
+/// Format a SearchVectors similarity score (D-4b-6). trim_double trims trailing
+/// zeros but does not handle a leading '-' (DOT_PRODUCT scores can be
+/// negative), so the sign is split off and reapplied.
+std::string format_score(double score) {
+    std::string s = std::to_string(score);
+    if (!s.empty() && s[0] == '-') {
+        return "-" + trim_double(s.substr(1));
+    }
+    return trim_double(s);
+}
+
+std::string render_select(const SelectOutcome& s) {
+    std::string out;
+    for (const auto& item : s.items) {
+        std::string line = show_item(item);
+        if (!line.empty()) {
+            out += line;
+            out += '\n';
+        }
+    }
+    if (s.consumed_capacity.has_value()) {
+        out += render_consumed_capacity(*s.consumed_capacity);
+    }
+    return out;
+}
+
+/// A SearchVectors result renders one line per row — `show_item(item) score
+/// <n>` — with the score as a trailing annotation OUTSIDE the item braces so it
+/// never collides with a real attribute name (D-4b-6). Service order (==
+/// similarity order) is preserved. When the user asked for consumed capacity, a
+/// trailing vector-capacity summary line is appended.
+std::string render_vector_search(const VectorSearchOutcome& v) {
+    std::string out;
+    for (const auto& row : v.rows) {
+        std::string item = show_item(row.item);
+        if (item.empty()) {
+            out += "score " + format_score(row.score) + "\n";
+        } else {
+            out += item + " score " + format_score(row.score) + "\n";
+        }
+    }
+    if (v.vector_capacity.has_value()) {
+        const auto& vc = *v.vector_capacity;
+        auto field = [](const std::optional<double>& x) {
+            return x.has_value() ? trim_double(std::to_string(*x)) : std::string{"0"};
+        };
+        out += "SELECT (" + field(vc.vector_search_request_bytes) +
+               " vector search request bytes, " + field(vc.vector_write_request_bytes) +
+               " vector write request bytes)\n";
+    }
+    return out;
+}
+
+/// INSERT / REPLACE render one status token per row written, each on its own
+/// line (arch §7 — the original printf("%s\n", op) per PutItem). With RETURN
+/// VALUES, the row's line becomes `op: show_item(item)` instead — the status
+/// token is REPLACED by the verb+payload form, not supplemented (insert.cpp:
+/// `printf("%s: %s\n", op, i)`). `items` is either empty (no RV, the common
+/// case) or parallel to `tokens`.
+std::string render_write(const WriteOutcome& w) {
+    std::string out;
+    for (std::size_t i = 0; i < w.tokens.size(); ++i) {
+        if (i < w.items.size() && w.items[i].has_value()) {
+            out += w.tokens[i] + ": " + show_item(*w.items[i]) + "\n";
+        } else {
+            out += w.tokens[i] + "\n";
+        }
+    }
+    return out;
+}
+
+/// A bulk UPDATE/UPSERT/DELETE renders any RETURN VALUES payloads (one item
+/// per line) FIRST, then the `(n read, m modified, k ccf)` accounting line
+/// (arch §7). The items-then-status order matches the original's unsorted
+/// emission (items printed during the per-item loop, the status line after)
+/// and is `-s`-stable (`'U'`/`'D'` < `'{'`). The verb string matches the
+/// original: UPDATE / UPSERT / DELETE.
+std::string render_bulk_write(const BulkWriteOutcome& b) {
+    std::string out;
+    for (const auto& item : b.returned_items) {
+        out += show_item(item);
+        out += '\n';
+    }
+    const char* verb = b.verb == BulkWriteOutcome::Verb::update   ? "UPDATE"
+                       : b.verb == BulkWriteOutcome::Verb::upsert ? "UPSERT"
+                                                                  : "DELETE";
+    out += std::string(verb) + " (" + std::to_string(b.read) + " read, " +
+           std::to_string(b.modified) + " modified, " + std::to_string(b.ccf) + " ccf)\n";
+    return out;
+}
+
+// ---- EXPLAIN block formatting (port of util/strip_newlines.cpp) ------------
+
+/// explain_string: each tab -> 3 spaces. The AWS SDK's SerializePayload()
+/// emits tab-indented JSON (one tab per nesting level, a tab after each key's
+/// colon); replacing every tab with 3 spaces yields the pretty multi-line
+/// EXPLAIN block the goldens expect (`"Name":   "value"`, 3-space indent).
+std::string explain_string(const std::string& s) {
+    static const std::regex tabs("[\t]");
+    return std::regex_replace(s, tabs, "   ");
+}
+
+/// strip_newlines: collapse the SDK's pretty JSON onto a single line — a
+/// newline/CR plus any following tabs becomes one space, and a key's `:\t`
+/// becomes `: `. The original used this (not explain_string) for the
+/// DescribeTable and DescribeTimeToLive EXPLAIN blocks (describe_helper.cpp).
+/// The two regex passes and their order match the original exactly.
+std::string strip_newlines(const std::string& s) {
+    static const std::regex whitespace("[\n\r][\t]*");
+    static const std::regex colontab(":\t");
+    return std::regex_replace(std::regex_replace(s, whitespace, " "), colontab, ": ");
+}
+
+/// EXPLAIN renders each block as `ApiName(<formatted body>)\n` in call order,
+/// applying the per-block transform (pretty => explain_string, compact =>
+/// strip_newlines), then any trailing status token the original prints even in
+/// EXPLAIN mode (CREATE's "CREATE"). See ExplainOutcome.
+std::string render_explain(const ExplainOutcome& e) {
+    std::string out;
+    for (const auto& block : e.blocks) {
+        const std::string body = block.format == ExplainBlock::Format::compact
+                                     ? strip_newlines(block.body)
+                                     : explain_string(block.body);
+        out += block.api_name + "(" + body + ")\n";
+    }
+    if (e.trailing_status.has_value()) {
+        out += *e.trailing_status + "\n";
+    }
+    return out;
+}
+
+/// A transaction that did not return items renders its status token (`ABORT`)
+/// to STDOUT; its diagnostics go to STDERR via render_stderr (D-2d-6), not
+/// here. (Read-transaction success uses SelectOutcome; write success uses
+/// StatusOutcome{"COMMIT"}.)
+std::string render_transact(const TransactOutcome& t) {
+    return t.token + "\n";
+}
+
+/// A successful read transaction renders one line per Get response in request
+/// order (D-2d-8). Unlike render_select, which filters empty items, this emits
+/// a line for EVERY response — a miss renders as a blank line — reproducing the
+/// original's `printf("%s\n", show_item(item))` loop (show_item of an empty map
+/// is "", so a miss prints just "\n"). See TransactReadOutcome.
+std::string render_transact_read(const TransactReadOutcome& t) {
+    std::string out;
+    for (const auto& item : t.items) {
+        out += show_item(item);
+        out += '\n';
+    }
+    return out;
+}
+
+/// Dispatch one ExecOutcome to its formatter. A free function (not the member)
+/// so MultiOutcome can recurse into it for each of its parts.
+std::string render_outcome(const ExecOutcome& outcome) {
+    return std::visit(
+        [](const auto& payload) -> std::string {
+            using T = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<T, StatusOutcome>) {
+                return render_status(payload);
+            } else if constexpr (std::is_same_v<T, ReportOutcome>) {
+                return render_report(payload);
+            } else if constexpr (std::is_same_v<T, EmptyOutcome>) {
+                return {};
+            } else if constexpr (std::is_same_v<T, SelectOutcome>) {
+                return render_select(payload);
+            } else if constexpr (std::is_same_v<T, WriteOutcome>) {
+                return render_write(payload);
+            } else if constexpr (std::is_same_v<T, ExplainOutcome>) {
+                return render_explain(payload);
+            } else if constexpr (std::is_same_v<T, BulkWriteOutcome>) {
+                return render_bulk_write(payload);
+            } else if constexpr (std::is_same_v<T, TransactOutcome>) {
+                return render_transact(payload);
+            } else if constexpr (std::is_same_v<T, TransactReadOutcome>) {
+                return render_transact_read(payload);
+            } else if constexpr (std::is_same_v<T, VectorSearchOutcome>) {
+                return render_vector_search(payload);
+            } else if constexpr (std::is_same_v<T, MultiOutcome>) {
+                std::string out;
+                for (const auto& part : payload.parts) {
+                    out += render_outcome(part);
+                }
+                return out;
+            } else {
+                static_assert(sizeof(T) == 0, "unhandled ExecOutcome arm");
+            }
+        },
+        outcome);
+}
+
+/// The STDERR portion of an outcome. Only a TransactOutcome carries stderr
+/// data (its diagnostics, D-2d-6); every other arm returns the empty string.
+/// MultiOutcome recurses so a buffered multi-fragment statement still routes
+/// each fragment's diagnostics. Keeping this in the Renderer (not the CLI)
+/// keeps all formatting in one place and the CLI thin (tenet 3).
+std::string render_outcome_stderr(const ExecOutcome& outcome) {
+    return std::visit(
+        [](const auto& payload) -> std::string {
+            using T = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<T, StatusOutcome>) {
+                std::string out;
+                for (const auto& line : payload.diagnostics) {
+                    out += line;
+                    out += '\n';
+                }
+                return out;
+            } else if constexpr (std::is_same_v<T, TransactOutcome>) {
+                std::string out;
+                for (const auto& line : payload.diagnostics) {
+                    out += line;
+                    out += '\n';
+                }
+                return out;
+            } else if constexpr (std::is_same_v<T, MultiOutcome>) {
+                std::string out;
+                for (const auto& part : payload.parts) {
+                    out += render_outcome_stderr(part);
+                }
+                return out;
+            } else {
+                return {};
+            }
+        },
+        outcome);
+}
+
+}  // namespace
+
+std::string Renderer::render(const ExecOutcome& outcome) const {
+    return render_outcome(outcome);
+}
+
+std::string Renderer::render_stderr(const ExecOutcome& outcome) const {
+    return render_outcome_stderr(outcome);
+}
+
+std::string Renderer::render_error(const Error& error) const {
+    // Byte-exact user string (tenet 5); the CLI writes this to stderr. The
+    // per-Errc mapping to the original's exact strings is completed as each
+    // command family lands; the message field already carries that string.
+    return error.message + "\n";
+}
+
+}  // namespace ddbsh::render

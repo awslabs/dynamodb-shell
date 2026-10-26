@@ -1,0 +1,19 @@
+CreateTable({
+   "AttributeDefinitions":   [{
+         "AttributeName":   "pk",
+         "AttributeType":   "N"
+      }],
+   "TableName":   "foo",
+   "KeySchema":   [{
+         "AttributeName":   "pk",
+         "KeyType":   "HASH"
+      }],
+   "BillingMode":   "PROVISIONED",
+   "ProvisionedThroughput":   {
+      "ReadCapacityUnits":   5,
+      "WriteCapacityUnits":   10
+   },
+   "TableClass":   "STANDARD",
+   "DeletionProtectionEnabled":   false
+})
+CREATE

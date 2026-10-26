@@ -1,0 +1,17 @@
+BEGIN
+
+   BEGIN is used to start a DynamoDB transaction. A group of DML commands can be executed as a single transaction.
+   For example:
+      BEGIN;
+      SELECT * FROM TBL1 where <primary key condition>;
+      SELECT * FROM TBL2 where <primary key condition>;
+      COMMIT;
+
+      BEGIN;
+      UPDATE ...;
+      DELETE ...;
+      COMMIT;
+   This will perform the update and the delete as a single transaction.
+
+   Transactions are committed with a COMMIT, and can be canceled with a ROLLBACK.
+

@@ -1,0 +1,18 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Source-of-truth formatting for the ddbsh reimplementation (coding-standards).
+---
+Language: Cpp
+BasedOnStyle: Google
+Standard: Latest
+ColumnLimit: 100
+IndentWidth: 4
+AccessModifierOffset: -4
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve

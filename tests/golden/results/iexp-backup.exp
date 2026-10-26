@@ -1,0 +1,4 @@
+CreateBackup({
+   "TableName":   "foo",
+   "BackupName":   "mybackup"
+})

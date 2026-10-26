@@ -1,0 +1,6 @@
+SHOW TABLES - Provide a list of tables
+
+   SHOW TABLES [BRIEF] [LIKE <template>]
+      The template is a double quoted regular expression.
+      For example: SHOW TABLES LIKE "^bal.*"
+

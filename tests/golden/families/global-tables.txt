@@ -1,0 +1,70 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Global-tables family -- setup phase (arch §7/§11, phase-2j AI-2j-2).
+#
+# Exercises CONNECT-reconnect (B11) end to end: each statement is its own
+# `ddbshtest -c "connect <region>; <stmt>"` process, and the reconnection seam
+# (D-2j-10) must actually switch the client to <region> for the statement to
+# land there. The chain creates a table + GSI in the PRIMARY region (us-east-2),
+# adds a us-west-1 replica, and seeds two items in the primary.
+#
+# Replica provisioning and cross-region replication are eventually consistent
+# (minutes), so every control-plane step is followed by a bounded poll
+# (ddbsh-wait) that waits until the asserted state is actually reached -- no
+# fixed sleeps (the phase-2g discipline, extended region-aware for GT).
+#
+# Regions/account are human-fixed (D-2j-1): primary us-east-2, replica
+# us-west-1, single account via the default profile. Table name `gttest` does
+# not collide with the data families' tables.
+
+# Precondition: gttest must not already exist in the primary region. describe
+# fails (table not found) when clean; WILL_FAIL asserts that failure. A leftover
+# table from a crashed prior run trips this guard instead of silently reusing it.
+add_test(NAME ddbsh-gt-setup-check COMMAND ddbshtest -c "connect us-east-2; describe gttest;")
+set_property(TEST ddbsh-gt-setup-check PROPERTY WILL_FAIL TRUE)
+
+# Create the table + GSI in the primary region (CREATE waits for TableStatus
+# ACTIVE; the settle poll additionally waits for the GSI to finish backfilling,
+# which is required before a replica can be added).
+add_test(NAME ddbsh-gt-setup-mktable COMMAND ddbshtest -c "connect us-east-2; create table gttest ( a number, b number ) primary key (a hash) gsi ( gsi1 on ( b hash ) projecting all );")
+add_test(NAME ddbsh-gt-setup-settle1 COMMAND ${GOLDEN_DIR}/ddbsh-wait table-settled gttest us-east-2)
+
+# Add the us-west-1 replica, then wait until it reports ACTIVE from the primary
+# region's DescribeTable and the table has settled back to ACTIVE.
+add_test(NAME ddbsh-gt-setup-mkreplica1 COMMAND ddbshtest -c "connect us-east-2; alter table gttest add replica us-west-1;")
+add_test(NAME ddbsh-gt-setup-replica-active COMMAND ${GOLDEN_DIR}/ddbsh-wait replica-active gttest us-east-2 us-west-1)
+add_test(NAME ddbsh-gt-setup-settle2 COMMAND ${GOLDEN_DIR}/ddbsh-wait table-settled gttest us-east-2)
+
+# Seed two items in the primary region; replication to us-west-1 is awaited in
+# the check phase (ddbsh-gt-check.txt).
+add_test(NAME ddbsh-gt-setup-insert1 COMMAND ddbshtest -c "connect us-east-2; insert into gttest (a, b) values ( 3, 4 ), (4, 5);")
+
+# --- check phase (arch §7/§11) ----------------------------------------------
+# Reads the replica region (us-west-1) and asserts the two items seeded in the
+# primary (us-east-2) replicated through. This is the real-multi-region
+# functional pin of CONNECT-reconnect (B11): the SELECT only returns the items
+# if `connect us-west-1` actually switched the client to the replica region.
+#
+# Replication is eventually consistent, so a COUNT-scan poll in us-west-1 waits
+# until both items are present before the assertion runs; this absorbs the
+# timing non-determinism while keeping the content deterministic. The read is
+# sorted (-s) because a scan returns items in DynamoDB hash order; the golden's
+# content already matches the sorted order (CONNECT sorts before the `{`-rows).
+
+add_test(NAME ddbsh-gt-check-wait COMMAND ${GOLDEN_DIR}/ddbsh-wait scan-count gttest us-west-1 2)
+add_test(NAME ddbsh-gt-check-1 COMMAND ddbshtest -q -s -c "connect us-west-1; select * from gttest" -T ${RD}/ddbsh-gt-check-1.exp)
+
+# --- completion/cleanup phase (arch §7/§11) ---------------------------------
+# Drops the us-west-1 replica, waits until it is FULLY removed from the
+# primary's replica list (a DROP REPLICA is asynchronous -- the table returns
+# to ACTIVE while the replica is still DELETING; DROP TABLE while the replica is
+# mid-deletion is rejected by DynamoDB's global-tables source-region guard),
+# then drops the now-single-region table (DROP waits for it to be gone).
+# Registered last in the family so the resources exist for the check phase; the
+# family is self-contained (its own table/regions), independent of the data
+# families' test-cleanup.
+
+add_test(NAME ddbsh-gt-drop-replica COMMAND ddbshtest -c "connect us-east-2; alter table gttest drop replica us-west-1;")
+add_test(NAME ddbsh-gt-drop-replica-wait COMMAND ${GOLDEN_DIR}/ddbsh-wait replica-gone gttest us-east-2 us-west-1)
+add_test(NAME ddbsh-gt-completion-cleanup COMMAND ddbshtest -c "connect us-east-2; drop table gttest;")

@@ -1,0 +1,56 @@
+ALTER TABLE - make changes to an existing table.
+
+   ALTER TABLE <name> SET billing_mode_and_throughput [warm_throughput]
+      billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)
+      provisioned := ( RR RCU, WW WCU )
+
+   ALTER TABLE <name> SET warm_throughput
+
+   ALTER TABLE <name> SET table_class
+      table_class := TABLE CLASS STANDARD | TABLE CLASS INFREQUENT ACCESS
+
+   ALTER TABLE <name> SET streams
+      streams := STREAM ( stream_type ) | STREAM DISABLED
+      stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES
+
+   ALTER TABLE <name> ( attribute_name attribute_type [, ...] ) CREATE GSI create_gsi_spec
+      create_gsi_spec := <name> ON index_key_schema index_projection [billing_mode_and_throughput]
+      index_key_schema := ( key_role [, key_role] )
+      key_role := key_attribute HASH | key_attribute RANGE
+      key_attribute := attribute_name | ( attribute_name [, attribute_name ...] )
+         A parenthesized group is a composite (multi-part) GSI HASH/RANGE key
+         (up to 4 attributes per role),
+         e.g. CREATE GSI g ON ( (a, b) HASH, (c, d) RANGE ) PROJECTING ALL
+   ALTER TABLE <name> DROP GSI <gsiname>
+
+   ALTER TABLE <name> [( attribute_name attribute_type [, ...] )] CREATE (VSI|VECTOR|VECTOR INDEX) vsi_spec
+      vsi_spec := <name> ON vector_attribute DIMENSIONS n DISTANCE distance_function
+                 [SEARCH KEY ( attr HASH|FILTER [, ...] )] index_projection
+      distance_function := COSINE | EUCLIDEAN | DOT_PRODUCT
+      The leading attribute list declares the SEARCH KEY / projected key
+      attributes; it (with its parentheses) may be omitted, or given empty
+      as ( ), for a vector index with no SEARCH KEY.
+      The 1.11.916 API supports create and drop only (no in-place update;
+      modify a vector index by dropping and recreating it).
+   ALTER TABLE <name> DROP (VSI|VECTOR|VECTOR INDEX) <vsiname>
+
+   ALTER TABLE <name> SET billing_mode_and_throughput UPDATE GSI ( gsi_update [, ...] )
+      gsi_update := <gsiname> SET billing_mode_and_throughput
+      gsi_update := <gsiname> SET warm_throughput
+
+   ALTER TABLE <name> UPDATE GSI ( gsi_update [, ...] )
+
+   ALTER TABLE <name> SET TTL DISABLED
+
+   ALTER TABLE <name> SET TTL ( attribute_name )
+
+   ALTER TABLE <name> SET PITR ENABLED
+
+   ALTER TABLE <name> SET PITR DISABLED
+
+   ALTER TABLE <name> ADD REPLICA <region> [replica_definition]
+   ALTER TABLE <name> UPDATE REPLICA <region> replica_definition
+   ALTER TABLE <name> DROP REPLICA <region>
+   ALTER TABLE <name> SET DELETION PROTECTION [ENABLED|DISABLED]
+   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]
+   warm_throughput := WARM THROUGHPUT ( RR RCU, WW WCU )

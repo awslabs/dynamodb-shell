@@ -1,0 +1,6 @@
+UpdateContinuousBackupsRequest({
+   "TableName":   "foo",
+   "PointInTimeRecoverySpecification":   {
+      "PointInTimeRecoveryEnabled":   true
+   }
+})

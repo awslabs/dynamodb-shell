@@ -1,0 +1,104 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# explain.txt — golden-parity family for the EXPLAIN forms of the DDL, backup,
+# and restore commands plus the seeded EXPLAIN INSERT/REPLACE/TTL forms (phase
+# 2i, AI-2i-B; consolidated into the single golden tree in phase 2j, AI-2j-5).
+#
+# The original ddbsh never golden-tested these EXPLAIN forms. Per the command-
+# coverage matrix (design doc 2026-10-21-P2i-01, AI-2i-A), `EXPLAIN <cmd>` is a
+# distinct command from `<cmd>` (D-2i-3) and is covered separately. These are
+# the EXPLAIN forms whose serialized request is deterministic and backend-free
+# (pure request serialization — no DescribeTable / DescribeTTL probe is needed
+# to plan them), so they produce a stable golden with no live resources and no
+# normalization:
+#
+#   EXPLAIN CREATE TABLE  (on-demand default, provisioned, with a GSI)
+#   EXPLAIN DROP TABLE
+#   EXPLAIN ALTER TABLE   (billing mode on-demand / provisioned, PITR on/off)
+#   EXPLAIN BACKUP TABLE ... CALLED
+#   EXPLAIN DROP BACKUP
+#   EXPLAIN DESCRIBE BACKUP
+#   EXPLAIN RESTORE TABLE ... FROM BACKUP
+#   EXPLAIN RESTORE TABLE ... FROM ... TO PITR
+#
+# The expected outputs were RECORDED FROM THE ORIGINAL ddbsh (the production
+# `ddbsh-old` oracle binary, driven through the golden harness, D-2i-2) and are
+# reproduced byte-for-byte by the reimplementation. EXPLAIN output is
+# deterministic (no sort, no -s).
+#
+# EXPLAIN INSERT / EXPLAIN REPLACE are NOT here: their planner resolves the
+# table key schema via DescribeTable (same as EXPLAIN SELECT, arch §11), so they
+# need a seeded table and live in a seeded family. EXPLAIN SELECT /
+# EXPLAIN UPDATE / EXPLAIN DELETE / EXPLAIN transaction are already covered by
+# the isel-/iut-/delete/itxt- families.
+#
+# ${RD} is the single golden results dir (tests/golden/results), set by
+# tests/golden/CMakeLists.txt.
+
+add_test(NAME iexp-create-table COMMAND ddbshtest -q -T ${RD}/iexp-create-table.exp -c "explain create table foo ( pk number, rk number ) primary key (pk hash, rk range);")
+add_test(NAME iexp-create-table-provisioned COMMAND ddbshtest -q -T ${RD}/iexp-create-table-provisioned.exp -c "explain create table foo ( pk number ) primary key (pk hash) billing mode provisioned ( 5 rcu, 10 wcu );")
+add_test(NAME iexp-create-table-gsi COMMAND ddbshtest -q -T ${RD}/iexp-create-table-gsi.exp -c "explain create table foo ( pk number, gsipk number ) primary key (pk hash) gsi (myidx on (gsipk hash) projecting all);")
+
+# Multi-key (composite) GSI keys (phase 4a, extension). Backend-free EXPLAIN
+# CREATE TABLE serialization: the GSI KeySchema lists every HASH element first
+# (composite order) then every RANGE element. The four composite shapes. These
+# goldens are AUTHORED (no oracle — the original ddbsh predates the feature) and
+# human-audited before merge (D-4a-10); EXPLAIN output is deterministic.
+add_test(NAME iexp-create-table-mpk-multi-pk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-multi-pk.exp -c "explain create table foo ( a number, b number, c number, x number ) primary key (x hash) gsi (g on ((a,b,c) hash) projecting all);")
+add_test(NAME iexp-create-table-mpk-multi-pk-sk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-multi-pk-sk.exp -c "explain create table foo ( a number, b number, c number, d number, x number ) primary key (x hash) gsi (g on ((a,b) hash, (c,d) range) projecting all);")
+add_test(NAME iexp-create-table-mpk-single-pk-multi-sk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-single-pk-multi-sk.exp -c "explain create table foo ( a number, b number, c number, x number ) primary key (x hash) gsi (g on (a hash, (b,c) range) projecting keys only);")
+add_test(NAME iexp-create-table-mpk-multi-pk-single-sk COMMAND ddbshtest -q -T ${RD}/iexp-create-table-mpk-multi-pk-single-sk.exp -c "explain create table foo ( a number, b number, c number, z number, x number ) primary key (x hash) gsi (g on ((a,b) hash, c range) projecting include (z));")
+add_test(NAME iexp-drop-table COMMAND ddbshtest -q -T ${RD}/iexp-drop-table.exp -c "explain drop table foo;")
+add_test(NAME iexp-alter-billing-ondemand COMMAND ddbshtest -q -T ${RD}/iexp-alter-billing-ondemand.exp -c "explain alter table foo set billing mode on demand;")
+add_test(NAME iexp-alter-billing-provisioned COMMAND ddbshtest -q -T ${RD}/iexp-alter-billing-provisioned.exp -c "explain alter table foo set billing mode provisioned ( 5 rcu, 10 wcu );")
+add_test(NAME iexp-alter-pitr-enabled COMMAND ddbshtest -q -T ${RD}/iexp-alter-pitr-enabled.exp -c "explain alter table foo set pitr enabled;")
+add_test(NAME iexp-alter-pitr-disabled COMMAND ddbshtest -q -T ${RD}/iexp-alter-pitr-disabled.exp -c "explain alter table foo set pitr disabled;")
+add_test(NAME iexp-backup COMMAND ddbshtest -q -T ${RD}/iexp-backup.exp -c "explain backup table foo called \"mybackup\";")
+add_test(NAME iexp-drop-backup COMMAND ddbshtest -q -T ${RD}/iexp-drop-backup.exp -c "explain drop backup \"arn:aws:dynamodb:us-east-1:632195519165:table/foo/backup/01234567890123-abcdef00\";")
+add_test(NAME iexp-describe-backup COMMAND ddbshtest -q -T ${RD}/iexp-describe-backup.exp -c "explain describe backup \"arn:aws:dynamodb:us-east-1:632195519165:table/foo/backup/01234567890123-abcdef00\";")
+add_test(NAME iexp-restore-backup COMMAND ddbshtest -q -T ${RD}/iexp-restore-backup.exp -c "explain restore table bar from backup \"arn:aws:dynamodb:us-east-1:632195519165:table/foo/backup/01234567890123-abcdef00\";")
+add_test(NAME iexp-restore-pitr COMMAND ddbshtest -q -T ${RD}/iexp-restore-pitr.exp -c "explain restore table bar from foo to pitr \"2024-01-01T00:00:00Z\";")
+
+# --- seeded EXPLAIN forms (INSERT / REPLACE / ALTER ... SET TTL) -------------
+# Unlike the pure-serialization EXPLAIN DDL forms above, these EXPLAIN forms
+# probe the live table before serializing:
+#   * INSERT / REPLACE resolve the table's key schema via DescribeTable to build
+#     the PutItem (INSERT adds the attribute_not_exists(#pk) condition; arch §7,
+#     §8) -- the same reason EXPLAIN SELECT is not backend-free (arch §11).
+#   * ALTER ... SET TTL runs a DescribeTTL probe (arch §7); EXPLAIN prints only
+#     the resulting UpdateTimeToLive serialization.
+# So these tests are SEEDED: each -c creates a real table (CREATE waits for
+# ACTIVE), runs the EXPLAIN form(s), then drops it (self-contained lifecycle).
+#
+# WARNING: creates and drops REAL DynamoDB tables (ddbsh_iexp_insert,
+# ddbsh_ttl) on each run (us-east-1). Self-cleaning.
+
+add_test(NAME iexp-insert-replace COMMAND ddbshtest -q -T ${RD}/iexp-insert-replace.exp -c "create table ddbsh_iexp_insert ( pk number ) primary key (pk hash); explain insert into ddbsh_iexp_insert (pk, a) values (1, 2); explain replace into ddbsh_iexp_insert (pk, a) values (1, 2); drop table ddbsh_iexp_insert;")
+
+add_test(NAME iexp-alter-ttl COMMAND ddbshtest -q -T ${RD}/iexp-alter-ttl.exp -c "create table ddbsh_ttl ( pk number ) primary key (pk hash); explain alter table ddbsh_ttl set ttl (expiry); drop table ddbsh_ttl;")
+
+# --- seeded EXPLAIN SELECT on a composite (multi-part) GSI (phase 4a, P4a-02
+# item 6) ---------------------------------------------------------------------
+# EXPLAIN SELECT is NOT backend-free: the planner resolves the index key schema
+# via DescribeTable (arch §11), so this is SEEDED — it creates a real table with
+# a composite GSI (CREATE waits for ACTIVE), runs the four EXPLAIN SELECT forms,
+# then drops it (self-contained lifecycle). The GSI `firstgsi` has a composite
+# HASH (a, b, c) and composite RANGE (d, e).
+#
+# The Query-vs-Scan matrix this pins (design doc 2026-10-25-P4a-02 item 5): a
+# Query requires `=` on EVERY partition-key component; sort-key conditions form
+# a gap-free left-to-right prefix. A missing hash component demotes to Scan +
+# FilterExpression.
+#   a = 3                              -> Scan  (partial composite hash)
+#   a = 3 and b = 4                    -> Scan  (partial composite hash)
+#   a = 3 and b = 4 and c = 5          -> Query (full composite hash)
+#   a = 3 and b = 4 and c = 5 and d = 6-> Query (full hash + leading range comp)
+#
+# These goldens are AUTHORED (the original ddbsh predates composite GSI keys)
+# and human-audited before merge (D-4a-10 / D-2i-5). EXPLAIN output is
+# deterministic (no -s).
+#
+# WARNING: creates and drops a REAL DynamoDB table (ddbsh_mpgsi_sel) on each run
+# (us-east-1). Self-cleaning.
+add_test(NAME iexp-select-mpgsi COMMAND ddbshtest -q -T ${RD}/iexp-select-mpgsi.exp -c "create table ddbsh_mpgsi_sel ( a number, b number, c number, d number, e number ) primary key ( a hash ) gsi ( firstgsi on ( (a, b, c) hash, (d, e) range ) projecting all ); explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3; explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3 and b = 4; explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3 and b = 4 and c = 5; explain select * from ddbsh_mpgsi_sel.firstgsi where a = 3 and b = 4 and c = 5 and d = 6; drop table ddbsh_mpgsi_sel;")

@@ -1,0 +1,5 @@
+RestoreTableToPointInTimeRequest({
+   "SourceTableName":   "foo",
+   "TargetTableName":   "bar",
+   "RestoreDateTime":   1704067200
+})

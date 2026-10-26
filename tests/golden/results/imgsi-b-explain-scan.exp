@@ -1,0 +1,15 @@
+Scan({
+   "TableName":   "ddbsh_mgsi_b",
+   "IndexName":   "gidx",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "10"
+      }
+   },
+   "ConsistentRead":   false
+})

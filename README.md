@@ -16,6 +16,365 @@ It is strongly advised that you understand what ddbsh is doing, and experiment w
 
 ---
 
+# Reimplementation (C++23 library + shell)
+
+This repository is being reimplemented as a **consumable engine library**
+(`libddbsh`) with the `ddbsh` command as a thin line-reader wrapper
+around it. The engine — lexer, parser, command model, expression engine, SQL→API
+planner, execution behind an injected client, and output/EXPLAIN formatting — is
+a library with an SDK-free, terminal-free public API (headers under
+`include/ddbsh/`). The CLI owns only argument parsing, the prompt, line editing
+and history, config-file loading, signal handling, and wiring a concrete AWS SDK
+client into the library.
+
+Current version: **0.9.19**. The reimplementation drives the full standard
+`ddbsh` command surface (every non-global-tables command) end to end against
+real DynamoDB; global tables are the sole deferred family. The command surface
+below lists what the engine drives today. The full command reference further
+down this document describes the complete `ddbsh` behavior.
+
+> The "Building the software" section below describes the **original** upstream
+> source layout (`cmake ../dynamodb-shell/ddbsh`). For the reimplementation, use
+> the top-level build in this section instead.
+
+## Building the library and shell
+
+Prerequisites: a C++23 compiler (GCC ≥ 12 / Clang ≥ 16 / MSVC 19.3x), CMake
+≥ 3.21, flex and bison (reentrant scanner + `lalr1.cc` parser), GNU readline,
+zlib, and the AWS SDK for C++ (`dynamodb`, `iam`, `sts` components).
+
+```sh
+cmake -S . -B build
+cmake --build build
+```
+
+This produces three targets from one build: the engine library (`ddbsh`), the
+CLI (CMake target `ddbsh-cli`, installed as the executable `ddbsh`), and the
+native unit tests (`ddbsh-tests`). If the AWS
+SDK is installed to a non-default prefix, point CMake at it:
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/aws-sdk-cpp
+```
+
+Install the library (headers + lib) and CLI to a prefix:
+
+```sh
+cmake --install build --prefix /path/to/prefix
+```
+
+## Supported commands
+
+The engine drives this command set end to end against real DynamoDB:
+
+- `CONNECT`, `QUIT` — control.
+- `CREATE TABLE`, `DROP TABLE` — DDL (on-demand default, waiters unless
+  `NOWAIT`, `IF [NOT] EXISTS`).
+- `DESCRIBE <table>`, `SHOW TABLES` — introspection.
+- `INSERT` / `REPLACE` — PutItem (INSERT conditional on
+  `attribute_not_exists(pk)`; REPLACE unconditional).
+- `UPDATE` / `UPSERT` — UpdateItem: a single conditional write when the full
+  base-table key is given (UPDATE prepends `attribute_exists(pk)`, UPSERT does
+  not), else a Query/Scan enumeration + per-item write. `SET` (plain value,
+  attribute copy, arithmetic `+`/`-`, `if_not_exists(path, value)`) and
+  `REMOVE`. Reports `(n read, m modified, k ccf)`; a conditional-check failure
+  is counted as a `ccf`, not an error.
+- `DELETE` — DeleteItem with the same single-vs-enumerate dispatch; no `WHERE`
+  deletes every item. Reports `(n read, m modified, k ccf)`.
+- `SELECT` — the full SQL→API decision matrix (GetItem vs Query vs Scan, base
+  table and `.index`), the WHERE expression tree, `CONSISTENT`, projections, and
+  `RETURN CONSUMED CAPACITY`.
+- `ALTER TABLE` — billing mode / throughput, GSI create/update/drop, stream,
+  table class, SSE, deletion protection, warm throughput, `SET TTL`, `SET PITR`,
+  and replica updates (UpdateTable / UpdateTimeToLive / UpdateContinuousBackups).
+- Transactions — `BEGIN .. COMMIT|ROLLBACK` mapping to TransactGetItems (all
+  reads, each reducible to a GetItem) or TransactWriteItems
+  (Put/Update/Delete/ConditionCheck).
+- Backups and restore — `BACKUP TABLE ... CALLED`, `DROP BACKUP`,
+  `DESCRIBE BACKUP`, `RESTORE ... FROM BACKUP`, `RESTORE ... TO PITR`.
+- `SHOW LIMITS`, `SHOW BACKUPS`, `SHOW CREATE TABLE` — introspection.
+- Return-values display (`RETURN ...`) and rate limiting (`WITH RATELIMIT`),
+  including the token-bucket throttle on paginated read/write enumeration.
+- `SHOW VERSION`.
+- `EXPLAIN <any supported command>` — prints the serialized API request(s)
+  instead of executing.
+
+**Extensions (opt-in, additive):**
+
+- Multi-key (composite) Global Secondary Indexes — a GSI key role may name up
+  to 4 partition and 4 sort attributes. A role with 2+ attributes is written as
+  a parenthesized, comma-separated group followed by the role word; a
+  single-attribute key stays bare. List order is composite order. Example:
+
+  ```sql
+  CREATE TABLE t ( a string, b string, c string, d string, x string )
+    PRIMARY KEY ( x hash )
+    GSI ( g ON ( (a, b) hash, (c, d) range ) PROJECTING ALL );
+  ```
+
+  The same `(list) role` / bare-single syntax applies to `ALTER TABLE ... CREATE
+  GSI`. A `SELECT`/`UPDATE`/`DELETE` against such an index plans as a Query when
+  every partition-key attribute has an `=` condition and the sort-key conditions
+  form a gap-free left-to-right prefix (a range operator allowed only on the
+  last specified sort key); otherwise it degrades to a Scan. Composite keys are
+  a GSI-only feature: a composite key on a base-table primary key or an LSI is
+  rejected client-side with a clear error.
+
+  **SELECT planning against a composite GSI (Query vs Scan).** The rule in full:
+  a **Query** requires an `=` condition on **every** partition-key component; the
+  sort-key conditions must form a gap-free left-to-right prefix (no skipping),
+  each `=` except the last, which may be a range operator. Any missing
+  partition-key component, a gap in the sort-key prefix, or a range operator on a
+  non-last sort-key component demotes the plan to a **Scan** with the predicate
+  as a `FilterExpression`. Given:
+
+  ```sql
+  CREATE TABLE foo ( a number, b number, c number, d number, e number )
+    PRIMARY KEY ( a hash )
+    GSI ( firstgsi ON ( (a, b, c) hash, (d, e) range ) PROJECTING ALL );
+  ```
+
+  the composite HASH is `(a, b, c)` and the composite RANGE is `(d, e)`:
+
+  | Predicate | API | Why |
+  |---|---|---|
+  | `a = 3` | Scan | partial composite hash → FilterExpression |
+  | `a = 3 and b = 4` | Scan | partial composite hash → FilterExpression |
+  | `a = 3 and b = 4 and c = 5` | Query | full composite hash → KeyConditionExpression |
+  | `a = 3 and b = 4 and c = 5 and d = 6` | Query | full hash + leading range component |
+
+  A partial-hash predicate becomes a Scan with a `FilterExpression`:
+
+  ```
+  ddbsh$ explain select * from foo.firstgsi where a = 3;
+  Scan({
+     "TableName":   "foo",
+     "IndexName":   "firstgsi",
+     "ReturnConsumedCapacity":   "NONE",
+     "FilterExpression":   "#aaaa1 = :vaaa1",
+     "ExpressionAttributeNames":   {
+        "#aaaa1":   "a"
+     },
+     "ExpressionAttributeValues":   {
+        ":vaaa1":   {
+           "N":   "3"
+        }
+     },
+     "ConsistentRead":   false
+  })
+  ```
+
+  A full-hash predicate becomes a Query with a `KeyConditionExpression`:
+
+  ```
+  ddbsh$ explain select * from foo.firstgsi where a = 3 and b = 4 and c = 5;
+  Query({
+     "TableName":   "foo",
+     "IndexName":   "firstgsi",
+     "ConsistentRead":   false,
+     "ReturnConsumedCapacity":   "NONE",
+     "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3",
+     "ExpressionAttributeNames":   {
+        "#aaaa1":   "a",
+        "#aaaa2":   "b",
+        "#aaaa3":   "c"
+     },
+     "ExpressionAttributeValues":   {
+        ":vaaa1":   {
+           "N":   "3"
+        },
+        ":vaaa2":   {
+           "N":   "4"
+        },
+        ":vaaa3":   {
+           "N":   "5"
+        }
+     }
+  })
+  ```
+
+**Deferred to a later phase:** global tables (`ALTER TABLE ... REPLICA`
+multi-region provisioning and the `ddbsh-gt-*` suite), which require a live
+multi-region setup. The parser may recognize other unimplemented syntax and
+return a clear "not implemented in this build" error rather than a parse error.
+
+- Vector search — a table may carry one or more **vector indexes** for
+  real-time approximate-nearest-neighbor search. The CREATE/ALTER clause lead
+  accepts three synonyms: `VSI (...)`, `VECTOR (...)`, or `VECTOR INDEX (...)`.
+  A vector index names the list-of-number *vector attribute* with `ON <attr>`
+  (the vector attribute is NOT declared in the top attribute list), its
+  `DIMENSIONS`, a `DISTANCE` function (`COSINE | EUCLIDEAN | DOT_PRODUCT`), an
+  optional `SEARCH KEY` schema (`attr HASH` / `attr FILTER`), and a projection:
+
+  ```sql
+  CREATE TABLE docs ( id string, category string )
+    PRIMARY KEY ( id hash )
+    VSI ( embidx ON embedding DIMENSIONS 1536 DISTANCE COSINE
+          SEARCH KEY ( category FILTER ) PROJECTING ALL );
+
+  ALTER TABLE docs ( category string )
+    CREATE VSI embidx ON embedding DIMENSIONS 1536 DISTANCE COSINE
+      SEARCH KEY ( category FILTER ) PROJECTING ALL;
+  ALTER TABLE docs DROP VSI embidx;   -- create/drop only; no in-place update
+  ```
+
+  A vector attribute value is written as a bare numeric list; INSERT/UPDATE
+  store it as a DynamoDB list of numbers:
+
+  ```sql
+  INSERT INTO docs ( id, embedding ) VALUES ( "d1", [0.12, -0.34, 0.56] );
+  UPDATE docs SET embedding = [0.9, 0.1] WHERE id = "d1";
+  ```
+
+  A `SELECT ... FROM <table>.<vectorindex> NEAREST <n> TO [ ... ]` plans to a
+  **SearchVectors** call (never GetItem/Query/Scan): `<n>` is the TopK, the
+  bracketed numeric list is the query vector (its length must equal the index
+  `DIMENSIONS`), and a `WHERE` clause becomes the search filter (it may
+  reference only the index's HASH / FILTER search-key attributes). Each result
+  row is shown with a trailing ` score <n>` (the similarity score the service
+  returns for that match):
+
+  ```sql
+  SELECT * FROM docs.embidx WHERE category = "news" NEAREST 5 TO [0.1, 0.2, 0.3];
+  ```
+
+  **What a result row contains.** Each match carries the attributes named in the
+  SELECT projection plus a trailing similarity ` score <n>`. The stored vector
+  is treated like any other attribute: `SELECT *` omits it by default (no
+  `ProjectionExpression` is sent, and the service does not include the vector
+  unless asked), but **naming the vector attribute in the projection returns it**
+  — in the same `SearchVectors` call, at no extra API cost:
+
+  ```sql
+  -- vector omitted (SELECT * does not request it)
+  SELECT * FROM docs.embidx NEAREST 3 TO [0.1, 0.2, 0.3];
+
+  -- vector returned: name it in the projection
+  SELECT id, category, embedding FROM docs.embidx NEAREST 3 TO [0.1, 0.2, 0.3];
+  ```
+
+## isql-mode input
+
+The CLI assembles input in the **Sybase isql style**: it buffers physical lines
+until it reads a **terminator line**, then hands the whole batch to the engine,
+which parses every `;`-terminated statement in order (a missing trailing `;` on
+the last statement is tolerated). Statements inside a batch stay `;`-terminated;
+the terminator word itself is never sent to the engine.
+
+- The default terminator is the word `go` on a line by itself (case-insensitive).
+- `-t[STR]` / `--terminator[=STR]` overrides the terminator word. `-t` with **no
+  argument** makes a **blank line** the terminator.
+- The runtime meta-command `set terminator [STR]` changes the terminator
+  mid-session (recognized only at the start of a batch; `set terminator` with no
+  value restores the blank-line terminator).
+- **EOF is always a terminator** — a file given with `-f`, the `-c` string, or an
+  interactive Ctrl-D flushes the buffered batch regardless.
+
+```
+us-east-1> SELECT * FROM Movies
+       ...> WHERE year = 2014;
+       ...> go
+```
+
+To terminate with a **blank line** instead of the word `go`, start the shell
+with `-t` (no argument), or run `set terminator` with no value mid-session:
+
+```
+$ ddbsh -t
+us-east-1> SELECT * FROM Movies WHERE year = 2014;
+       ...>
+```
+
+A custom terminator word is set with `-t STR` (e.g. `-t ;;`) or `set terminator
+STR`.
+
+This isql batch input is a **deliberate, documented divergence** (tenets 2 and
+8) from the original `ddbsh`, which executed each statement as soon as it read a
+bare unquoted `;` interactively. The divergence is additive and lives only at
+the CLI layer: the engine still parses `;`-terminated statements, so the golden
+`.exp` command strings (all `;`-terminated and flushed by EOF) produce
+byte-identical output.
+
+## Syntax error diagnostics
+
+A syntax error reports the `[line, column]` location and the offending token,
+and — below the offending input line — a compiler-style caret (`^`) pointing at
+the exact error column:
+
+```
+ddbsh$ create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
+[1, 68] syntax error at ,
+create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
+                                                                  ^
+```
+
+(Here the GSI key schema needs its own outer parens around the role list:
+`g ON ( (a, b) hash, (c) range )`.) The caret is an additive diagnostic; the
+`[line, column] syntax error at <token>` line is unchanged.
+
+## CLI flags, config, and environment
+
+```
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
+```
+
+- `-c "<cmds>"` — run a batch string, then exit (mutually exclusive with `-f`).
+- `-f <file>` — run a file, then exit (mutually exclusive with `-c`).
+- `-q` — quiet: suppress the startup banner.
+- `-e` — abort on the first error.
+- `-d` — debug. Accepted for flag-surface parity with the original `ddbsh`, but
+  currently a no-op/reserved: the engine has no logging subsystem yet, so the
+  flag sets nothing. It is retained so scripts that pass `-d` keep working and
+  so the behavior is wired in a future phase without a CLI surface change
+  (`TODO(phase-N)`).
+- `-t[STR]` / `--terminator[=STR]` — set the batch terminator (see above).
+
+At startup the CLI loads a config file (`DDBSH_CONFIG_FILE`, else
+`~/.ddbsh_config`) if present and reads/writes interactive history at
+`~/.ddbsh_history`. The region resolves from `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then `us-east-1`; `DDBSH_ENDPOINT_OVERRIDE` sets an
+endpoint override, which marks the prompt with a `(*)` suffix.
+
+## Embedding the library
+
+`examples/embed_demo.cpp` is a standalone program (built by its own plain
+Makefile, independent of this project's CMake) that embeds `libddbsh`: it
+implements the injected `ddbsh::IDDBClient` seam, constructs a `ddbsh::Session`,
+runs SQL-ish statements through `Session::run()`, and renders the result with
+`ddbsh::render::Renderer`. It is offline (an in-memory client, no AWS account
+needed). See [`examples/README.md`](examples/README.md).
+
+```sh
+cmake --install build --prefix /path/to/prefix
+cd examples
+make DDBSH_PREFIX=/path/to/prefix
+make run DDBSH_PREFIX=/path/to/prefix
+```
+
+The sample doubles as a verified, external-consumer smoke test: configure with
+`-DDDBSH_TEST_EMBED_SAMPLE=ON` and the build registers a CTest (`embed_sample`)
+that installs the library to a throwaway prefix, builds the sample through its
+standalone Makefile against that install, runs it, and diffs its stdout against
+the committed golden `examples/embed_demo.expected.txt`. It is OFF by default
+(it needs an install step and a second compiler invocation) and offline (no AWS
+account), so it never touches the real-DDB gate.
+
+## Tests
+
+Run the test suite via `devtools/run-tests` from the orchestration repo. Since
+the Step-2 exit gate, every non-global-tables golden family runs against the
+new engine (the shipping `ddbsh` binary driven through the external harness in
+`tests/golden/`); the gate exit propagates. The original C++11 engine was
+removed from the tree during the phase-2i oracle retirement (preserved in git
+history under the `oracle-archive-v0.8.1` tag); its golden contract was
+relocated to a single command-family tree at `tests/golden/` and remains the
+regression source. The
+native GoogleTest unit tests (offline, `FakeDDBClient`)
+build with the project (`ddbsh-tests`) and run alongside as the deterministic
+backend-free fidelity signal.
+
+---
+
 # Installation
 
 ## Using pre-built binaries
@@ -88,12 +447,31 @@ Cloning into 'dynamodb-shell'...
 
 % cmake ../dynamodb-shell/ddbsh
 
-% make
+% cmake --build . --parallel $(nproc)
 ```
 
 #### More build steps
 
 1. Building the SDK. I have found the following to work reliably.
+
+> **AWS SDK version.** ddbsh requires the AWS SDK for C++ `dynamodb`, `iam`, and
+> `sts` components. Use a recent release (the project is developed against
+> **1.11.916** or newer).
+>
+> **Generator-agnostic commands.** The steps below use CMake's build/install
+> drivers (`cmake --build` / `cmake --install`) instead of `make` /
+> `make install`, so they work whether CMake generated Makefiles **or** Ninja.
+> On a box whose default generator is Ninja, no `Makefile` is produced and
+> `make` fails with "No targets specified and no makefile found."
+>
+> **Install prefix.** Pick a prefix and keep it consistent with where ddbsh's
+> `find_package(AWSSDK)` later resolves (its `CMAKE_PREFIX_PATH`). `sudo` is
+> needed only for a root-owned prefix such as `/usr/local`; a user-owned prefix
+> like `$HOME/.local/aws-sdk-cpp` needs no `sudo`. Verify the cache took the
+> prefix before installing: `cmake -LA . | grep CMAKE_INSTALL_PREFIX` — the AWS
+> SDK's top-level CMake has been observed to retain a stale
+> `CMAKE_INSTALL_PREFIX=/usr/local` from the first configure; re-run
+> `cmake . -DCMAKE_INSTALL_PREFIX=<prefix>` to make it stick.
 
 ```
 % git clone https://github.com/aws/aws-sdk-cpp.git
@@ -114,9 +492,9 @@ Cloning into 'dynamodb-shell'...
         -DENABLE_TESTING=OFF \
         -DFORCE_SHARED_CRT=OFF
 
-% make
+% cmake --build . --parallel $(nproc)
 
-% sudo make install
+% sudo cmake --install .
 
 ```
 
@@ -137,9 +515,9 @@ Cloning into 'dynamodb-shell'...
         -DENABLE_TESTING=OFF \
         -DFORCE_SHARED_CRT=OFF
 
-% make
+% cmake --build . --parallel $(nproc)
 
-% sudo make install
+% sudo cmake --install .
 
 ```
 
@@ -153,9 +531,9 @@ Cloning into 'dynamodb-shell'...
 
 % cmake ../dynamodb-shell/ddbsh -DCMAKE_BUILD_TYPE=Release
 
-% make
+% cmake --build . --parallel $(nproc)
 
-% sudo make install
+% sudo cmake --install .
 ```
 
 #### Running tests
@@ -163,7 +541,7 @@ Cloning into 'dynamodb-shell'...
 Once you complete a build you can run the unit tests as shown below.
 
 ```
-% make test
+% ctest --test-dir .
 Running tests...
 Test project /Users/amrithie/source/github/dynamodb-shell/build
         Start   1: ddbsh-basic-cli
@@ -967,7 +1345,7 @@ Name: ipt1 (ACTIVE)
 Key: HASH a, RANGE b
 Attributes:  a, N,  b, N
 Created at: 2022-11-21T20:05:22Z
-Table ARN: arn:aws:dynamodb:us-east-1:632195519165:table/ipt1
+Table ARN: arn:aws:dynamodb:us-east-1:123456789012:table/ipt1
 Table ID: 6b1078cb-e81d-419f-99e8-e6c28e071a47
 Table size (bytes): 0
 Item Count: 0
@@ -985,7 +1363,7 @@ Name: cloneipt1 (CREATING)
 Key: HASH a, RANGE b
 Attributes:  b, N,  a, N
 Created at: 2022-11-22T01:57:11Z
-Table ARN: arn:aws:dynamodb:us-east-1:632195519165:table/cloneipt1
+Table ARN: arn:aws:dynamodb:us-east-1:123456789012:table/cloneipt1
 Table ID: 514794c5-bc60-4c54-9fdf-e2c1c670074e
 Table size (bytes): 0
 Item Count: 0

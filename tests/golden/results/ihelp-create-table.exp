@@ -1,0 +1,57 @@
+CREATE TABLE - Creates a DynamoDB table.
+
+   CREATE TABLE [IF NOT EXISTS][NOWAIT] <name>
+         ( attribute_name, attribute_type [,...] )
+   primary_key [billing_mode_and_throughput] [warm_throughput]
+   [gsi_list] [lsi_list] [vsi_list] [streams] [table_class] [tags] ;
+
+   attribute_type := NUMBER|STRING|BINARY
+   primary_key := PRIMARY KEY table_key_schema
+   table_key_schema := ( attribute_name HASH [, attribute_name RANGE] )
+      A base-table primary key (and an LSI) has one partition (HASH) key and
+      an optional single sort (RANGE) key; each role is a single attribute.
+   index_key_schema := ( key_role [, key_role] )
+   key_role := key_attribute HASH | key_attribute RANGE
+   key_attribute := attribute_name | ( attribute_name [, attribute_name ...] )
+      A GSI key_schema may use composite (multi-part) HASH and/or RANGE keys
+      (up to 4 attributes per role): a parenthesized, comma-separated group
+      of attribute names is one composite role. Composite keys are supported
+      on GSIs ONLY.
+
+   billing_mode_and_throughput := (BILLING MODE ON DEMAND [throughput])|BILLING MODE provisioned)
+   provisioned := ( RR RCU, WW WCU )
+
+   gsi_list := GSI ( gsi_spec )
+   gsi_spec := gsi [, gsi ...]
+   gsi := gsi_name ON index_key_schema index_projection [billing_mode_and_throughput][warm_throughput]
+      A GSI key_schema may use composite (multi-part) HASH and RANGE keys,
+      for example: GSI ( g ON ( (a, b, c) HASH, (d, e) RANGE ) PROJECTING ALL )
+   index_projection := (PROJECTING ALL) | (PROJECTING KEYS ONLY) | (PROJECTING INCLUDE projection_list)
+   projection_list := ( attribute [, attribute ...] )
+
+   lsi_list := LSI ( lsi_spec )
+   lsi_spec := lsi [, lsi ...]
+   lsi := lsi_name ON table_key_schema index_projection
+
+   vsi_list := (VSI | VECTOR | VECTOR INDEX) ( vsi_spec )
+   vsi_spec := vsi [, vsi ...]
+   vsi := vsi_name ON vector_attribute DIMENSIONS n DISTANCE distance_function
+          [SEARCH KEY ( search_element [, ...] )] index_projection
+      A vector index (VSI) enables real-time vector search. vector_attribute
+      is a list-of-number attribute and is NOT declared in the attribute
+      list. Query it with SELECT ... NEAREST (see HELP SELECT).
+   distance_function := COSINE | EUCLIDEAN | DOT_PRODUCT
+   search_element := attribute_name HASH | attribute_name FILTER
+      e.g. VSI ( v ON embedding DIMENSIONS 1536 DISTANCE COSINE
+                 SEARCH KEY ( tenant HASH, category FILTER ) PROJECTING ALL )
+
+   streams := STREAM ( stream_type ) | STREAM DISABLED
+   stream_type := KEYS ONLY | NEW IMAGE | OLD IMAGE | BOTH IMAGES
+
+   throughput := THROUGHPUT [( RR RCU, WW WCU ) | UNLIMITED]
+   warm_throughput := WARM THROUGHPUT ( RR RCU, WW WCU )
+   table_class := TABLE CLASS STANDARD | TABLE CLASS STANDARD INFREQUENT ACCESS
+   deletion_protection := DELETION PROTECTION [ENABLED|DISABLED]
+   tags := TAGS ( tag [, tag ...] )
+   tag := name : value
+

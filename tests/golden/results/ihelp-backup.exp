@@ -1,0 +1,2 @@
+BACKUP TABLE <table> CALLED <name> - Create a backup of a table with a given name
+

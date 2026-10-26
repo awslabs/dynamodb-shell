@@ -31,8 +31,9 @@
 *.out
 *.app
 
-# ignore the build directory in its entirety
-build
+# ignore the build directories in their entirety (build/, build-engine/,
+# build-golden/, and CMake preset dirs under build/)
+build*
 
 # Test artifacts are staged here by devtools/run-tests and tracked in the
 # orchestration repo's discussions/ (named by HEAD short hash), not here.
@@ -41,3 +42,6 @@ build
 # CTest scratch output
 /Testing/
 /ddbsh/tests/Testing/
+
+# examples build output (examples/Makefile compiles embed_demo in-tree)
+/examples/embed_demo

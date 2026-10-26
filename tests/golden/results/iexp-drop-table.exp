@@ -1,0 +1,3 @@
+DeleteTable({
+   "TableName":   "foo"
+})

@@ -1,0 +1,87 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# composite-gsi.txt — LIVE real-DynamoDB data goldens for composite
+# (multi-part) GSI keys (phase 4b, P4b-02). The existing iexp-select-mpgsi
+# golden pins the EXPLAIN (Query-vs-Scan) plan for ONE key shape; this family
+# closes the gap the human called out: there was no live DATA SELECT that
+# inserts rows into a composite-GSI table and asserts the returned items, and
+# no coverage of the other key shapes as data queries.
+#
+# These goldens are AUTHORED (the original ddbsh predates composite GSI keys,
+# so there is no oracle) and human-audited before merge (D-4a-10 / D-2i-5 /
+# P4b-02). Data-plane rows come back in DynamoDB hash order, so every DATA
+# SELECT uses -s (LC_ALL=C sort) and a sorted byte-exact .exp. EXPLAIN plan
+# assertions are deterministic (no -s).
+#
+# Key-shape matrix (the four shapes the human enumerated):
+#   A: single-element PK + multi-element SK   gidx on ( a hash, (b,c) range )
+#   B: multi-element PK  + single-element SK  gidx on ( (a,b) hash, c range )
+#   C: multi PK + multi SK                    gidx on ( (a,b) hash, (c,d) range )
+#   D: 3-element PK + 2-element SK            gidx on ( (a,b,c) hash, (d,e) range )
+# Plus a live UPDATE/DELETE-via-composite-index data case (shape C) on its own
+# table so the destructive statements do not perturb the SELECT fixtures.
+#
+# Query-vs-Scan rule pinned on real data (design 2026-10-25-P4a-02 item 5): a
+# Query requires `=` on EVERY partition-key component; a missing hash component
+# demotes to Scan + FilterExpression. Sort-key conditions form a gap-free
+# left-to-right prefix.
+#
+# ${RD} is the single golden results dir (tests/golden/results).
+#
+# WARNING: creates/loads/drops REAL DynamoDB tables (ddbsh_mgsi_a/b/c/d/e) on
+# each run (us-east-1). Self-cleaning: each table is created+loaded in a setup
+# test and dropped in a teardown test at the end of the family.
+
+# --- setup: drop any leftovers, then create + load the five fixtures ---------
+add_test(NAME imgsi-drop-pre COMMAND ddbshtest -c "drop table if exists ddbsh_mgsi_a nowait; drop table if exists ddbsh_mgsi_b nowait; drop table if exists ddbsh_mgsi_c nowait; drop table if exists ddbsh_mgsi_d nowait; drop table if exists ddbsh_mgsi_e nowait;")
+
+add_test(NAME imgsi-create-a COMMAND ddbshtest -c "create table ddbsh_mgsi_a ( pk number, a number, b number, c number ) primary key ( pk hash ) gsi ( gidx on ( a hash, (b, c) range ) projecting all ); \
+    insert into ddbsh_mgsi_a (pk, a, b, c) values (1, 100, 1, 1), (2, 100, 1, 2), (3, 100, 2, 1), (4, 200, 1, 1);")
+
+add_test(NAME imgsi-create-b COMMAND ddbshtest -c "create table ddbsh_mgsi_b ( pk number, a number, b number, c number ) primary key ( pk hash ) gsi ( gidx on ( (a, b) hash, c range ) projecting all ); \
+    insert into ddbsh_mgsi_b (pk, a, b, c) values (1, 10, 20, 1), (2, 10, 20, 2), (3, 10, 21, 1), (4, 11, 20, 1);")
+
+add_test(NAME imgsi-create-c COMMAND ddbshtest -c "create table ddbsh_mgsi_c ( pk number, a number, b number, c number, d number ) primary key ( pk hash ) gsi ( gidx on ( (a, b) hash, (c, d) range ) projecting all ); \
+    insert into ddbsh_mgsi_c (pk, a, b, c, d) values (1, 10, 20, 30, 40), (2, 10, 20, 31, 41), (3, 10, 21, 30, 40), (4, 11, 20, 30, 40);")
+
+add_test(NAME imgsi-create-d COMMAND ddbshtest -c "create table ddbsh_mgsi_d ( pk number, a number, b number, c number, d number, e number ) primary key ( pk hash ) gsi ( gidx on ( (a, b, c) hash, (d, e) range ) projecting all ); \
+    insert into ddbsh_mgsi_d (pk, a, b, c, d, e) values (1, 1, 2, 3, 4, 5), (2, 1, 2, 3, 4, 6), (3, 1, 2, 9, 4, 5), (4, 9, 2, 3, 4, 5);")
+
+add_test(NAME imgsi-create-e COMMAND ddbshtest -c "create table ddbsh_mgsi_e ( pk number, a number, b number, c number, d number ) primary key ( pk hash ) gsi ( gidx on ( (a, b) hash, (c, d) range ) projecting all ); \
+    insert into ddbsh_mgsi_e (pk, a, b, c, d) values (1, 10, 20, 30, 40), (2, 10, 20, 31, 41), (3, 11, 20, 30, 40);")
+
+# --- shape A: single PK + multi SK -------------------------------------------
+add_test(NAME imgsi-a-explain-query COMMAND ddbshtest -q -T ${RD}/imgsi-a-explain-query.exp -c "explain select * from ddbsh_mgsi_a.gidx where a = 100 and b = 1;")
+add_test(NAME imgsi-a-query-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-a-query-hash.exp -c "select * from ddbsh_mgsi_a.gidx where a = 100;")
+add_test(NAME imgsi-a-query-sk-prefix COMMAND ddbshtest -q -s -T ${RD}/imgsi-a-query-sk-prefix.exp -c "select * from ddbsh_mgsi_a.gidx where a = 100 and b = 1;")
+add_test(NAME imgsi-a-query-sk-full COMMAND ddbshtest -q -s -T ${RD}/imgsi-a-query-sk-full.exp -c "select * from ddbsh_mgsi_a.gidx where a = 100 and b = 1 and c = 2;")
+add_test(NAME imgsi-a-scan COMMAND ddbshtest -q -s -T ${RD}/imgsi-a-scan.exp -c "select * from ddbsh_mgsi_a.gidx where b = 1;")
+
+# --- shape B: multi PK + single SK -------------------------------------------
+add_test(NAME imgsi-b-explain-query COMMAND ddbshtest -q -T ${RD}/imgsi-b-explain-query.exp -c "explain select * from ddbsh_mgsi_b.gidx where a = 10 and b = 20;")
+add_test(NAME imgsi-b-explain-scan COMMAND ddbshtest -q -T ${RD}/imgsi-b-explain-scan.exp -c "explain select * from ddbsh_mgsi_b.gidx where a = 10;")
+add_test(NAME imgsi-b-query-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-b-query-hash.exp -c "select * from ddbsh_mgsi_b.gidx where a = 10 and b = 20;")
+add_test(NAME imgsi-b-query-sk-full COMMAND ddbshtest -q -s -T ${RD}/imgsi-b-query-sk-full.exp -c "select * from ddbsh_mgsi_b.gidx where a = 10 and b = 20 and c = 2;")
+add_test(NAME imgsi-b-scan-partial-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-b-scan-partial-hash.exp -c "select * from ddbsh_mgsi_b.gidx where a = 10;")
+
+# --- shape C: multi PK + multi SK --------------------------------------------
+add_test(NAME imgsi-c-query-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-c-query-hash.exp -c "select * from ddbsh_mgsi_c.gidx where a = 10 and b = 20;")
+add_test(NAME imgsi-c-query-sk-prefix COMMAND ddbshtest -q -s -T ${RD}/imgsi-c-query-sk-prefix.exp -c "select * from ddbsh_mgsi_c.gidx where a = 10 and b = 20 and c = 30;")
+add_test(NAME imgsi-c-scan-partial-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-c-scan-partial-hash.exp -c "select * from ddbsh_mgsi_c.gidx where a = 10;")
+
+# --- shape D: 3-element PK + 2-element SK ------------------------------------
+add_test(NAME imgsi-d-query-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-d-query-hash.exp -c "select * from ddbsh_mgsi_d.gidx where a = 1 and b = 2 and c = 3;")
+add_test(NAME imgsi-d-query-sk-prefix COMMAND ddbshtest -q -s -T ${RD}/imgsi-d-query-sk-prefix.exp -c "select * from ddbsh_mgsi_d.gidx where a = 1 and b = 2 and c = 3 and d = 4;")
+add_test(NAME imgsi-d-scan-partial-hash COMMAND ddbshtest -q -s -T ${RD}/imgsi-d-scan-partial-hash.exp -c "select * from ddbsh_mgsi_d.gidx where a = 1 and b = 2;")
+
+# --- UPDATE / DELETE via the composite index (shape E) -----------------------
+# The read side enumerates keys through the composite GSI (Query full hash);
+# the writes hit the base table. Run DELETE first, then UPDATE, then assert the
+# surviving base-table rows.
+add_test(NAME imgsi-e-delete COMMAND ddbshtest -q -T ${RD}/imgsi-e-delete.exp -c "delete from ddbsh_mgsi_e.gidx where a = 10 and b = 20;")
+add_test(NAME imgsi-e-update COMMAND ddbshtest -q -T ${RD}/imgsi-e-update.exp -c "update ddbsh_mgsi_e.gidx set note = \"x\" where a = 11 and b = 20;")
+add_test(NAME imgsi-e-verify COMMAND ddbshtest -q -s -T ${RD}/imgsi-e-verify.exp -c "select * from ddbsh_mgsi_e;")
+
+# --- teardown ----------------------------------------------------------------
+add_test(NAME imgsi-drop-post COMMAND ddbshtest -c "drop table ddbsh_mgsi_a; drop table ddbsh_mgsi_b; drop table ddbsh_mgsi_c; drop table ddbsh_mgsi_d; drop table ddbsh_mgsi_e;")

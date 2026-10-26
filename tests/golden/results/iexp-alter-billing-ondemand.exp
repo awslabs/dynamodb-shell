@@ -1,0 +1,6 @@
+UpdateTable({
+   "TableName":   "foo",
+   "BillingMode":   "PAY_PER_REQUEST",
+   "OnDemandThroughput":   {
+   }
+})

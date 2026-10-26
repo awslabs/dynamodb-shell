@@ -1,0 +1,4 @@
+SHOW VERSION
+
+   Show the version of DynamoDB Shell.
+
