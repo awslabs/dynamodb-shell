@@ -107,6 +107,39 @@ cmake --build build
 If you installed the AWS SDK for C++ via Homebrew or to a custom prefix, add it
 to `CMAKE_PREFIX_PATH` as shown above (you can combine the flags).
 
+#### Avoiding AWS SDK version conflicts
+
+The vector-search commands require the AWS SDK for C++ **≥ 1.11.916** (the first
+release exposing the `SearchVectors` API). A common macOS pitfall is having more
+than one SDK installed at once — for example a Homebrew `aws-sdk-cpp` under
+`/opt/homebrew` and a manual build installed into `/usr/local`. When
+`find_package(AWSSDK)` resolves one version but the compiler's default include
+path (`/usr/local/include`) pulls `aws/core/VersionConfig.h` from another, the
+build fails with:
+
+```
+error: 'AWS_SDK_VERSION_PATCH' macro redefined [-Werror,-Wmacro-redefined]
+```
+
+Fix it by ensuring exactly one SDK is discoverable, and point CMake at it:
+
+```sh
+# list every AWS SDK VersionConfig.h and its version
+for f in $(find /usr/local /opt/homebrew $HOME -path '*aws/core/VersionConfig.h' 2>/dev/null); do
+  echo "$f"; grep AWS_SDK_VERSION_PATCH "$f"; done
+
+# remove the unwanted install (e.g. an older Homebrew SDK), then reconfigure clean
+# (the CMake cache pins the previously found SDK, so delete the build dir)
+rm -rf build
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/prefix/of/sdk-1.11.916
+cmake --build build
+```
+
+`CMAKE_PREFIX_PATH` is searched ahead of system defaults, so both the SDK CMake
+package and its headers resolve to the same install. Do not silence
+`-Wmacro-redefined` to work around this — the clashing version macros mean you
+would be compiling against one SDK's headers while linking another's libraries.
+
 ## Supported commands
 
 The engine drives this command set end to end against real DynamoDB:
