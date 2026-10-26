@@ -34,6 +34,11 @@ add_test(NAME ihelp-show-backups COMMAND ddbshtest -q -T ${RD}/ihelp-show-backup
 add_test(NAME ihelp-show-version COMMAND ddbshtest -q -T ${RD}/ihelp-show-version.exp -c "help show version")
 add_test(NAME ihelp-show-create-table COMMAND ddbshtest -q -T ${RD}/ihelp-show-create-table.exp -c "help show create table")
 add_test(NAME ihelp-create COMMAND ddbshtest -q -T ${RD}/ihelp-create.exp -c "help create")
+# ihelp-create-table / ihelp-alter-table DIVERGE from the retired oracle's HELP
+# text: they document the phase-4a composite (multi-part) GSI key syntax, which
+# the original ddbsh predates (P4a-02 item 1, human-ratified 2026-10-25). The
+# .exp files were re-recorded from the reimplementation's updated HELP output;
+# every other HELP form remains byte-for-byte oracle parity.
 add_test(NAME ihelp-create-table COMMAND ddbshtest -q -T ${RD}/ihelp-create-table.exp -c "help create table")
 add_test(NAME ihelp-alter-table COMMAND ddbshtest -q -T ${RD}/ihelp-alter-table.exp -c "help alter table")
 add_test(NAME ihelp-backup COMMAND ddbshtest -q -T ${RD}/ihelp-backup.exp -c "help backup")

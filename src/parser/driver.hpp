@@ -107,6 +107,14 @@ public:
     const std::optional<Error>& error() const { return error_; }
 
 private:
+    /// Build the compiler-style caret diagnostic for a syntax error: the
+    /// offending source line, then a line of indentation (spaces, tabs
+    /// preserved for alignment) with a `^` under the first character of the
+    /// offending lexeme (column_ - last_lexeme_ length). Returns the empty
+    /// string when there is no renderable source line (e.g. empty input), in
+    /// which case the caller omits the caret. See set_error().
+    std::string build_caret() const;
+
     std::string_view input_;
     std::size_t scan_offset_ = 0;  ///< byte cursor for the reentrant YY_INPUT
     void* scanner_ = nullptr;      ///< yyscan_t (opaque here; flex type in .cpp)

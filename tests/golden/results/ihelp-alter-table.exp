@@ -15,6 +15,11 @@ ALTER TABLE - make changes to an existing table.
 
    ALTER TABLE <name> ( attribute_name attribute_type [, ...] ) CREATE GSI create_gsi_spec
       create_gsi_spec := <name> ON key_schema index_projection [billing_mode_and_throughput]
+      key_schema := ( key_role [, key_role] )
+      key_role := key_attribute HASH | key_attribute RANGE
+      key_attribute := attribute_name | ( attribute_name [, attribute_name ...] )
+         A parenthesized group is a composite (multi-part) GSI HASH/RANGE key,
+         e.g. CREATE GSI g ON ( (a, b) HASH, (c, d) RANGE ) PROJECTING ALL
    ALTER TABLE <name> DROP GSI <gsiname>
 
    ALTER TABLE <name> SET billing_mode_and_throughput UPDATE GSI ( gsi_update [, ...] )
