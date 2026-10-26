@@ -393,4 +393,24 @@ TEST(StreamingInsert, BufferingExecuteFoldsMultiRowIntoMultiOutcome) {
     EXPECT_EQ(render(*out), "INSERT\nINSERT\n");
 }
 
+// ---- Vector attribute values (phase 4b, P4b-4) -----------------------------
+
+TEST(UpdateExec, SetVectorAttributeRoundTripsToListOfNumbers) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("docs", "id"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("update docs set embedding = [0.9, 0.1] where id = \"d1\";");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_requests().size(), 1u);
+    const auto& values = client.update_requests()[0].expression_attribute_values;
+    ASSERT_FALSE(values.empty());
+    const ddbsh::Value& v = values[0].second;
+    EXPECT_EQ(v.type, ddbsh::Value::Type::L);
+    ASSERT_EQ(v.list.size(), 2u);
+    EXPECT_EQ(v.list[0].type, ddbsh::Value::Type::N);
+    EXPECT_EQ(v.list[0].s, "0.9");
+    EXPECT_EQ(v.list[1].s, "0.1");
+}
+
 }  // namespace

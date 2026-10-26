@@ -197,4 +197,34 @@ TEST(WriteExec, DropTableDeleteFailurePropagatesError) {
     EXPECT_TRUE(client.waited_gone().empty());  // no wait after a failed delete
 }
 
+// ---- Vector attribute values (phase 4b, P4b-4) -----------------------------
+// A vector attribute is written as a bare numeric list [ n, n, ... ], which the
+// existing lee_rhs literal already parses to an L-of-N Value (D-4b-2). No
+// grammar change is required; this pins the round-trip.
+
+TEST(WriteExec, InsertVectorAttributeRoundTripsToListOfNumbers) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("docs"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "insert into docs ( id, embedding ) values ( \"d1\", [0.12, -0.34, 0.56] );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.put_requests().size(), 1u);
+    const auto& item = client.put_requests()[0].item;
+    const ddbsh::Value* emb = nullptr;
+    for (const auto& [name, value] : item) {
+        if (name == "embedding") {
+            emb = &value;
+        }
+    }
+    ASSERT_NE(emb, nullptr);
+    EXPECT_EQ(emb->type, ddbsh::Value::Type::L);
+    ASSERT_EQ(emb->list.size(), 3u);
+    EXPECT_EQ(emb->list[0].type, ddbsh::Value::Type::N);
+    EXPECT_EQ(emb->list[0].s, "0.12");
+    EXPECT_EQ(emb->list[1].s, "-0.34");
+    EXPECT_EQ(emb->list[2].s, "0.56");
+}
+
 }  // namespace
