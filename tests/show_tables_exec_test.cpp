@@ -72,7 +72,7 @@ TEST(ShowTables, FullStatusRow) {
     ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
     EXPECT_EQ(render(*out),
               "t1 | ACTIVE | PROVISIONED | STANDARD | id-123 | "
-              "arn:aws:dynamodb:us-east-1:1:table/t1 | TTL DISABLED | GSI: 2 | LSI : 1 |\n");
+              "arn:aws:dynamodb:us-east-1:1:table/t1 | TTL DISABLED | GSI: 2 | LSI : 1 | VSI : 0 |\n");
 }
 
 TEST(ShowTables, InferredDefaultMarkersForOnDemandAndNoTableClass) {
@@ -96,7 +96,7 @@ TEST(ShowTables, InferredDefaultMarkersForOnDemandAndNoTableClass) {
     ASSERT_TRUE(out.has_value());
     EXPECT_EQ(render(*out),
               "od | ACTIVE | PAY_PER_REQUEST* | STANDARD* | idod | arnod | "
-              "TTL DISABLED | GSI: 0 | LSI : 0 |\n");
+              "TTL DISABLED | GSI: 0 | LSI : 0 | VSI : 0 |\n");
 }
 
 TEST(ShowTables, ProvisionedFallbackWhenNoBillingSummary) {
@@ -120,7 +120,7 @@ TEST(ShowTables, ProvisionedFallbackWhenNoBillingSummary) {
     ASSERT_TRUE(out.has_value());
     EXPECT_EQ(render(*out),
               "p | ACTIVE | PROVISIONED | STANDARD_INFREQUENT_ACCESS | idp | arnp | "
-              "TTL DISABLED | GSI: 0 | LSI : 0 |\n");
+              "TTL DISABLED | GSI: 0 | LSI : 0 | VSI : 0 |\n");
 }
 
 TEST(ShowTables, TtlEnabledShowsAttributeName) {
@@ -225,6 +225,28 @@ TEST(ShowTables, InvalidLikePatternIsErrorNotCrash) {
     auto out = session.run("show tables like \"[unterminated\";");
     ASSERT_FALSE(out.has_value());
     EXPECT_EQ(out.error().code, Errc::parse_error);
+}
+
+// ---- Vector index (phase 4b, D-4b-10) --------------------------------------
+
+TEST(ShowTables, VsiCountColumn) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table_names({"docs"});
+    DescribeTableOut t = provisioned_table("docs");
+    ddbsh::VectorIndexSchema vi;
+    vi.index_name = "embidx";
+    vi.vector_attr = "embedding";
+    vi.dimensions = 8;
+    t.vector_indexes = {vi};
+    client.set_table(t);
+    client.set_ttl("docs", TimeToLiveOut{"DISABLED", ""});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("show tables;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    // GSI: 2 | LSI : 1 | VSI : 1 (always-shown column, D-4b-10).
+    EXPECT_NE(render(*out).find("GSI: 2 | LSI : 1 | VSI : 1 |\n"), std::string::npos)
+        << render(*out);
 }
 
 }  // namespace
