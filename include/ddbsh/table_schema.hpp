@@ -171,12 +171,12 @@ struct SearchSchemaElem {
 /// A vector index definition (SDK VectorIndex / CreateVectorIndexAction). Maps
 /// to CreateTable.VectorIndexes[] and UpdateTable.VectorIndexUpdates[].Create.
 struct VectorIndexDef {
-    std::string index_name;                     ///< -> IndexName
-    std::string vector_attr;                    ///< -> VectorAttribute.AttributeName
-    long long dimensions = 0;                   ///< -> Dimensions (1..4096)
+    std::string index_name;                            ///< -> IndexName
+    std::string vector_attr;                           ///< -> VectorAttribute.AttributeName
+    long long dimensions = 0;                          ///< -> Dimensions (1..4096)
     VectorDistance distance = VectorDistance::cosine;  ///< -> DistanceFunction
-    std::vector<SearchSchemaElem> search_schema;  ///< -> SearchSchema (HASH/INLINE_FILTER)
-    Projection projection;                      ///< -> Projection (same type as GSI/LSI)
+    std::vector<SearchSchemaElem> search_schema;       ///< -> SearchSchema (HASH/INLINE_FILTER)
+    Projection projection;                             ///< -> Projection (same type as GSI/LSI)
 };
 
 /// One VectorIndexUpdate action in an ALTER TABLE. The 1.11.916 model has only

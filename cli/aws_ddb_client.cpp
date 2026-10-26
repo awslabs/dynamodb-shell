@@ -1744,8 +1744,7 @@ SecondaryIndexSchema load_gsi_detail(
 // index from this list and uses `dimensions` to pre-validate the search-vector
 // length; the DESCRIBE / SHOW CREATE TABLE renderers reconstruct the `vsi(…)`
 // clause from these fields (D-4b-10).
-VectorIndexSchema load_vector_index_detail(
-    const Aws::DynamoDB::Model::VectorIndexDescription& vi) {
+VectorIndexSchema load_vector_index_detail(const Aws::DynamoDB::Model::VectorIndexDescription& vi) {
     VectorIndexSchema out;
     out.index_name = vi.GetIndexName().c_str();
     out.vector_attr = vi.GetVectorAttribute().GetAttributeName().c_str();

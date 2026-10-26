@@ -253,7 +253,7 @@ struct UpdateTableIn {
     std::vector<AttributeDef> attribute_definitions;  ///< new key attrs for CREATE GSI
     std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
     std::vector<VectorIndexUpdateDef>
-        vector_index_updates;  ///< CREATE / DROP vector index (phase 4b; one per call)
+        vector_index_updates;              ///< CREATE / DROP vector index (phase 4b; one per call)
     std::optional<ReplicaUpdate> replica;  ///< ADD / DROP / UPDATE REPLICA (nullopt for plain SET)
 };
 struct UpdateTableOut {};
@@ -680,7 +680,7 @@ struct SearchVectorsIn {
     ValueList search_vector;  ///< the query vector: a list of N Values -> SearchVector
     int topk = 0;             ///< -> TopK
     std::optional<std::string> search_condition_expression;  ///< WHERE -> SearchConditionExpression
-    std::optional<std::string> projection_expression;        ///< SELECT list -> ProjectionExpression
+    std::optional<std::string> projection_expression;  ///< SELECT list -> ProjectionExpression
     ExpressionAttributeNames expression_attribute_names;
     ValueMap expression_attribute_values;
     ReturnConsumedCapacity return_consumed_capacity = ReturnConsumedCapacity::none;

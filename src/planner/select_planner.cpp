@@ -86,9 +86,8 @@ ValueMap key_of(const KeyMap& key) {
 static Result<SelectPlan> plan_search_vectors(const SelectCmd& cmd, const VectorIndexSchema& vi,
                                               const std::string& alias_prefix) {
     if (!cmd.search_vector.has_value()) {
-        return fail(Errc::invalid_argument,
-                    "A SELECT on vector index " + vi.index_name +
-                        " requires a NEAREST <n> TO [ ... ] clause.");
+        return fail(Errc::invalid_argument, "A SELECT on vector index " + vi.index_name +
+                                                " requires a NEAREST <n> TO [ ... ] clause.");
     }
     if (cmd.consistent) {
         return fail(Errc::invalid_argument, "CONSISTENT is not supported with vector search.");
@@ -108,10 +107,10 @@ static Result<SelectPlan> plan_search_vectors(const SelectCmd& cmd, const Vector
         }
     }
     if (vi.dimensions > 0 && static_cast<long long>(qv.list.size()) != vi.dimensions) {
-        return fail(Errc::invalid_argument,
-                    "The search vector has " + std::to_string(qv.list.size()) +
-                        " values; vector index " + vi.index_name + " expects " +
-                        std::to_string(vi.dimensions) + ".");
+        return fail(Errc::invalid_argument, "The search vector has " +
+                                                std::to_string(qv.list.size()) +
+                                                " values; vector index " + vi.index_name +
+                                                " expects " + std::to_string(vi.dimensions) + ".");
     }
 
     SymbolTable st(alias_prefix);

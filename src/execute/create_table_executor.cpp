@@ -81,9 +81,9 @@ Result<void> validate_key_schemas(const CreateTableCmd& cmd) {
         }
         for (const auto& e : vi.search_schema) {
             if (!is_declared(e.attr)) {
-                return fail(Errc::invalid_argument,
-                            "The search-key attribute " + e.attr + " of vector index " +
-                                vi.index_name + " must be declared in the attribute list.");
+                return fail(Errc::invalid_argument, "The search-key attribute " + e.attr +
+                                                        " of vector index " + vi.index_name +
+                                                        " must be declared in the attribute list.");
             }
         }
         if (vi.projection.type == ProjectionType::include) {

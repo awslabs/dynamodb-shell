@@ -198,6 +198,45 @@ multi-region provisioning and the `ddbsh-gt-*` suite), which require a live
 multi-region setup. The parser may recognize other unimplemented syntax and
 return a clear "not implemented in this build" error rather than a parse error.
 
+- Vector search — a table may carry one or more **vector indexes** for
+  real-time approximate-nearest-neighbor search. The CREATE/ALTER clause lead
+  accepts three synonyms: `VSI (...)`, `VECTOR (...)`, or `VECTOR INDEX (...)`.
+  A vector index names the list-of-number *vector attribute* with `ON <attr>`
+  (the vector attribute is NOT declared in the top attribute list), its
+  `DIMENSIONS`, a `DISTANCE` function (`COSINE | EUCLIDEAN | DOT_PRODUCT`), an
+  optional `SEARCH KEY` schema (`attr HASH` / `attr FILTER`), and a projection:
+
+  ```sql
+  CREATE TABLE docs ( id string, category string )
+    PRIMARY KEY ( id hash )
+    VSI ( embidx ON embedding DIMENSIONS 1536 DISTANCE COSINE
+          SEARCH KEY ( category FILTER ) PROJECTING ALL );
+
+  ALTER TABLE docs ( category string )
+    CREATE VSI embidx ON embedding DIMENSIONS 1536 DISTANCE COSINE
+      SEARCH KEY ( category FILTER ) PROJECTING ALL;
+  ALTER TABLE docs DROP VSI embidx;   -- create/drop only; no in-place update
+  ```
+
+  A vector attribute value is written as a bare numeric list; INSERT/UPDATE
+  store it as a DynamoDB list of numbers:
+
+  ```sql
+  INSERT INTO docs ( id, embedding ) VALUES ( "d1", [0.12, -0.34, 0.56] );
+  UPDATE docs SET embedding = [0.9, 0.1] WHERE id = "d1";
+  ```
+
+  A `SELECT ... FROM <table>.<vectorindex> NEAREST <n> TO [ ... ]` plans to a
+  **SearchVectors** call (never GetItem/Query/Scan): `<n>` is the TopK, the
+  bracketed numeric list is the query vector (its length must equal the index
+  `DIMENSIONS`), and a `WHERE` clause becomes the search filter (it may
+  reference only the index's HASH / FILTER search-key attributes). Each result
+  row is shown with a trailing ` score <n>`:
+
+  ```sql
+  SELECT * FROM docs.embidx WHERE category = "news" NEAREST 5 TO [0.1, 0.2, 0.3];
+  ```
+
 ## isql-mode input
 
 The CLI assembles input in the **Sybase isql style**: it buffers physical lines

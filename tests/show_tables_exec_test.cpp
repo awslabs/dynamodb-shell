@@ -70,9 +70,10 @@ TEST(ShowTables, FullStatusRow) {
 
     auto out = session.run("show tables;");
     ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
-    EXPECT_EQ(render(*out),
-              "t1 | ACTIVE | PROVISIONED | STANDARD | id-123 | "
-              "arn:aws:dynamodb:us-east-1:1:table/t1 | TTL DISABLED | GSI: 2 | LSI : 1 | VSI : 0 |\n");
+    EXPECT_EQ(
+        render(*out),
+        "t1 | ACTIVE | PROVISIONED | STANDARD | id-123 | "
+        "arn:aws:dynamodb:us-east-1:1:table/t1 | TTL DISABLED | GSI: 2 | LSI : 1 | VSI : 0 |\n");
 }
 
 TEST(ShowTables, InferredDefaultMarkersForOnDemandAndNoTableClass) {

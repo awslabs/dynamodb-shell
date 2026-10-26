@@ -207,8 +207,8 @@ TEST(WriteExec, InsertVectorAttributeRoundTripsToListOfNumbers) {
     client.set_table(table_pk("docs"));
     ddbsh::Session session = make_session(client);
 
-    auto out = session.run(
-        "insert into docs ( id, embedding ) values ( \"d1\", [0.12, -0.34, 0.56] );");
+    auto out =
+        session.run("insert into docs ( id, embedding ) values ( \"d1\", [0.12, -0.34, 0.56] );");
     ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
     ASSERT_EQ(client.put_requests().size(), 1u);
     const auto& item = client.put_requests()[0].item;
