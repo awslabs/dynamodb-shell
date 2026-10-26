@@ -30,9 +30,9 @@
 namespace ddbsh::engine {
 
 /// Which API the planner chose for a SELECT.
-enum class SelectApi { get_item, query, scan };
+enum class SelectApi { get_item, query, scan, search_vectors };
 
-/// The planned request. Exactly one of the three request members is populated,
+/// The planned request. Exactly one of the request members is populated,
 /// selected by `api`. The populated member is ready to hand to the matching
 /// IDDBClient op (W5) or to render as EXPLAIN (W6).
 struct SelectPlan {
@@ -40,6 +40,7 @@ struct SelectPlan {
     GetItemIn get_item;
     QueryIn query;
     ScanIn scan;
+    SearchVectorsIn search_vectors;  ///< phase 4b (api == search_vectors)
 };
 
 /// Plan a SELECT. `alias_prefix` seeds the single SymbolTable (one per SELECT,

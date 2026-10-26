@@ -278,6 +278,13 @@ struct SelectCmd {
     ReturnConsumedCapacity rcc = ReturnConsumedCapacity::none;
     std::optional<RateLimit> ratelimit;
     ExistsMode exists_mode = ExistsMode::none;  ///< set by EXISTS/NOT EXISTS (write txn only)
+    /// Vector search (phase 4b, D-4b-1 rev): `NEAREST <n> TO [ … ]`. `topk` is
+    /// the whole number after NEAREST; `search_vector` is the bracketed numeric
+    /// list (an L-of-N Value). Both set together or neither. Their presence +
+    /// a `.index` that resolves to a vector index routes the planner to
+    /// SearchVectors (never GetItem/Query/Scan).
+    std::optional<Value> search_vector;
+    std::optional<int> topk;
 };
 
 // ---- UPDATE / UPSERT / DELETE (W5 / 2c) ------------------------------------

@@ -63,6 +63,24 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
     }
     const SelectPlan& plan = *planned;
 
+    // SearchVectors (phase 4b) is a single request (no pagination, no key
+    // schema); handle it before the paginated Query/Scan machinery and return a
+    // VectorSearchOutcome (item + score per row).
+    if (plan.api == SelectApi::search_vectors) {
+        auto result = client.search_vectors(plan.search_vectors);
+        if (!result.has_value()) {
+            return fail(result.error());
+        }
+        VectorSearchOutcome vout;
+        for (auto& row : result->results) {
+            vout.rows.push_back(VectorSearchOutcome::Row{std::move(row.item), row.score});
+        }
+        if (cmd.rcc != ReturnConsumedCapacity::none) {
+            vout.vector_capacity = result->vector_capacity;
+        }
+        return ExecOutcome{std::move(vout)};
+    }
+
     SelectOutcome outcome;
     ConsumedCapacityTotalizer totalizer;
 
@@ -139,6 +157,8 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
             }
             break;
         }
+        case SelectApi::search_vectors:
+            break;  // handled above via early return
     }
 
     // Display consumed capacity only when the user asked for it (RETURN
@@ -178,6 +198,10 @@ Result<ExecOutcome> execute_select_explain(const SelectCmd& cmd, IDDBClient& cli
         case SelectApi::scan:
             api_name = "Scan";
             request = plan.scan;
+            break;
+        case SelectApi::search_vectors:
+            api_name = "SearchVectors";
+            request = plan.search_vectors;
             break;
     }
 

@@ -152,6 +152,17 @@ std::string render_consumed_capacity(const ConsumedCapacity& cc) {
     return "SELECT (" + capacity + ")\n";
 }
 
+/// Format a SearchVectors similarity score (D-4b-6). trim_double trims trailing
+/// zeros but does not handle a leading '-' (DOT_PRODUCT scores can be
+/// negative), so the sign is split off and reapplied.
+std::string format_score(double score) {
+    std::string s = std::to_string(score);
+    if (!s.empty() && s[0] == '-') {
+        return "-" + trim_double(s.substr(1));
+    }
+    return trim_double(s);
+}
+
 std::string render_select(const SelectOutcome& s) {
     std::string out;
     for (const auto& item : s.items) {
@@ -163,6 +174,33 @@ std::string render_select(const SelectOutcome& s) {
     }
     if (s.consumed_capacity.has_value()) {
         out += render_consumed_capacity(*s.consumed_capacity);
+    }
+    return out;
+}
+
+/// A SearchVectors result renders one line per row — `show_item(item) score
+/// <n>` — with the score as a trailing annotation OUTSIDE the item braces so it
+/// never collides with a real attribute name (D-4b-6). Service order (==
+/// similarity order) is preserved. When the user asked for consumed capacity, a
+/// trailing vector-capacity summary line is appended.
+std::string render_vector_search(const VectorSearchOutcome& v) {
+    std::string out;
+    for (const auto& row : v.rows) {
+        std::string item = show_item(row.item);
+        if (item.empty()) {
+            out += "score " + format_score(row.score) + "\n";
+        } else {
+            out += item + " score " + format_score(row.score) + "\n";
+        }
+    }
+    if (v.vector_capacity.has_value()) {
+        const auto& vc = *v.vector_capacity;
+        auto field = [](const std::optional<double>& x) {
+            return x.has_value() ? trim_double(std::to_string(*x)) : std::string{"0"};
+        };
+        out += "SELECT (" + field(vc.vector_search_request_bytes) +
+               " vector search request bytes, " + field(vc.vector_write_request_bytes) +
+               " vector write request bytes)\n";
     }
     return out;
 }
@@ -291,6 +329,8 @@ std::string render_outcome(const ExecOutcome& outcome) {
                 return render_transact(payload);
             } else if constexpr (std::is_same_v<T, TransactReadOutcome>) {
                 return render_transact_read(payload);
+            } else if constexpr (std::is_same_v<T, VectorSearchOutcome>) {
+                return render_vector_search(payload);
             } else if constexpr (std::is_same_v<T, MultiOutcome>) {
                 std::string out;
                 for (const auto& part : payload.parts) {

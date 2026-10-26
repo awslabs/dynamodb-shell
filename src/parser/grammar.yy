@@ -33,7 +33,9 @@
 %define parse.error verbose
 
 %code requires {
+    #include <optional>
     #include <string>
+    #include <utility>
     #include "ddbsh/statement.hpp"
     #include "parser/ast.hpp"
     namespace ddbsh::engine { class Driver; }
@@ -276,6 +278,7 @@
 %type <ddbsh::engine::VectorDistance> vector_distance_function
 %type <std::vector<ddbsh::engine::SearchSchemaElem>> optional_vector_search_schema vector_search_schema_list
 %type <ddbsh::engine::SearchSchemaElem> vector_search_schema_element
+%type <std::pair<std::optional<ddbsh::Value>, std::optional<int>>> optional_vector_search_clause
 %type <ddbsh::engine::StreamSpec> stream_specification
 %type <std::optional<ddbsh::engine::StreamSpec>> optional_stream_specification
 %type <ddbsh::engine::StreamViewType> stream_view_type
@@ -1772,10 +1775,11 @@ optional_return_value:
  * Driver, which makes the parse fail (the statement is not executed). */
 select_command:
       K_SELECT optional_consistent select_projection K_FROM table_optional_index_name
-      optional_where_clause optional_return_consumed_capacity optional_ratelimit
+      optional_where_clause optional_vector_search_clause
+      optional_return_consumed_capacity optional_ratelimit
         {
-            if ($8.has_value() &&
-                $7 != ddbsh::engine::ReturnConsumedCapacity::none) {
+            if ($9.has_value() &&
+                $8 != ddbsh::engine::ReturnConsumedCapacity::none) {
                 drv.set_semantic_error(
                     "You cannot specify both a ratelimit and a return_consumed_capacity.");
                 // A placeholder result; the recorded error makes parse() fail
@@ -1788,10 +1792,32 @@ select_command:
                 cmd.table = std::move($5.table);
                 cmd.index = std::move($5.index);
                 cmd.where = std::move($6);
-                cmd.rcc = $7;
-                cmd.ratelimit = std::move($8);
+                cmd.search_vector = std::move($7.first);
+                cmd.topk = $7.second;
+                cmd.rcc = $8;
+                cmd.ratelimit = std::move($9);
                 $$ = std::move(cmd);
             }
+        }
+    ;
+
+/* ---- Vector search tail (phase 4b, D-4b-1 rev) ---------------------------
+ * `NEAREST <topk> TO [ numeric-list ]` — placed after the WHERE clause and
+ * before RETURN CONSUMED CAPACITY / ratelimit. The whole number after NEAREST
+ * is the required TopK; `TO <list>` (reusing lee_rhs's bracketed numeric list)
+ * is the query vector. TopK and the vector are grammatically inseparable, so
+ * "NEAREST without TopK" cannot be expressed. The planner (not the grammar)
+ * requires the target index to be a vector index. Carried as a
+ * (optional<Value>, optional<int>) pair so the empty alternative yields both
+ * nullopt. */
+optional_vector_search_clause:
+      %empty
+        { $$ = std::make_pair(std::optional<ddbsh::Value>{}, std::optional<int>{}); }
+    | K_NEAREST T_WHOLE_NUMBER K_TO lee_rhs
+        {
+            $$ = std::make_pair(std::optional<ddbsh::Value>{std::move($4)},
+                                std::optional<int>{static_cast<int>(
+                                    ddbsh::engine::parse_ll($2))});
         }
     ;
 

@@ -292,4 +292,35 @@ TEST(ExplainDescribe, FourBlocksInOrderWithMixedFormat) {
     EXPECT_EQ(render(*outcome), expected);
 }
 
+// ---- Vector search EXPLAIN (phase 4b) --------------------------------------
+
+TEST(ExplainSelect, VectorIndexSelectsSearchVectors) {
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut t = table_pk("docs");
+    ddbsh::VectorIndexSchema vi;
+    vi.index_name = "embidx";
+    vi.vector_attr = "embedding";
+    vi.dimensions = 3;
+    vi.distance = ddbsh::VectorDistance::cosine;
+    t.vector_indexes.push_back(vi);
+    client.set_table(t);
+    auto session = make_session(client);
+
+    auto outcome = session.run("explain select * from docs.embidx nearest 5 to [0.1, 0.2, 0.3];");
+    ASSERT_TRUE(outcome.has_value()) << (outcome.has_value() ? "" : outcome.error().message);
+    const auto& e = std::get<ExplainOutcome>(*outcome);
+    ASSERT_EQ(e.blocks.size(), 1u);
+    EXPECT_EQ(e.blocks[0].api_name, "SearchVectors");
+    EXPECT_FALSE(e.trailing_status.has_value());
+    EXPECT_EQ(render(*outcome), std::string("SearchVectors(") + kPrettyBody + ")\n");
+
+    ASSERT_EQ(client.explain_requests().size(), 1u);
+    const auto* req = std::get_if<ddbsh::SearchVectorsIn>(&client.explain_requests()[0]);
+    ASSERT_NE(req, nullptr);
+    EXPECT_EQ(req->table_name, "docs");
+    EXPECT_EQ(req->index_name, "embidx");
+    EXPECT_EQ(req->topk, 5);
+    ASSERT_EQ(req->search_vector.size(), 3u);
+}
+
 }  // namespace

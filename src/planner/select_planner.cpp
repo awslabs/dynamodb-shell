@@ -78,8 +78,91 @@ ValueMap key_of(const KeyMap& key) {
 
 }  // namespace
 
+// Build a SearchVectors plan for a SELECT on a vector index (phase 4b). The
+// WHERE tree becomes the SearchConditionExpression and the projection the
+// ProjectionExpression, aliased through ONE SymbolTable in projection-then-
+// filter order (the house convention shared with Query/Scan) for
+// byte-deterministic EXPLAIN. Error cases follow the P4b design §7 (D-4b).
+static Result<SelectPlan> plan_search_vectors(const SelectCmd& cmd, const VectorIndexSchema& vi,
+                                              const std::string& alias_prefix) {
+    if (!cmd.search_vector.has_value()) {
+        return fail(Errc::invalid_argument,
+                    "A SELECT on vector index " + vi.index_name +
+                        " requires a NEAREST <n> TO [ ... ] clause.");
+    }
+    if (cmd.consistent) {
+        return fail(Errc::invalid_argument, "CONSISTENT is not supported with vector search.");
+    }
+    const int topk = cmd.topk.value_or(0);
+    if (topk <= 0) {
+        return fail(Errc::invalid_argument, "Vector search TopK must be a positive integer.");
+    }
+    const Value& qv = *cmd.search_vector;
+    if (qv.type != Value::Type::L) {
+        return fail(Errc::invalid_argument, "The NEAREST search vector must be a numeric list.");
+    }
+    for (const auto& e : qv.list) {
+        if (e.type != Value::Type::N) {
+            return fail(Errc::invalid_argument,
+                        "The NEAREST search vector must contain only numbers.");
+        }
+    }
+    if (vi.dimensions > 0 && static_cast<long long>(qv.list.size()) != vi.dimensions) {
+        return fail(Errc::invalid_argument,
+                    "The search vector has " + std::to_string(qv.list.size()) +
+                        " values; vector index " + vi.index_name + " expects " +
+                        std::to_string(vi.dimensions) + ".");
+    }
+
+    SymbolTable st(alias_prefix);
+    SelectPlan plan;
+    plan.api = SelectApi::search_vectors;
+    SearchVectorsIn& r = plan.search_vectors;
+    r.table_name = cmd.table;
+    r.index_name = *cmd.index;
+    r.search_vector = qv.list;
+    r.topk = topk;
+    if (!cmd.projection.empty()) {
+        r.projection_expression = serialize_projection(cmd.projection, st);
+    }
+    if (cmd.where != nullptr) {
+        std::string filter = cmd.where->scan_filter_expression(&st);
+        if (!filter.empty()) {
+            r.search_condition_expression = std::move(filter);
+        }
+    }
+    r.expression_attribute_names = names_of(st);
+    r.expression_attribute_values = values_of(st);
+    r.return_consumed_capacity =
+        cmd.ratelimit.has_value() ? ddbsh::ReturnConsumedCapacity::total : to_client_rcc(cmd.rcc);
+    return plan;
+}
+
 Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
                                const std::string& alias_prefix) {
+    // Vector-index routing (phase 4b) is evaluated FIRST. A `.index` that
+    // DescribeTable reports as a vector index routes to SearchVectors; a
+    // NEAREST clause on a non-vector target is a semantic error.
+    if (cmd.index.has_value()) {
+        auto described = client.describe_table(DescribeTableIn{cmd.table});
+        if (!described.has_value()) {
+            return fail(described.error());
+        }
+        for (const auto& vi : described->vector_indexes) {
+            if (vi.index_name == *cmd.index) {
+                return plan_search_vectors(cmd, vi, alias_prefix);
+            }
+        }
+        // Not a vector index -> fall through to the classic GetItem/Query/Scan
+        // path (which re-resolves the key schema via get_key_schema).
+    }
+    if (cmd.search_vector.has_value()) {
+        return fail(Errc::invalid_argument,
+                    cmd.index.has_value()
+                        ? *cmd.index + " is not a vector index; NEAREST requires a vector index."
+                        : "Vector search (NEAREST) requires a vector index (table.vectorindex).");
+    }
+
     auto resolved = get_key_schema(client, cmd.table, cmd.index.value_or(""));
     if (!resolved.has_value()) {
         return fail(resolved.error());
