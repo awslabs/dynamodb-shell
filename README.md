@@ -238,13 +238,20 @@ return a clear "not implemented in this build" error rather than a parse error.
   SELECT * FROM docs.embidx WHERE category = "news" NEAREST 5 TO [0.1, 0.2, 0.3];
   ```
 
-  **What a result row contains.** `SearchVectors` returns each match as the
-  index's *projected non-vector attributes* plus a similarity `Score`. It does
-  **not** echo back the stored vector itself — the vector is the index's search
-  key (potentially thousands of floats), so even `SELECT *` on a `PROJECTING
-  ALL` vector index does not show the vector attribute in the result rows. To
-  retrieve a stored vector, project its key and issue a follow-up point read:
-  `SELECT embedding FROM docs WHERE id = "d1";` (a GetItem on the base table).
+  **What a result row contains.** Each match carries the attributes named in the
+  SELECT projection plus a trailing similarity ` score <n>`. The stored vector
+  is treated like any other attribute: `SELECT *` omits it by default (no
+  `ProjectionExpression` is sent, and the service does not include the vector
+  unless asked), but **naming the vector attribute in the projection returns it**
+  — in the same `SearchVectors` call, at no extra API cost:
+
+  ```sql
+  -- vector omitted (SELECT * does not request it)
+  SELECT * FROM docs.embidx NEAREST 3 TO [0.1, 0.2, 0.3];
+
+  -- vector returned: name it in the projection
+  SELECT id, category, embedding FROM docs.embidx NEAREST 3 TO [0.1, 0.2, 0.3];
+  ```
 
 ## isql-mode input
 

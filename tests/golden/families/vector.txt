@@ -25,11 +25,14 @@
 # query targets cluster 0; its 10 members are the 10 nearest). No harness
 # score-tolerance mode is needed for these fixtures.
 #
-# B2 (vector not returned): SearchVectors returns each match's projected
-# NON-vector attributes plus the score; it does NOT echo the stored vector. The
-# NEAREST goldens below therefore show `{a: N, category: cK} score <n>` with
-# NO `point` attribute even though the index is PROJECTING ALL and the query is
-# SELECT * -- this is the live, service-side behavior the README/HELP document.
+# Vector display (the real, verified behavior): SearchVectors returns each
+# match's projected attributes plus the score. The stored vector is treated
+# like any other attribute -- `SELECT *` omits it (no ProjectionExpression is
+# sent), so the SELECT * NEAREST goldens below show `{a: N, category: cK}
+# score <n>` with NO `point`. But naming the vector in the projection RETURNS
+# it, in the same SearchVectors call (see ivec-3-projected, which asserts
+# `point` is present). This is the live, service-side behavior the README/HELP
+# document.
 #
 # ${RD} is the golden results dir; ${DATA} is the seed dir.
 #
@@ -53,6 +56,7 @@ add_test(NAME ivec-3-setup COMMAND ddbshtest -f ${DATA}/ddbsh-vec-3.sql)
 add_test(NAME ivec-3-nearest COMMAND ddbshtest -q -s -T ${RD}/ivec-3-nearest.exp -c "select * from ddbsh_vec_3.vidx nearest 10 to [10.0, 0.0, 0.0];")
 add_test(NAME ivec-3-explain COMMAND ddbshtest -q -T ${RD}/ivec-3-explain.exp -c "explain select * from ddbsh_vec_3.vidx nearest 10 to [10.0, 0.0, 0.0];")
 add_test(NAME ivec-3-filtered COMMAND ddbshtest -q -s -T ${RD}/ivec-3-filtered.exp -c "select * from ddbsh_vec_3.vidx where category = \"c0\" nearest 5 to [10.0, 0.0, 0.0];")
+add_test(NAME ivec-3-projected COMMAND ddbshtest -q -s -T ${RD}/ivec-3-projected.exp -c "select a, category, point from ddbsh_vec_3.vidx nearest 10 to [10.0, 0.0, 0.0];")
 add_test(NAME ivec-3-drop COMMAND ddbshtest -c "drop table ddbsh_vec_3;")
 
 # --- dimension 4 ---

@@ -116,11 +116,14 @@ FAMILY_HEADER = """# Copyright 2026 ddbsh reimplementation contributors.
 # query targets cluster 0; its {ppc} members are the {ppc} nearest). No harness
 # score-tolerance mode is needed for these fixtures.
 #
-# B2 (vector not returned): SearchVectors returns each match's projected
-# NON-vector attributes plus the score; it does NOT echo the stored vector. The
-# NEAREST goldens below therefore show `{{a: N, category: cK}} score <n>` with
-# NO `point` attribute even though the index is PROJECTING ALL and the query is
-# SELECT * -- this is the live, service-side behavior the README/HELP document.
+# Vector display (the real, verified behavior): SearchVectors returns each
+# match's projected attributes plus the score. The stored vector is treated
+# like any other attribute -- `SELECT *` omits it (no ProjectionExpression is
+# sent), so the SELECT * NEAREST goldens below show `{{a: N, category: cK}}
+# score <n>` with NO `point`. But naming the vector in the projection RETURNS
+# it, in the same SearchVectors call (see ivec-3-projected, which asserts
+# `point` is present). This is the live, service-side behavior the README/HELP
+# document.
 #
 # ${{RD}} is the golden results dir; ${{DATA}} is the seed dir.
 #
@@ -179,6 +182,15 @@ def gen_family() -> str:
                 f'-T ${{RD}}/ivec-{d}-filtered.exp '
                 f'-c "select * from {table}.vidx where category = \\"c0\\" '
                 f'nearest 5 to {to};")\n')
+            # TEST-1 (corrected B2): naming the vector attribute in the
+            # projection returns it in the SAME SearchVectors call. Asserts
+            # `point` IS present in the rows (contrast ivec-*-nearest = SELECT *
+            # which omits it).
+            out.append(
+                f'add_test(NAME ivec-{d}-projected COMMAND ddbshtest -q -s '
+                f'-T ${{RD}}/ivec-{d}-projected.exp '
+                f'-c "select a, category, point from {table}.vidx nearest '
+                f'{POINTS_PER_CLUSTER} to {to};")\n')
         out.append(
             f'add_test(NAME ivec-{d}-drop COMMAND ddbshtest '
             f'-c "drop table {table};")\n\n')

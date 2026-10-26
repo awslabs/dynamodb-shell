@@ -8,11 +8,11 @@ SELECT [CONSISTENT] attribute_list | * FROM <table>[.<index>] [WHERE where_claus
       SearchVectors call: <topk> is the number of nearest items to return
       and the bracketed numeric list is the query vector (its length must
       equal the index DIMENSIONS). Each result row is shown with a trailing
-      ` score <n>` (the similarity score for the match). SearchVectors
-      returns each match's projected non-vector attributes plus the score;
-      it does NOT return the stored vector itself (even for a PROJECTING ALL
-      index), so the vector attribute is absent from the result rows. To
-      read a stored vector, project its key and GetItem the base table.
+      ` score <n>` (the similarity score for the match). Each row carries
+      the attributes named in the projection plus the score; the stored
+      vector is omitted by `SELECT *` but IS returned when named in the
+      projection (SELECT id, embedding FROM t.vix NEAREST ...), in the same
+      SearchVectors call.
       A WHERE clause becomes the search filter (it may
       reference only the vector index's HASH / FILTER search-key attributes).
       e.g. SELECT * FROM docs.embidx WHERE tenant = "acme" NEAREST 5 TO [0.1, 0.2, 0.3]
