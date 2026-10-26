@@ -1,0 +1,24 @@
+UpdateTable({
+   "AttributeDefinitions":   [{
+         "AttributeName":   "category",
+         "AttributeType":   "S"
+      }],
+   "TableName":   "foo",
+   "VectorIndexUpdates":   [{
+         "Create":   {
+            "IndexName":   "vidx",
+            "VectorAttribute":   {
+               "AttributeName":   "point"
+            },
+            "SearchSchema":   [{
+                  "AttributeName":   "category",
+                  "SearchSchemaElementType":   "INLINE_FILTER"
+               }],
+            "Projection":   {
+               "ProjectionType":   "ALL"
+            },
+            "Dimensions":   1536,
+            "DistanceFunction":   "COSINE"
+         }
+      }]
+})

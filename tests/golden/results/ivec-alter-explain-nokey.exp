@@ -1,0 +1,16 @@
+UpdateTable({
+   "TableName":   "foo",
+   "VectorIndexUpdates":   [{
+         "Create":   {
+            "IndexName":   "vidx",
+            "VectorAttribute":   {
+               "AttributeName":   "point"
+            },
+            "Projection":   {
+               "ProjectionType":   "ALL"
+            },
+            "Dimensions":   3,
+            "DistanceFunction":   "EUCLIDEAN"
+         }
+      }]
+})
