@@ -1,0 +1,19 @@
+Query({
+   "TableName":   "ddbsh_mgsi_b",
+   "IndexName":   "gidx",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a",
+      "#aaaa2":   "b"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "10"
+      },
+      ":vaaa2":   {
+         "N":   "20"
+      }
+   }
+})

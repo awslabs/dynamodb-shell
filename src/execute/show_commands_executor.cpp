@@ -127,6 +127,56 @@ std::string show_lsis(const std::vector<SecondaryIndexSchema>& lsis) {
     return out;
 }
 
+/// The DISTANCE keyword a vector index reconstructs to (phase 4b). The scanner
+/// maps these case-insensitively (dot_product lexes as one identifier token).
+std::string vsi_distance_ddl(VectorDistance d) {
+    switch (d) {
+        case VectorDistance::euclidean:
+            return "EUCLIDEAN";
+        case VectorDistance::dot_product:
+            return "DOT_PRODUCT";
+        case VectorDistance::cosine:
+            break;
+    }
+    return "COSINE";
+}
+
+/// Reconstruct the reparseable `VSI ( ... )` clause for SHOW CREATE TABLE
+/// (phase 4b, D-4b-10). The emitted DDL round-trips through the grammar's
+/// vector_index_list production:
+///   VSI ( "name" ON "attr" DIMENSIONS n DISTANCE fn
+///         [SEARCH KEY ( "a" HASH, "b" FILTER )] PROJECTING ... )
+std::string show_vsis(const std::vector<VectorIndexSchema>& vsis) {
+    if (vsis.empty()) {
+        return {};
+    }
+    std::string out = "VSI (";
+    for (std::size_t ix = 0; ix < vsis.size(); ++ix) {
+        if (ix != 0) {
+            out += ", ";
+        }
+        const auto& vi = vsis[ix];
+        out += "\"" + vi.index_name + "\" ON \"" + vi.vector_attr + "\" DIMENSIONS " +
+               std::to_string(vi.dimensions) + " DISTANCE " + vsi_distance_ddl(vi.distance);
+        if (!vi.search_schema.empty()) {
+            out += " SEARCH KEY ( ";
+            for (std::size_t k = 0; k < vi.search_schema.size(); ++k) {
+                if (k != 0) {
+                    out += ", ";
+                }
+                const char* role =
+                    vi.search_schema[k].kind == SearchSchemaKind::hash ? "HASH" : "FILTER";
+                out += "\"" + vi.search_schema[k].attr + "\" " + role;
+            }
+            out += " )";
+        }
+        out += " ";
+        out += vi.projection_set ? projection_ddl(vi.projection) : std::string("PROJECTING ALL");
+    }
+    out += ") ";
+    return out;
+}
+
 /// Translate the SDK StreamViewType NAME ("NEW_IMAGE"/...) into the DDL words
 /// the original stream_specification() emitted.
 std::string stream_view_words(const std::string& mapped) {
@@ -198,6 +248,7 @@ std::string reconstruct_ddl(const ShowCreateTableCmd& cmd, const DescribeTableOu
 
     ctc += show_gsis(td.global_secondary_indexes, table_on_demand);
     ctc += show_lsis(td.local_secondary_indexes);
+    ctc += show_vsis(td.vector_indexes);
 
     if (td.stream_specification_set) {
         if (td.stream_view_type.has_value()) {

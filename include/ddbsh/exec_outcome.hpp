@@ -57,6 +57,23 @@ struct SelectOutcome {
     std::optional<ConsumedCapacity> consumed_capacity;
 };
 
+/// The result of a SELECT … NEAREST <n> TO [ … ] on a vector index
+/// (SearchVectors; phase 4b, D-4b-6). Each row is a returned item plus its
+/// similarity Score; the Renderer emits `show_item(item) score <n>` per row
+/// (the score as a trailing annotation OUTSIDE the item braces so it never
+/// collides with a real attribute name). Service order is similarity order and
+/// is preserved (goldens omit `-s`). `vector_capacity` is populated only when
+/// the user asked (RETURN CONSUMED CAPACITY); the Renderer then appends a
+/// vector-capacity summary line.
+struct VectorSearchOutcome {
+    struct Row {
+        ItemRow item;
+        double score = 0.0;
+    };
+    std::vector<Row> rows;
+    std::optional<VectorConsumedCapacity> vector_capacity;
+};
+
 /// The result of an INSERT / REPLACE: one status token per row written
 /// (arch §7 — a multi-row `VALUES (..),(..)` emits one `INSERT`/`REPLACE` line
 /// per row, in order). One `CInsertCommand` backs both verbs in the original,
@@ -177,7 +194,7 @@ struct TransactReadOutcome {
 /// is the buffering form of the streaming OutcomeSink (D-2c-12).
 using ExecOutcome = std::variant<StatusOutcome, ReportOutcome, EmptyOutcome, SelectOutcome,
                                  WriteOutcome, ExplainOutcome, BulkWriteOutcome, TransactOutcome,
-                                 TransactReadOutcome, MultiOutcome>;
+                                 TransactReadOutcome, VectorSearchOutcome, MultiOutcome>;
 
 /// Carries >1 fragment produced by one statement, in production order (e.g. a
 /// multi-row INSERT emits one WriteOutcome per row). The buffering

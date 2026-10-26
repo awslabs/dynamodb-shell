@@ -30,11 +30,13 @@
 #include <aws/dynamodb/model/CreateGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/CreateReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/CreateTableRequest.h>
+#include <aws/dynamodb/model/CreateVectorIndexAction.h>
 #include <aws/dynamodb/model/DeleteBackupRequest.h>
 #include <aws/dynamodb/model/DeleteGlobalSecondaryIndexAction.h>
 #include <aws/dynamodb/model/DeleteItemRequest.h>
 #include <aws/dynamodb/model/DeleteReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/DeleteTableRequest.h>
+#include <aws/dynamodb/model/DeleteVectorIndexAction.h>
 #include <aws/dynamodb/model/DescribeBackupRequest.h>
 #include <aws/dynamodb/model/DescribeContinuousBackupsRequest.h>
 #include <aws/dynamodb/model/DescribeLimitsRequest.h>
@@ -53,6 +55,8 @@
 #include <aws/dynamodb/model/RestoreTableFromBackupRequest.h>
 #include <aws/dynamodb/model/RestoreTableToPointInTimeRequest.h>
 #include <aws/dynamodb/model/ScanRequest.h>
+#include <aws/dynamodb/model/SearchSchemaElement.h>
+#include <aws/dynamodb/model/SearchVectorsRequest.h>
 #include <aws/dynamodb/model/TimeToLiveSpecification.h>
 #include <aws/dynamodb/model/TransactGetItemsRequest.h>
 #include <aws/dynamodb/model/TransactWriteItemsRequest.h>
@@ -62,7 +66,9 @@
 #include <aws/dynamodb/model/UpdateReplicationGroupMemberAction.h>
 #include <aws/dynamodb/model/UpdateTableRequest.h>
 #include <aws/dynamodb/model/UpdateTimeToLiveRequest.h>
-
+#include <aws/dynamodb/model/VectorAttributeDefinition.h>
+#include <aws/dynamodb/model/VectorIndex.h>
+#include <aws/dynamodb/model/VectorIndexUpdate.h>
 namespace ddbsh::cli {
 
 namespace {
@@ -957,6 +963,102 @@ Aws::DynamoDB::Model::TableClass to_sdk_table_class(TableClass tc) {
                : Aws::DynamoDB::Model::TableClass::STANDARD;
 }
 
+// ---- Vector index / SearchVectors translation (phase 4b) -------------------
+// SDK-free VectorIndexDef / SearchVectorsIn -> SDK types. Field names pinned
+// against AWS SDK for C++ 1.11.916 (SearchConditionExpression, SearchResults,
+// Create/Delete-only VectorIndexUpdate; D-4b-4). The vector attribute is NOT an
+// AttributeDefinition (it is an L-of-N, not a scalar key; D-4b-8).
+Aws::DynamoDB::Model::VectorDistanceFunction to_sdk_vector_distance(VectorDistance d) {
+    switch (d) {
+        case VectorDistance::euclidean:
+            return Aws::DynamoDB::Model::VectorDistanceFunction::EUCLIDEAN;
+        case VectorDistance::dot_product:
+            return Aws::DynamoDB::Model::VectorDistanceFunction::DOT_PRODUCT;
+        case VectorDistance::cosine:
+            break;
+    }
+    return Aws::DynamoDB::Model::VectorDistanceFunction::COSINE;
+}
+
+Aws::Vector<Aws::DynamoDB::Model::SearchSchemaElement> to_sdk_search_schema(
+    const std::vector<SearchSchemaElem>& schema) {
+    Aws::Vector<Aws::DynamoDB::Model::SearchSchemaElement> out;
+    out.reserve(schema.size());
+    for (const auto& e : schema) {
+        Aws::DynamoDB::Model::SearchSchemaElement se;
+        se.SetAttributeName(e.attr);
+        se.SetSearchSchemaElementType(
+            e.kind == SearchSchemaKind::hash
+                ? Aws::DynamoDB::Model::SearchSchemaElementType::HASH
+                : Aws::DynamoDB::Model::SearchSchemaElementType::INLINE_FILTER);
+        out.push_back(se);
+    }
+    return out;
+}
+
+// Fill the shared vector-index fields on either a VectorIndex (CreateTable) or
+// a CreateVectorIndexAction (UpdateTable) — both expose the same setters.
+template <class T>
+void fill_vector_index(T& obj, const VectorIndexDef& v) {
+    obj.SetIndexName(v.index_name);
+    Aws::DynamoDB::Model::VectorAttributeDefinition attr;
+    attr.SetAttributeName(v.vector_attr);
+    obj.SetVectorAttribute(attr);
+    obj.SetDimensions(v.dimensions);
+    obj.SetDistanceFunction(to_sdk_vector_distance(v.distance));
+    if (!v.search_schema.empty()) {
+        obj.SetSearchSchema(to_sdk_search_schema(v.search_schema));
+    }
+    obj.SetProjection(to_sdk_projection(v.projection));
+}
+
+Aws::DynamoDB::Model::VectorIndex to_sdk_vector_index(const VectorIndexDef& v) {
+    Aws::DynamoDB::Model::VectorIndex out;
+    fill_vector_index(out, v);
+    return out;
+}
+
+Aws::DynamoDB::Model::VectorIndexUpdate to_sdk_vector_index_update(const VectorIndexUpdateDef& u) {
+    Aws::DynamoDB::Model::VectorIndexUpdate out;
+    if (u.create.has_value()) {
+        Aws::DynamoDB::Model::CreateVectorIndexAction action;
+        fill_vector_index(action, *u.create);
+        out.SetCreate(action);
+    } else if (u.drop.has_value()) {
+        Aws::DynamoDB::Model::DeleteVectorIndexAction action;
+        action.SetIndexName(*u.drop);
+        out.SetDelete(action);
+    }
+    return out;
+}
+
+Aws::DynamoDB::Model::SearchVectorsRequest build_search_vectors(const SearchVectorsIn& in) {
+    Aws::DynamoDB::Model::SearchVectorsRequest request;
+    request.SetTableName(in.table_name);
+    request.SetIndexName(in.index_name);
+    Aws::Vector<SdkAttributeValue> vec;
+    vec.reserve(in.search_vector.size());
+    for (const auto& v : in.search_vector) {
+        vec.push_back(to_sdk_value(v));
+    }
+    request.SetSearchVector(std::move(vec));
+    request.SetTopK(in.topk);
+    if (in.search_condition_expression.has_value()) {
+        request.SetSearchConditionExpression(*in.search_condition_expression);
+    }
+    if (in.projection_expression.has_value()) {
+        request.SetProjectionExpression(*in.projection_expression);
+    }
+    if (!in.expression_attribute_names.empty()) {
+        request.SetExpressionAttributeNames(to_sdk_names(in.expression_attribute_names));
+    }
+    if (!in.expression_attribute_values.empty()) {
+        request.SetExpressionAttributeValues(to_sdk_item(in.expression_attribute_values));
+    }
+    request.SetReturnConsumedCapacity(to_sdk_rcc(in.return_consumed_capacity));
+    return request;
+}
+
 Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn& in) {
     Aws::DynamoDB::Model::CreateTableRequest request;
     request.SetTableName(in.table_name);
@@ -996,6 +1098,10 @@ Aws::DynamoDB::Model::CreateTableRequest build_create_table(const CreateTableIn&
         sdk_lsi.SetKeySchema(to_sdk_key_schema(lsi.key_schema));
         sdk_lsi.SetProjection(to_sdk_projection(lsi.projection));
         request.AddLocalSecondaryIndexes(sdk_lsi);
+    }
+
+    for (const auto& vi : in.vector_indexes) {
+        request.AddVectorIndexes(to_sdk_vector_index(vi));
     }
 
     if (in.stream.has_value()) {
@@ -1142,6 +1248,10 @@ Aws::DynamoDB::Model::UpdateTableRequest build_update_table(const UpdateTableIn&
         request.AddGlobalSecondaryIndexUpdates(to_sdk_gsi_update(gu));
     }
 
+    for (const auto& vu : in.vector_index_updates) {
+        request.AddVectorIndexUpdates(to_sdk_vector_index_update(vu));
+    }
+
     // A replica ALTER carries exactly one ReplicationGroupUpdate (the original
     // CUpdateTableReplica::run added one). Only a replica ALTER sets this; a
     // plain SET leaves it nullopt (D-2e-12).
@@ -1266,6 +1376,31 @@ Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
                           std::string(err.GetRequestId().c_str())});
     }
     return CreateTableOut{};
+}
+
+Result<SearchVectorsOut> AwsDDBClient::search_vectors(const SearchVectorsIn& in) {
+    auto request = build_search_vectors(in);
+
+    auto outcome = client_->SearchVectors(request);
+    if (!outcome.IsSuccess()) {
+        return fail(from_sdk_error(outcome.GetError()));
+    }
+    const auto& result = outcome.GetResult();
+    SearchVectorsOut out;
+    for (const auto& r : result.GetSearchResults()) {
+        SearchVectorsOut::Row row;
+        row.item = ItemRow{from_sdk_item(r.GetItem())};
+        row.score = r.GetScore();
+        out.results.push_back(std::move(row));
+    }
+    // SearchVectors' ConsumedCapacity is a VectorCapacity (request/write bytes);
+    // the Renderer shows it only when the user asked (RETURN CONSUMED CAPACITY).
+    const auto& cc = result.GetConsumedCapacity();
+    VectorConsumedCapacity vcc;
+    vcc.vector_search_request_bytes = cc.GetVectorSearchRequestBytes();
+    vcc.vector_write_request_bytes = cc.GetVectorWriteRequestBytes();
+    out.vector_capacity = vcc;
+    return out;
 }
 
 Result<UpdateTableOut> AwsDDBClient::update_table(const UpdateTableIn& in) {
@@ -1604,6 +1739,43 @@ SecondaryIndexSchema load_gsi_detail(
     return out;
 }
 
+// Read a vector index back from DescribeTable (SDK VectorIndexDescription ->
+// VectorIndexSchema). The planner classifies a named `.index` as a vector
+// index from this list and uses `dimensions` to pre-validate the search-vector
+// length; the DESCRIBE / SHOW CREATE TABLE renderers reconstruct the `vsi(…)`
+// clause from these fields (D-4b-10).
+VectorIndexSchema load_vector_index_detail(const Aws::DynamoDB::Model::VectorIndexDescription& vi) {
+    VectorIndexSchema out;
+    out.index_name = vi.GetIndexName().c_str();
+    out.vector_attr = vi.GetVectorAttribute().GetAttributeName().c_str();
+    out.dimensions = vi.GetDimensions();
+    switch (vi.GetDistanceFunction()) {
+        case Aws::DynamoDB::Model::VectorDistanceFunction::EUCLIDEAN:
+            out.distance = VectorDistance::euclidean;
+            break;
+        case Aws::DynamoDB::Model::VectorDistanceFunction::DOT_PRODUCT:
+            out.distance = VectorDistance::dot_product;
+            break;
+        default:
+            out.distance = VectorDistance::cosine;
+            break;
+    }
+    for (const auto& se : vi.GetSearchSchema()) {
+        SearchSchemaKind kind =
+            se.GetSearchSchemaElementType() == Aws::DynamoDB::Model::SearchSchemaElementType::HASH
+                ? SearchSchemaKind::hash
+                : SearchSchemaKind::inline_filter;
+        out.search_schema.push_back(SearchSchemaElem{se.GetAttributeName().c_str(), kind});
+    }
+    if (vi.ProjectionHasBeenSet()) {
+        out.projection = from_sdk_projection(vi.GetProjection());
+        out.projection_set = true;
+    }
+    out.index_status =
+        Aws::DynamoDB::Model::IndexStatusMapper::GetNameForIndexStatus(vi.GetIndexStatus()).c_str();
+    return out;
+}
+
 }  // namespace
 
 Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in) {
@@ -1628,6 +1800,9 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
     }
     for (const auto& gsi : table.GetGlobalSecondaryIndexes()) {
         out.global_secondary_indexes.push_back(load_gsi_detail(gsi));
+    }
+    for (const auto& vi : table.GetVectorIndexes()) {
+        out.vector_indexes.push_back(load_vector_index_detail(vi));
     }
 
     // Report fields (SHOW TABLES / DESCRIBE). Enum values are stored as the SDK
@@ -1909,6 +2084,8 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
                                 "Invalid restore timestamp: " + in.restore_datetime);
                 }
                 return payload(request);
+            } else if constexpr (std::is_same_v<T, SearchVectorsIn>) {
+                return payload(build_search_vectors(in));
             } else {
                 static_assert(sizeof(T) == 0, "unhandled ExplainRequest alternative");
             }

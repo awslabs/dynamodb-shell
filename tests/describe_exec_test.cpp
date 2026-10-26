@@ -92,6 +92,7 @@ TEST(Describe, ProvisionedBasicReport) {
               "PITR is Disabled.\n"
               "GSI: None\n"
               "LSI: None\n"
+              "VSI: None\n"
               "Stream: Disabled\n"
               "Table Class: STANDARD\n"
               "SSE: Not set\n");
@@ -283,6 +284,55 @@ TEST(Describe, MissingTableIsError) {
     auto out = session.run("describe ghost;");
     ASSERT_FALSE(out.has_value());
     EXPECT_EQ(out.error().code, Errc::no_such_table);
+}
+
+// ---- Composite GSI read-back (phase 4b backlog, G3) ------------------------
+
+TEST(Describe, CompositeGsiKeySchemaReadBack) {
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut t = base_provisioned("docs");
+    SecondaryIndexSchema gsi;
+    gsi.index_name = "g";
+    gsi.key_schema.hash_keys = {"a", "b"};
+    gsi.key_schema.range_keys = {"c", "d"};
+    gsi.projection_set = true;
+    gsi.projection = Projection{ProjectionType::all, {}};
+    gsi.index_status = "ACTIVE";
+    t.global_secondary_indexes = {gsi};
+    client.set_table(t);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("describe docs;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_NE(render(*out).find("GSI g: ( HASH a, HASH b, RANGE c, RANGE d )"), std::string::npos)
+        << render(*out);
+}
+
+// ---- Vector index (phase 4b, D-4b-10) --------------------------------------
+
+TEST(Describe, VectorIndexSection) {
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut t = base_provisioned("docs");
+    ddbsh::VectorIndexSchema vi;
+    vi.index_name = "embidx";
+    vi.vector_attr = "embedding";
+    vi.dimensions = 1536;
+    vi.distance = ddbsh::VectorDistance::cosine;
+    vi.search_schema = {{"category", ddbsh::SearchSchemaKind::inline_filter}};
+    vi.projection_set = true;
+    vi.projection = Projection{ProjectionType::all, {}};
+    vi.index_status = "ACTIVE";
+    t.vector_indexes = {vi};
+    client.set_table(t);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("describe docs;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_NE(render(*out).find("VSI embidx: Vector Attribute: embedding, Dimensions: 1536, "
+                                "Distance: COSINE, Search Schema: ( category (INLINE_FILTER) ), "
+                                "Projecting (ALL), Status: ACTIVE\n"),
+              std::string::npos)
+        << render(*out);
 }
 
 }  // namespace

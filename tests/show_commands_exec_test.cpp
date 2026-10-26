@@ -360,4 +360,41 @@ TEST(ShowCommandsExec, ExplainShowIsSyntaxError) {
     EXPECT_FALSE(session.parse("explain show create table t;").has_value());
 }
 
+// ---- Vector index (phase 4b, D-4b-10) --------------------------------------
+
+TEST(ShowCreateTableExec, VectorIndexRoundTrips) {
+    // A vector index reconstructs as a reparseable `VSI ( ... )` clause.
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut td;
+    td.table_name = "docs";
+    td.table_status = "ACTIVE";
+    td.attribute_definitions = {{"id", ScalarType::s}, {"category", ScalarType::s}};
+    td.key_schema = {{"id"}, {}};
+    td.billing_mode_summary = "PAY_PER_REQUEST";
+    ddbsh::VectorIndexSchema vi;
+    vi.index_name = "embidx";
+    vi.vector_attr = "embedding";
+    vi.dimensions = 1536;
+    vi.distance = ddbsh::VectorDistance::cosine;
+    vi.search_schema = {{"category", ddbsh::SearchSchemaKind::inline_filter}};
+    vi.projection_set = true;
+    vi.projection.type = ProjectionType::all;
+    td.vector_indexes.push_back(vi);
+    client.set_table(td);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("show create table docs;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const std::string ddl = render(*out);
+    EXPECT_NE(ddl.find("VSI (\"embidx\" ON \"embedding\" DIMENSIONS 1536 DISTANCE COSINE "
+                       "SEARCH KEY ( \"category\" FILTER ) PROJECTING ALL"),
+              std::string::npos)
+        << ddl;
+
+    // The reconstructed DDL must re-parse (round-trip).
+    auto reparsed = session.parse(ddl + ";");
+    EXPECT_TRUE(reparsed.has_value())
+        << "reparse failed: " << (reparsed.has_value() ? std::string{} : reparsed.error().message);
+}
+
 }  // namespace

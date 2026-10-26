@@ -164,12 +164,17 @@ using ddbsh::ProvisionedThroughputOverride;
 using ddbsh::ReplicaGsi;
 using ddbsh::ReplicaUpdate;
 using ddbsh::ScalarType;
+using ddbsh::SearchSchemaElem;
+using ddbsh::SearchSchemaKind;
 using ddbsh::SseSpec;
 using ddbsh::SseType;
 using ddbsh::StreamSpec;
 using ddbsh::StreamViewType;
 using ddbsh::TableClass;
 using ddbsh::Tag;
+using ddbsh::VectorDistance;
+using ddbsh::VectorIndexDef;
+using ddbsh::VectorIndexUpdateDef;
 using ddbsh::WarmThroughput;
 
 /// One parsed key role (phase 4a): a HASH or RANGE group of one or more
@@ -195,6 +200,7 @@ struct CreateTableCmd {
     std::optional<WarmThroughput> warm;
     std::vector<Gsi> gsis;
     std::vector<Lsi> lsis;
+    std::vector<VectorIndexDef> vector_indexes;  ///< vsi ( ... ) clause (phase 4b)
     std::optional<StreamSpec> stream;
     std::optional<SseSpec> sse;
     TableClass table_class = TableClass::standard;
@@ -272,6 +278,13 @@ struct SelectCmd {
     ReturnConsumedCapacity rcc = ReturnConsumedCapacity::none;
     std::optional<RateLimit> ratelimit;
     ExistsMode exists_mode = ExistsMode::none;  ///< set by EXISTS/NOT EXISTS (write txn only)
+    /// Vector search (phase 4b, D-4b-1 rev): `NEAREST <n> TO [ … ]`. `topk` is
+    /// the whole number after NEAREST; `search_vector` is the bracketed numeric
+    /// list (an L-of-N Value). Both set together or neither. Their presence +
+    /// a `.index` that resolves to a vector index routes the planner to
+    /// SearchVectors (never GetItem/Query/Scan).
+    std::optional<Value> search_vector;
+    std::optional<int> topk;
 };
 
 // ---- UPDATE / UPSERT / DELETE (W5 / 2c) ------------------------------------
@@ -355,6 +368,8 @@ struct AlterTableCmd {
     std::optional<bool> deletion_protection;          ///< SET deletion protection enabled|disabled
     std::vector<AttributeDef> attribute_definitions;  ///< ( attr type, ... ) for CREATE GSI
     std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
+    std::vector<VectorIndexUpdateDef>
+        vector_index_updates;  ///< CREATE / DROP vector index (phase 4b)
     /// D-2e-6: a combined `SET billing ... UPDATE GSI (...)` whose table billing
     /// mode is on-demand drops the GSI updates (the index throughput is implied)
     /// and the original emitted an informational message. The gate is applied in

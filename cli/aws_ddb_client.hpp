@@ -48,6 +48,7 @@ public:
     Result<GetItemOut> get_item(const GetItemIn&) override;
     Result<QueryOut> query(const QueryIn&) override;
     Result<ScanOut> scan(const ScanIn&) override;
+    Result<SearchVectorsOut> search_vectors(const SearchVectorsIn&) override;
     Result<PutItemOut> put_item(const PutItemIn&) override;
     Result<UpdateItemOut> update_item(const UpdateItemIn&) override;
     Result<DeleteItemOut> delete_item(const DeleteItemIn&) override;

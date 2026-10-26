@@ -49,6 +49,52 @@ Result<void> validate_key_schemas(const CreateTableCmd& cmd) {
             return fail(Errc::invalid_argument,
                         "GSI " + gsi.name + " must specify a partition (HASH) key.");
         }
+        // G1 (phase 4b backlog): DynamoDB allows up to 4 partition and 4 sort
+        // attributes on a composite GSI key; reject more client-side with a
+        // clear message instead of letting the service reject it.
+        if (gsi.key_schema.hash.size() > 4 || gsi.key_schema.range.size() > 4) {
+            return fail(Errc::invalid_argument,
+                        "GSI " + gsi.name +
+                            " key schema exceeds the 4-attribute limit per partition/sort key.");
+        }
+    }
+    // Vector-index validation (phase 4b, D-4b-8). The vector attribute is an
+    // L-of-N, not a scalar key type, so it must NOT be declared in the top
+    // attribute-type list; the SEARCH KEY (HASH/INLINE_FILTER) and PROJECTING
+    // INCLUDE attributes, by contrast, MUST be declared there. Authored error
+    // messages (no oracle; the original predates vector search).
+    auto is_declared = [&cmd](const std::string& name) {
+        for (const auto& a : cmd.attribute_definitions) {
+            if (a.name == name) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const auto& vi : cmd.vector_indexes) {
+        if (is_declared(vi.vector_attr)) {
+            return fail(Errc::invalid_argument,
+                        "The vector attribute " + vi.vector_attr + " of vector index " +
+                            vi.index_name +
+                            " must not be declared in the attribute list (it is a vector, "
+                            "not a scalar key).");
+        }
+        for (const auto& e : vi.search_schema) {
+            if (!is_declared(e.attr)) {
+                return fail(Errc::invalid_argument, "The search-key attribute " + e.attr +
+                                                        " of vector index " + vi.index_name +
+                                                        " must be declared in the attribute list.");
+            }
+        }
+        if (vi.projection.type == ProjectionType::include) {
+            for (const auto& a : vi.projection.non_key_attributes) {
+                if (!is_declared(a)) {
+                    return fail(Errc::invalid_argument,
+                                "The projected attribute " + a + " of vector index " +
+                                    vi.index_name + " must be declared in the attribute list.");
+                }
+            }
+        }
     }
     return {};
 }
@@ -65,6 +111,7 @@ CreateTableIn make_request(const CreateTableCmd& cmd) {
     request.warm = cmd.warm;
     request.gsis = cmd.gsis;
     request.lsis = cmd.lsis;
+    request.vector_indexes = cmd.vector_indexes;
     request.stream = cmd.stream;
     request.sse = cmd.sse;
     request.table_class = cmd.table_class;

@@ -39,6 +39,30 @@ std::string projection_type_name(ProjectionType t) {
     return "ALL";
 }
 
+/// The vector distance-function NAME (matches the SDK enum spelling; phase 4b).
+std::string vector_distance_name(VectorDistance d) {
+    switch (d) {
+        case VectorDistance::euclidean:
+            return "EUCLIDEAN";
+        case VectorDistance::dot_product:
+            return "DOT_PRODUCT";
+        case VectorDistance::cosine:
+            break;
+    }
+    return "COSINE";
+}
+
+/// Render a vector index's SEARCH KEY schema as "attr (HASH), attr
+/// (INLINE_FILTER)" (phase 4b). Empty when the index has no search schema.
+std::string vector_search_schema_text(const std::vector<SearchSchemaElem>& schema) {
+    std::string out;
+    for (const auto& e : schema) {
+        const char* kind = e.kind == SearchSchemaKind::hash ? "HASH" : "INLINE_FILTER";
+        out += (out.empty() ? "" : ", ") + e.attr + " (" + kind + ")";
+    }
+    return out;
+}
+
 /// Render a key schema as the original did (KeyTypeMapper name + " " + attr,
 /// joined by ", ", in [HASH…, RANGE…] order): "HASH pk" or
 /// "HASH pk, RANGE rk". A composite GSI key lists every element, e.g.
@@ -212,6 +236,36 @@ Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client)
         lines.push_back(line);
     } else {
         lines.push_back("LSI: None");
+    }
+
+    // ---- Vector indexes (phase 4b, D-4b-10: always shown, parallel to GSI/LSI;
+    // a human-approved divergence — re-records every DESCRIBE golden) ---------
+    if (!td.vector_indexes.empty()) {
+        for (const auto& vi : td.vector_indexes) {
+            std::string line = "VSI " + vi.index_name + ": ";
+            line += "Vector Attribute: " + vi.vector_attr;
+            line += ", Dimensions: " + std::to_string(vi.dimensions);
+            line += ", Distance: " + vector_distance_name(vi.distance);
+            std::string schema = vector_search_schema_text(vi.search_schema);
+            if (!schema.empty()) {
+                line += ", Search Schema: ( " + schema + " )";
+            }
+            if (vi.projection_set) {
+                if (vi.projection.type == ProjectionType::include) {
+                    std::string pkeys;
+                    for (const auto& pk : vi.projection.non_key_attributes) {
+                        pkeys = pkeys.empty() ? pk : pkeys + ", " + pk;
+                    }
+                    line += ", Projecting (INCLUDE) (" + pkeys + ")";
+                } else {
+                    line += ", Projecting (" + projection_type_name(vi.projection.type) + ")";
+                }
+            }
+            line += ", Status: " + vi.index_status;
+            lines.push_back(line);
+        }
+    } else {
+        lines.push_back("VSI: None");
     }
 
     // ---- __show_stream ----------------------------------------------------

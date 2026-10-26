@@ -59,6 +59,9 @@ std::string status_row(const std::string& name, const DescribeTableOut& td,
     row += " | TTL " + ttl_column(ttl);
     row += " | GSI: " + std::to_string(td.global_secondary_indexes.size());
     row += " | LSI : " + std::to_string(td.local_secondary_indexes.size());
+    // Vector indexes (phase 4b, D-4b-10 Option A: always shown, even when 0 —
+    // a human-approved divergence; re-records every SHOW TABLES golden).
+    row += " | VSI : " + std::to_string(td.vector_indexes.size());
     row += " |";
     return row;
 }

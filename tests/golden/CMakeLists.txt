@@ -108,6 +108,8 @@ set(GOLDEN_FAMILIES
     update
     delete
     insert-replace
+    composite-gsi
+    vector
     transactions
     return-values
     test-cleanup

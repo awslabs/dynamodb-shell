@@ -1,0 +1,13 @@
+SearchVectors({
+   "TableName":   "ddbsh_vec_3",
+   "IndexName":   "vidx",
+   "ReturnConsumedCapacity":   "NONE",
+   "SearchVector":   [{
+         "N":   "10.0"
+      }, {
+         "N":   "0.0"
+      }, {
+         "N":   "0.0"
+      }],
+   "TopK":   10
+})

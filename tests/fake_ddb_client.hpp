@@ -106,6 +106,26 @@ public:
     /// Consumed capacity attached to every read response (per page).
     void set_consumed_capacity(ConsumedCapacity cc) { consumed_capacity_ = std::move(cc); }
 
+    /// Canned SearchVectors results (each row = item + score), in service order.
+    void set_search_vectors_results(std::vector<SearchVectorsOut::Row> rows) {
+        search_vectors_out_.results = std::move(rows);
+    }
+
+    /// Attach a VectorCapacity to the next SearchVectors response.
+    void set_search_vectors_capacity(VectorConsumedCapacity vcc) {
+        search_vectors_out_.vector_capacity = std::move(vcc);
+    }
+
+    /// Make the next search_vectors() fail with this Error. nullopt => succeed.
+    void set_search_vectors_error(std::optional<Error> error) {
+        search_vectors_error_ = std::move(error);
+    }
+
+    /// The SearchVectors requests issued, in order (for request-shape asserts).
+    const std::vector<SearchVectorsIn>& search_vectors_requests() const {
+        return search_vectors_requests_;
+    }
+
     /// Record the number of query/scan calls so pagination can be asserted.
     int read_calls() const { return read_calls_; }
 
@@ -186,6 +206,14 @@ public:
         out.last_evaluated_key = next_cursor(page);
         out.consumed_capacity = consumed_capacity_;
         return out;
+    }
+
+    Result<SearchVectorsOut> search_vectors(const SearchVectorsIn& in) override {
+        search_vectors_requests_.push_back(in);
+        if (search_vectors_error_.has_value()) {
+            return fail(*search_vectors_error_);
+        }
+        return search_vectors_out_;
     }
 
     Result<PutItemOut> put_item(const PutItemIn& in) override {
@@ -600,6 +628,9 @@ private:
     std::optional<ItemRow> get_item_;
     std::vector<std::vector<ItemRow>> pages_;
     std::optional<ConsumedCapacity> consumed_capacity_;
+    SearchVectorsOut search_vectors_out_;
+    std::optional<Error> search_vectors_error_;
+    std::vector<SearchVectorsIn> search_vectors_requests_;
     int read_calls_ = 0;
     std::vector<PutItemIn> put_requests_;
     std::optional<Error> put_error_;

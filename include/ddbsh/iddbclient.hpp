@@ -212,6 +212,7 @@ struct CreateTableIn {
     std::optional<WarmThroughput> warm;
     std::vector<Gsi> gsis;
     std::vector<Lsi> lsis;
+    std::vector<VectorIndexDef> vector_indexes;  ///< CreateTable.VectorIndexes (phase 4b)
     std::optional<StreamSpec> stream;
     std::optional<SseSpec> sse;
     TableClass table_class = TableClass::standard;
@@ -251,6 +252,8 @@ struct UpdateTableIn {
     std::optional<bool> deletion_protection;  ///< SET deletion protection (nullopt => unset)
     std::vector<AttributeDef> attribute_definitions;  ///< new key attrs for CREATE GSI
     std::vector<GsiUpdate> gsi_updates;               ///< CREATE / UPDATE / DROP GSI actions
+    std::vector<VectorIndexUpdateDef>
+        vector_index_updates;              ///< CREATE / DROP vector index (phase 4b; one per call)
     std::optional<ReplicaUpdate> replica;  ///< ADD / DROP / UPDATE REPLICA (nullopt for plain SET)
 };
 struct UpdateTableOut {};
@@ -462,6 +465,24 @@ struct SecondaryIndexSchema {
     long long on_demand_max_write_request_units = -1;
     std::optional<WarmThroughputDescription> warm_throughput{};
 };
+
+/// A vector index's schema as read back from DescribeTable (SDK
+/// VectorIndexDescription; phase 4b). The planner classifies a named `.index`
+/// as a vector index by finding it in DescribeTableOut::vector_indexes (vs the
+/// GSI/LSI lists), and uses `dimensions` to pre-validate the search-vector
+/// length. The DESCRIBE / SHOW CREATE TABLE renderers reconstruct the `vsi(…)`
+/// clause from these fields (D-4b-10). `index_status` is the mapped IndexStatus
+/// name ("ACTIVE"/"CREATING"/...), set by the adapter.
+struct VectorIndexSchema {
+    std::string index_name;
+    std::string vector_attr;
+    long long dimensions = 0;
+    VectorDistance distance = VectorDistance::cosine;
+    std::vector<SearchSchemaElem> search_schema;
+    Projection projection{};
+    bool projection_set = false;
+    std::string index_status{};
+};
 struct DescribeTableIn {
     std::string table_name;
 };
@@ -470,6 +491,7 @@ struct DescribeTableOut {
     TableKeySchema key_schema;
     std::vector<SecondaryIndexSchema> local_secondary_indexes;
     std::vector<SecondaryIndexSchema> global_secondary_indexes;
+    std::vector<VectorIndexSchema> vector_indexes;  ///< vector indexes (phase 4b)
 
     // ---- Report fields (SHOW TABLES; shared with the coming DESCRIBE) ------
     std::string table_status;  ///< mapped TableStatus name ("ACTIVE", ...)
@@ -636,6 +658,43 @@ struct TransactWriteItemsIn {
 };
 struct TransactWriteItemsOut {};
 
+// ---- SearchVectors (phase 4b) ----------------------------------------------
+// SELECT … FROM table.vectorindex NEAREST <n> TO [ … ] plans to SearchVectors
+// (never GetItem/Query/Scan). Field names pinned against AWS SDK for C++
+// 1.11.916 headers: the filter member is SearchConditionExpression (NOT
+// "FilterExpression"), the result list is SearchResults (NOT "Items"), and the
+// query vector is a list of AttributeValues (a list of N Values here). The
+// engine aliases the WHERE filter / projection through ONE SymbolTable, exactly
+// as Query/Scan, for byte-deterministic EXPLAIN (arch §6).
+
+/// Vector-search consumed capacity (SDK VectorCapacity): request/write bytes.
+/// Set only when the service returned a VectorCapacity on the ConsumedCapacity.
+struct VectorConsumedCapacity {
+    std::optional<double> vector_search_request_bytes;
+    std::optional<double> vector_write_request_bytes;
+};
+
+struct SearchVectorsIn {
+    std::string table_name;
+    std::string index_name;
+    ValueList search_vector;  ///< the query vector: a list of N Values -> SearchVector
+    int topk = 0;             ///< -> TopK
+    std::optional<std::string> search_condition_expression;  ///< WHERE -> SearchConditionExpression
+    std::optional<std::string> projection_expression;  ///< SELECT list -> ProjectionExpression
+    ExpressionAttributeNames expression_attribute_names;
+    ValueMap expression_attribute_values;
+    ReturnConsumedCapacity return_consumed_capacity = ReturnConsumedCapacity::none;
+};
+struct SearchVectorsOut {
+    /// One SearchResultItem: its projected attributes plus a similarity Score.
+    struct Row {
+        ItemRow item;
+        double score = 0.0;
+    };
+    std::vector<Row> results;  ///< service order == similarity order (SearchResults)
+    std::optional<VectorConsumedCapacity> vector_capacity;  ///< SearchVectors ConsumedCapacity
+};
+
 /// A request to serialize for EXPLAIN WITHOUT executing (P2a-03 §4.3). The
 /// adapter translates the active alternative to its SDK request and returns the
 /// raw SerializePayload() string; the engine never sees an Aws:: type. One
@@ -646,7 +705,7 @@ using ExplainRequest =
                  DescribeTimeToLiveIn, DescribeContinuousBackupsIn,
                  DescribeTableReplicaAutoScalingIn, UpdateItemIn, DeleteItemIn, TransactGetItemsIn,
                  TransactWriteItemsIn, CreateBackupIn, DeleteBackupIn, DescribeBackupIn,
-                 RestoreFromBackupIn, RestoreToPitrIn>;
+                 RestoreFromBackupIn, RestoreToPitrIn, SearchVectorsIn>;
 
 /// The DynamoDB client seam. Borrowed by Session (not owned); the embedder
 /// guarantees the client outlives the Session (see P2a-02 §7.2).
@@ -680,6 +739,17 @@ public:
     virtual Result<GetItemOut> get_item(const GetItemIn&) = 0;
     virtual Result<QueryOut> query(const QueryIn&) = 0;
     virtual Result<ScanOut> scan(const ScanIn&) = 0;
+
+    /// SearchVectors for a SELECT … FROM table.vectorindex NEAREST <n> TO [ … ]
+    /// (phase 4b). Reads a vector index via approximate-nearest-neighbor search
+    /// (never GetItem/Query/Scan). Returns the TopK most similar items, each
+    /// with a similarity Score. The default is a not-implemented Error so a
+    /// client/double that predates vector support need not override it; the CLI
+    /// AwsDDBClient overrides it against the SDK SearchVectors API.
+    virtual Result<SearchVectorsOut> search_vectors(const SearchVectorsIn&) {
+        return fail(Errc::service_error, "SearchVectors is not supported by this client");
+    }
+
     virtual Result<PutItemOut> put_item(const PutItemIn&) = 0;
     virtual Result<CreateTableOut> create_table(const CreateTableIn&) = 0;
 

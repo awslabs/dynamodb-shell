@@ -34,11 +34,15 @@ add_test(NAME ihelp-show-backups COMMAND ddbshtest -q -T ${RD}/ihelp-show-backup
 add_test(NAME ihelp-show-version COMMAND ddbshtest -q -T ${RD}/ihelp-show-version.exp -c "help show version")
 add_test(NAME ihelp-show-create-table COMMAND ddbshtest -q -T ${RD}/ihelp-show-create-table.exp -c "help show create table")
 add_test(NAME ihelp-create COMMAND ddbshtest -q -T ${RD}/ihelp-create.exp -c "help create")
-# ihelp-create-table / ihelp-alter-table DIVERGE from the retired oracle's HELP
-# text: they document the phase-4a composite (multi-part) GSI key syntax, which
-# the original ddbsh predates (P4a-02 item 1, human-ratified 2026-10-25). The
-# .exp files were re-recorded from the reimplementation's updated HELP output;
-# every other HELP form remains byte-for-byte oracle parity.
+# ihelp-create-table / ihelp-alter-table / ihelp-select DIVERGE from the retired
+# oracle's HELP text. create-table/alter-table document the phase-4a composite
+# (multi-part) GSI key syntax (P4a-02 item 1, human-ratified 2026-10-25), the
+# phase-4b-doc table_key_schema/index_key_schema split (D-P4a-doc-1 AI-1/AI-2),
+# and the phase-4b vector-index (VSI) CREATE/ALTER syntax; select documents the
+# phase-4b `NEAREST <n> TO [ ... ]` vector-search clause. All three postdate the
+# original ddbsh, which predates composite keys and vector search. The .exp
+# files were re-recorded from the reimplementation's updated HELP output; every
+# other HELP form remains byte-for-byte oracle parity.
 add_test(NAME ihelp-create-table COMMAND ddbshtest -q -T ${RD}/ihelp-create-table.exp -c "help create table")
 add_test(NAME ihelp-alter-table COMMAND ddbshtest -q -T ${RD}/ihelp-alter-table.exp -c "help alter table")
 add_test(NAME ihelp-backup COMMAND ddbshtest -q -T ${RD}/ihelp-backup.exp -c "help backup")

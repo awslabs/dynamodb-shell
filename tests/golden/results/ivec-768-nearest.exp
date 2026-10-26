@@ -1,0 +1,10 @@
+{a: 1, category: c0} score 0
+{a: 10, category: c0} score 0.9
+{a: 2, category: c0} score 0.1
+{a: 3, category: c0} score 0.2
+{a: 4, category: c0} score 0.3
+{a: 5, category: c0} score 0.4
+{a: 6, category: c0} score 0.5
+{a: 7, category: c0} score 0.6
+{a: 8, category: c0} score 0.7
+{a: 9, category: c0} score 0.8

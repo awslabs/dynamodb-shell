@@ -244,4 +244,135 @@ TEST(SelectExec, MissingTablePropagatesError) {
     EXPECT_EQ(out.error().code, ddbsh::Errc::no_such_table);
 }
 
+// ---- Vector search (phase 4b) ----------------------------------------------
+
+DescribeTableOut table_with_vector(const std::string& name, const std::string& idx,
+                                   long long dims) {
+    DescribeTableOut t;
+    t.table_name = name;
+    t.key_schema = TableKeySchema{{"id"}, {}};
+    ddbsh::VectorIndexSchema vi;
+    vi.index_name = idx;
+    vi.vector_attr = "embedding";
+    vi.dimensions = dims;
+    vi.distance = ddbsh::VectorDistance::cosine;
+    t.vector_indexes.push_back(vi);
+    return t;
+}
+
+TEST(SelectExec, SearchVectorsReturnsScoredRows) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_vector("docs", "embidx", 3));
+    client.set_search_vectors_results({
+        {row({{"id", str("doc1")}}), 0.0123},
+        {row({{"id", str("doc2")}}), 0.25},
+    });
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("select * from docs.embidx nearest 5 to [0.1, 0.2, 0.3];");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    // Score as a trailing annotation outside the item braces; service order
+    // preserved (D-4b-6).
+    EXPECT_EQ(render(*out), "{id: doc1} score 0.0123\n{id: doc2} score 0.25\n");
+
+    ASSERT_EQ(client.search_vectors_requests().size(), 1u);
+    const auto& req = client.search_vectors_requests()[0];
+    EXPECT_EQ(req.table_name, "docs");
+    EXPECT_EQ(req.index_name, "embidx");
+    EXPECT_EQ(req.topk, 5);
+    ASSERT_EQ(req.search_vector.size(), 3u);
+    EXPECT_EQ(req.search_vector[0].s, "0.1");
+}
+
+TEST(SelectExec, SearchVectorsFilterAndProjectionAliased) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_vector("docs", "embidx", 3));
+    client.set_search_vectors_results({{row({{"id", str("doc1")}}), 1.0}});
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "select id, category from docs.embidx where category = \"news\" "
+        "nearest 10 to [0.1, 0.2, 0.3];");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const auto& req = client.search_vectors_requests()[0];
+    EXPECT_EQ(req.topk, 10);
+    ASSERT_TRUE(req.search_condition_expression.has_value());
+    ASSERT_TRUE(req.projection_expression.has_value());
+    // projection aliased before filter (house convention): id, category first.
+    EXPECT_FALSE(req.expression_attribute_names.empty());
+    EXPECT_FALSE(req.expression_attribute_values.empty());
+}
+
+TEST(SelectExec, SearchVectorsDimensionMismatchErrors) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_vector("docs", "embidx", 4));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("select * from docs.embidx nearest 5 to [0.1, 0.2, 0.3];");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("expects 4"), std::string::npos);
+    EXPECT_TRUE(client.search_vectors_requests().empty());
+}
+
+TEST(SelectExec, VectorIndexWithoutNearestErrors) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_vector("docs", "embidx", 3));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("select * from docs.embidx where id = \"x\";");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("requires a NEAREST"), std::string::npos);
+}
+
+TEST(SelectExec, NearestOnBaseTableErrors) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_a("t"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("select * from t nearest 5 to [0.1, 0.2];");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("requires a vector index"), std::string::npos);
+}
+
+TEST(SelectExec, NearestOnNonVectorIndexErrors) {
+    ddbsh::test::FakeDDBClient client;
+    DescribeTableOut t = table_a("t");
+    t.global_secondary_indexes.push_back(
+        ddbsh::SecondaryIndexSchema{.index_name = "gsi1", .key_schema = TableKeySchema{{"c"}, {}}});
+    client.set_table(t);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("select * from t.gsi1 nearest 5 to [0.1, 0.2];");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("is not a vector index"), std::string::npos);
+}
+
+TEST(SelectExec, ConsistentWithVectorSearchErrors) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_vector("docs", "embidx", 3));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("select consistent * from docs.embidx nearest 5 to [0.1, 0.2, 0.3];");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("CONSISTENT is not supported"), std::string::npos);
+}
+
+TEST(SelectExec, VectorSearchConsumedCapacityShownWhenRequested) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_with_vector("docs", "embidx", 3));
+    client.set_search_vectors_results({{row({{"id", str("doc1")}}), 0.5}});
+    ddbsh::VectorConsumedCapacity vcc;
+    vcc.vector_search_request_bytes = 128.0;
+    vcc.vector_write_request_bytes = 0.0;
+    client.set_search_vectors_capacity(vcc);
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "select * from docs.embidx nearest 5 to [0.1, 0.2, 0.3] return consumed capacity total;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out),
+              "{id: doc1} score 0.5\n"
+              "SELECT (128 vector search request bytes, 0 vector write request bytes)\n");
+}
+
 }  // namespace

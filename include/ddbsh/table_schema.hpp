@@ -140,6 +140,55 @@ struct Lsi {
     Projection projection;
 };
 
+// ---- Vector search (phase 4b) ----------------------------------------------
+// SDK-free mirrors of the DynamoDB vector-index / SearchVectors types (AWS SDK
+// for C++ 1.11.916 model). A vector index lives alongside GSIs/LSIs on a table
+// but is read ONLY by the SearchVectors API (never GetItem/Query/Scan). These
+// are shared by the parse result (engine::CreateTableCmd / AlterTableCmd),
+// the client seam (ddbsh::CreateTableIn / UpdateTableIn), and the CLI adapter
+// which translates them to Aws::DynamoDB::Model::VectorIndex /
+// VectorIndexUpdate / SearchVectorsRequest. Additive only (tenet 8).
+
+/// Vector distance function (SDK VectorDistanceFunction: COSINE, DOT_PRODUCT,
+/// EUCLIDEAN). COSINE & EUCLIDEAN: lower score = more similar; DOT_PRODUCT:
+/// higher = more similar.
+enum class VectorDistance { cosine, euclidean, dot_product };
+
+/// A vector-index search-schema element kind (SDK SearchSchemaElementType:
+/// HASH, INLINE_FILTER). HASH is the search partition key; INLINE_FILTER
+/// attributes may appear in a SearchVectors SearchConditionExpression.
+enum class SearchSchemaKind { hash, inline_filter };
+
+/// One search-schema element: an attribute playing a HASH or INLINE_FILTER
+/// role on a vector index. These (and any PROJECTING INCLUDE attrs) must be
+/// declared in the table/index AttributeDefinitions — the vector attribute
+/// itself is NOT (it is an L-of-N, not a scalar key type; D-4b-8).
+struct SearchSchemaElem {
+    std::string attr;
+    SearchSchemaKind kind = SearchSchemaKind::inline_filter;
+};
+
+/// A vector index definition (SDK VectorIndex / CreateVectorIndexAction). Maps
+/// to CreateTable.VectorIndexes[] and UpdateTable.VectorIndexUpdates[].Create.
+struct VectorIndexDef {
+    std::string index_name;                            ///< -> IndexName
+    std::string vector_attr;                           ///< -> VectorAttribute.AttributeName
+    long long dimensions = 0;                          ///< -> Dimensions (1..4096)
+    VectorDistance distance = VectorDistance::cosine;  ///< -> DistanceFunction
+    std::vector<SearchSchemaElem> search_schema;       ///< -> SearchSchema (HASH/INLINE_FILTER)
+    Projection projection;                             ///< -> Projection (same type as GSI/LSI)
+};
+
+/// One VectorIndexUpdate action in an ALTER TABLE. The 1.11.916 model has only
+/// Create and Delete (no in-place Update; modify = drop + recreate, D-4b-4).
+/// Exactly one of `create` / `drop` is set. For `create`, the new search-schema
+/// / projected key attributes ride in AlterTableCmd::attribute_definitions (as
+/// the GSI create path does).
+struct VectorIndexUpdateDef {
+    std::optional<VectorIndexDef> create;  ///< Create action
+    std::optional<std::string> drop;       ///< Delete action: the index name
+};
+
 /// Stream view type (the original StreamViewType).
 enum class StreamViewType { keys_only, new_image, old_image, new_and_old_images };
 
