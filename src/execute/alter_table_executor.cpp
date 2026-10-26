@@ -24,6 +24,7 @@ UpdateTableIn make_request(const AlterTableCmd& cmd) {
     request.deletion_protection = cmd.deletion_protection;
     request.attribute_definitions = cmd.attribute_definitions;
     request.gsi_updates = cmd.gsi_updates;
+    request.vector_index_updates = cmd.vector_index_updates;
     return request;
 }
 

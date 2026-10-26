@@ -184,6 +184,18 @@
 %token K_WHERE
 %token K_WITH
 
+/* ---- Vector search (phase 4b) -------------------------------------------- */
+%token K_COSINE
+%token K_DIMENSIONS
+%token K_DISTANCE
+%token K_DOT_PRODUCT
+%token K_EUCLIDEAN
+%token K_FILTER
+%token K_NEAREST
+%token K_SEARCH
+%token K_VECTOR
+%token K_VSI
+
 /* ---- Value-carrying tokens (std::string lexeme) --------------------------
  * The original kept the raw matched text (quotes included for quoted strings);
  * unquote()/number handling happens in grammar actions (W2). We preserve that:
@@ -257,6 +269,13 @@
 %type <ddbsh::engine::Lsi> lsi
 %type <ddbsh::engine::Projection> index_projection
 %type <std::vector<std::string>> index_projection_list
+
+/* ---- Vector search (phase 4b) -------------------------------------------- */
+%type <std::vector<ddbsh::engine::VectorIndexDef>> vector_index_list vector_index_specification
+%type <ddbsh::engine::VectorIndexDef> vector_index
+%type <ddbsh::engine::VectorDistance> vector_distance_function
+%type <std::vector<ddbsh::engine::SearchSchemaElem>> optional_vector_search_schema vector_search_schema_list
+%type <ddbsh::engine::SearchSchemaElem> vector_search_schema_element
 %type <ddbsh::engine::StreamSpec> stream_specification
 %type <std::optional<ddbsh::engine::StreamSpec>> optional_stream_specification
 %type <ddbsh::engine::StreamViewType> stream_view_type
@@ -629,7 +648,7 @@ create_table_command:
       K_CREATE K_TABLE if_not_exists_clause nowait_clause string
       '(' attribute_name_type_list ')'
       primary_key optional_billing_mode_and_throughput optional_warm_throughput
-      gsi_list lsi_list optional_stream_specification optional_sse_specification
+      gsi_list lsi_list vector_index_list optional_stream_specification optional_sse_specification
       optional_table_class optional_deletion_protection optional_table_tags
         {
             ddbsh::engine::CreateTableCmd cmd;
@@ -642,11 +661,12 @@ create_table_command:
             cmd.warm = std::move($11);
             cmd.gsis = std::move($12);
             cmd.lsis = std::move($13);
-            cmd.stream = std::move($14);
-            cmd.sse = std::move($15);
-            cmd.table_class = $16;
-            cmd.deletion_protection = $17;
-            cmd.tags = std::move($18);
+            cmd.vector_indexes = std::move($14);
+            cmd.stream = std::move($15);
+            cmd.sse = std::move($16);
+            cmd.table_class = $17;
+            cmd.deletion_protection = $18;
+            cmd.tags = std::move($19);
             $$ = std::move(cmd);
         }
     ;
@@ -733,6 +753,31 @@ alter_table_command:
             ddbsh::engine::AlterTableCmd cmd;
             cmd.table = std::move($3);
             cmd.gsi_updates.push_back(std::move($6));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string '(' attribute_name_type_list ')' K_CREATE vsi_keyword vector_index
+        {
+            /* CREATE vsi|vector|vector index (phase 4b, D-4b-9). Mirrors CREATE
+             * GSI: the new SEARCH KEY / PROJECTING INCLUDE key attributes ride
+             * in attribute_definitions; one Create VectorIndexUpdate carries the
+             * index. The 1.11.916 model has no in-place Update (D-4b-4). */
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            cmd.attribute_definitions = std::move($5);
+            ddbsh::engine::VectorIndexUpdateDef u;
+            u.create = std::move($9);
+            cmd.vector_index_updates.push_back(std::move(u));
+            $$ = std::move(cmd);
+        }
+    | K_ALTER K_TABLE string K_DROP vsi_keyword string
+        {
+            /* DROP vsi|vector|vector index <name> (phase 4b). One Delete
+             * VectorIndexUpdate carries the index name. */
+            ddbsh::engine::AlterTableCmd cmd;
+            cmd.table = std::move($3);
+            ddbsh::engine::VectorIndexUpdateDef u;
+            u.drop = std::move($6);
+            cmd.vector_index_updates.push_back(std::move(u));
             $$ = std::move(cmd);
         }
     | K_ALTER K_TABLE string K_SET billing_mode_and_throughput optional_warm_throughput
@@ -1131,6 +1176,80 @@ lsi:
             l.projection = std::move($4);
             $$ = std::move(l);
         }
+    ;
+
+/* ---- Vector index (phase 4b) --------------------------------------------
+ * An optional trailing CREATE-TABLE clause that mirrors gsi_list/lsi_list. The
+ * clause lead accepts three synonyms (D-4b-9): VSI (...) | VECTOR (...) |
+ * VECTOR INDEX (...). Each index is `name ON vector-attr DIMENSIONS n DISTANCE
+ * fn [SEARCH KEY (...)] PROJECTING ...`. The vector attribute is declared ONLY
+ * here (ON <attr>), never in the top attribute-type list (D-4b-8): a vector is
+ * an L-of-N, not a scalar key type. LALR(1)-safe: the clause lead tokens
+ * (K_VSI / K_VECTOR) are distinct from every following clause's lead. */
+vsi_keyword:
+      K_VSI
+    | K_VECTOR
+    | K_VECTOR K_INDEX
+    ;
+
+vector_index_list:
+      vsi_keyword '(' vector_index_specification ')'  { $$ = std::move($3); }
+    | %empty  { $$ = std::vector<ddbsh::engine::VectorIndexDef>{}; }
+    ;
+
+vector_index_specification:
+      vector_index
+        {
+            $$ = std::vector<ddbsh::engine::VectorIndexDef>{};
+            $$.push_back(std::move($1));
+        }
+    | vector_index_specification ',' vector_index
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+vector_index:
+      string K_ON string K_DIMENSIONS T_WHOLE_NUMBER K_DISTANCE vector_distance_function
+      optional_vector_search_schema index_projection
+        {
+            ddbsh::engine::VectorIndexDef v;
+            v.index_name = std::move($1);
+            v.vector_attr = std::move($3);
+            v.dimensions = ddbsh::engine::parse_ll($5);
+            v.distance = $7;
+            v.search_schema = std::move($8);
+            v.projection = std::move($9);
+            $$ = std::move(v);
+        }
+    ;
+
+vector_distance_function:
+      K_COSINE       { $$ = ddbsh::engine::VectorDistance::cosine; }
+    | K_EUCLIDEAN    { $$ = ddbsh::engine::VectorDistance::euclidean; }
+    | K_DOT_PRODUCT  { $$ = ddbsh::engine::VectorDistance::dot_product; }
+    ;
+
+optional_vector_search_schema:
+      K_SEARCH K_KEY '(' vector_search_schema_list ')'  { $$ = std::move($4); }
+    | %empty  { $$ = std::vector<ddbsh::engine::SearchSchemaElem>{}; }
+    ;
+
+vector_search_schema_list:
+      vector_search_schema_element
+        {
+            $$ = std::vector<ddbsh::engine::SearchSchemaElem>{};
+            $$.push_back(std::move($1));
+        }
+    | vector_search_schema_list ',' vector_search_schema_element
+        { $1.push_back(std::move($3)); $$ = std::move($1); }
+    ;
+
+vector_search_schema_element:
+      string K_HASH
+        { $$ = ddbsh::engine::SearchSchemaElem{std::move($1),
+                                               ddbsh::engine::SearchSchemaKind::hash}; }
+    | string K_FILTER
+        { $$ = ddbsh::engine::SearchSchemaElem{std::move($1),
+                                               ddbsh::engine::SearchSchemaKind::inline_filter}; }
     ;
 
 index_projection:

@@ -248,4 +248,109 @@ TEST(CreateTableExec, GsiMissingHashRejected) {
     EXPECT_TRUE(client.create_requests().empty());
 }
 
+// ---- Vector index (phase 4b) ----------------------------------------------
+
+TEST(CreateTableExec, VsiCaptured) {
+    // vsi ( name on vector-attr dimensions n distance fn projecting all ). The
+    // vector attribute (embedding) is NOT declared in the attribute list
+    // (D-4b-8). The definition is threaded into CreateTableIn.vector_indexes.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table docs ( id string ) primary key ( id hash ) "
+        "vsi ( embidx on embedding dimensions 1536 distance cosine projecting all );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.create_requests().size(), 1u);
+    const auto& req = client.create_requests()[0];
+    ASSERT_EQ(req.vector_indexes.size(), 1u);
+    EXPECT_EQ(req.vector_indexes[0].index_name, "embidx");
+    EXPECT_EQ(req.vector_indexes[0].vector_attr, "embedding");
+    EXPECT_EQ(req.vector_indexes[0].dimensions, 1536);
+    EXPECT_EQ(req.vector_indexes[0].distance, ddbsh::VectorDistance::cosine);
+    EXPECT_EQ(req.vector_indexes[0].projection.type, ddbsh::ProjectionType::all);
+}
+
+TEST(CreateTableExec, VsiVectorKeywordSynonym) {
+    // `vector ( ... )` is a synonym for `vsi ( ... )` (D-4b-9).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table docs ( id string ) primary key ( id hash ) "
+        "vector ( embidx on embedding dimensions 768 distance euclidean projecting all );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.create_requests().size(), 1u);
+    const auto& req = client.create_requests()[0];
+    ASSERT_EQ(req.vector_indexes.size(), 1u);
+    EXPECT_EQ(req.vector_indexes[0].dimensions, 768);
+    EXPECT_EQ(req.vector_indexes[0].distance, ddbsh::VectorDistance::euclidean);
+}
+
+TEST(CreateTableExec, VsiVectorIndexKeywordSynonym) {
+    // `vector index ( ... )` is a synonym for `vsi ( ... )` (D-4b-9).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table docs ( id string ) primary key ( id hash ) "
+        "vector index ( embidx on embedding dimensions 384 distance dot_product "
+        "projecting keys only );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.create_requests().size(), 1u);
+    const auto& req = client.create_requests()[0];
+    ASSERT_EQ(req.vector_indexes.size(), 1u);
+    EXPECT_EQ(req.vector_indexes[0].distance, ddbsh::VectorDistance::dot_product);
+    EXPECT_EQ(req.vector_indexes[0].projection.type, ddbsh::ProjectionType::keys_only);
+}
+
+TEST(CreateTableExec, VsiSearchSchemaAndInclude) {
+    // SEARCH KEY ( attr hash, attr filter ) + PROJECTING INCLUDE; the search
+    // and projected attrs ARE declared (D-4b-8); the vector attr is not.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table docs ( id string, tenant string, category string, title string ) "
+        "primary key ( id hash ) "
+        "vsi ( embidx on embedding dimensions 1024 distance cosine "
+        "search key ( tenant hash, category filter ) projecting include ( title ) );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const auto& vi = client.create_requests()[0].vector_indexes[0];
+    ASSERT_EQ(vi.search_schema.size(), 2u);
+    EXPECT_EQ(vi.search_schema[0].attr, "tenant");
+    EXPECT_EQ(vi.search_schema[0].kind, ddbsh::SearchSchemaKind::hash);
+    EXPECT_EQ(vi.search_schema[1].attr, "category");
+    EXPECT_EQ(vi.search_schema[1].kind, ddbsh::SearchSchemaKind::inline_filter);
+    EXPECT_EQ(vi.projection.type, ddbsh::ProjectionType::include);
+    EXPECT_EQ(vi.projection.non_key_attributes, (std::vector<std::string>{"title"}));
+}
+
+TEST(CreateTableExec, VsiVectorAttrDeclaredRejected) {
+    // D-4b-8: the vector attribute must NOT appear in the attribute-type list.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table docs ( id string, embedding string ) primary key ( id hash ) "
+        "vsi ( embidx on embedding dimensions 16 distance cosine projecting all );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("must not be declared"), std::string::npos);
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
+TEST(CreateTableExec, VsiSearchKeyUndeclaredRejected) {
+    // A SEARCH KEY attribute must be declared in the attribute-type list.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "create table docs ( id string ) primary key ( id hash ) "
+        "vsi ( embidx on embedding dimensions 16 distance cosine "
+        "search key ( tenant hash ) projecting all );");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_NE(out.error().message.find("must be declared"), std::string::npos);
+    EXPECT_TRUE(client.create_requests().empty());
+}
+
 }  // namespace

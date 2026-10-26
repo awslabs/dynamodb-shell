@@ -700,4 +700,64 @@ TEST(AlterTableExec, ExplainReplicaEmitsUpdateTableBlockNoTrailingStatus) {
     EXPECT_TRUE(client.update_table_requests().empty());
 }
 
+// ---- Vector index (phase 4b) ----------------------------------------------
+
+TEST(AlterTableExec, CreateVsiCaptured) {
+    // CREATE vsi carries the new search-key attrs in AttributeDefinitions and
+    // one Create VectorIndexUpdate (D-4b-3/-4).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "alter table docs ( category string ) create vsi embidx on embedding "
+        "dimensions 1536 distance cosine search key ( category filter ) projecting all;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_table_requests().size(), 1u);
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_EQ(req.vector_index_updates.size(), 1u);
+    ASSERT_TRUE(req.vector_index_updates[0].create.has_value());
+    EXPECT_EQ(req.vector_index_updates[0].create->index_name, "embidx");
+    EXPECT_EQ(req.vector_index_updates[0].create->vector_attr, "embedding");
+    EXPECT_EQ(req.vector_index_updates[0].create->dimensions, 1536);
+    ASSERT_EQ(req.attribute_definitions.size(), 1u);
+    EXPECT_EQ(req.attribute_definitions[0].name, "category");
+}
+
+TEST(AlterTableExec, CreateVsiVectorIndexSynonym) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run(
+        "alter table docs ( tenant string ) create vector index embidx on embedding "
+        "dimensions 8 distance euclidean search key ( tenant hash ) projecting all;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_EQ(req.vector_index_updates.size(), 1u);
+    EXPECT_TRUE(req.vector_index_updates[0].create.has_value());
+}
+
+TEST(AlterTableExec, DropVsiCaptured) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table docs drop vsi embidx;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_table_requests().size(), 1u);
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_EQ(req.vector_index_updates.size(), 1u);
+    ASSERT_TRUE(req.vector_index_updates[0].drop.has_value());
+    EXPECT_EQ(*req.vector_index_updates[0].drop, "embidx");
+}
+
+TEST(AlterTableExec, DropVectorIndexSynonym) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("alter table docs drop vector index embidx;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const auto& req = client.update_table_requests()[0];
+    ASSERT_EQ(req.vector_index_updates.size(), 1u);
+    EXPECT_TRUE(req.vector_index_updates[0].drop.has_value());
+}
+
 }  // namespace
