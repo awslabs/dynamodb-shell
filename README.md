@@ -63,6 +63,83 @@ Install the library (headers + lib) and CLI to a prefix:
 cmake --install build --prefix /path/to/prefix
 ```
 
+### macOS (Homebrew)
+
+Install the toolchain and dependencies with Homebrew:
+
+```sh
+brew install cmake bison flex readline zlib
+```
+
+Homebrew's `bison` and `flex` are **keg-only**: they are not symlinked onto your
+`PATH` because macOS ships its own (ancient) copies in `/usr/bin`. The system
+`bison` is version 2.3, which is too old for the C++ `lalr1.cc` parser skeleton
+this project uses, so you must make the Homebrew versions take precedence.
+
+Prepend them to your `PATH` for the current shell (and add to `~/.zshrc` to make
+it permanent):
+
+```sh
+# Apple Silicon (Homebrew prefix /opt/homebrew)
+export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
+
+# Intel (Homebrew prefix /usr/local)
+export PATH="/usr/local/opt/bison/bin:/usr/local/opt/flex/bin:$PATH"
+```
+
+Verify you are getting the Homebrew tools (bison ≥ 3.8, not 2.3):
+
+```sh
+which bison && bison --version
+which flex  && flex  --version
+```
+
+Alternatively, point CMake directly at the Homebrew binaries instead of changing
+your `PATH` (this also stops CMake from autodetecting `/usr/bin/bison`):
+
+```sh
+cmake -S . -B build \
+  -DBISON_EXECUTABLE="$(brew --prefix bison)/bin/bison" \
+  -DFLEX_EXECUTABLE="$(brew --prefix flex)/bin/flex"
+cmake --build build
+```
+
+If you installed the AWS SDK for C++ via Homebrew or to a custom prefix, add it
+to `CMAKE_PREFIX_PATH` as shown above (you can combine the flags).
+
+#### Avoiding AWS SDK version conflicts
+
+The vector-search commands require the AWS SDK for C++ **≥ 1.11.916** (the first
+release exposing the `SearchVectors` API). A common macOS pitfall is having more
+than one SDK installed at once — for example a Homebrew `aws-sdk-cpp` under
+`/opt/homebrew` and a manual build installed into `/usr/local`. When
+`find_package(AWSSDK)` resolves one version but the compiler's default include
+path (`/usr/local/include`) pulls `aws/core/VersionConfig.h` from another, the
+build fails with:
+
+```
+error: 'AWS_SDK_VERSION_PATCH' macro redefined [-Werror,-Wmacro-redefined]
+```
+
+Fix it by ensuring exactly one SDK is discoverable, and point CMake at it:
+
+```sh
+# list every AWS SDK VersionConfig.h and its version
+for f in $(find /usr/local /opt/homebrew $HOME -path '*aws/core/VersionConfig.h' 2>/dev/null); do
+  echo "$f"; grep AWS_SDK_VERSION_PATCH "$f"; done
+
+# remove the unwanted install (e.g. an older Homebrew SDK), then reconfigure clean
+# (the CMake cache pins the previously found SDK, so delete the build dir)
+rm -rf build
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/prefix/of/sdk-1.11.916
+cmake --build build
+```
+
+`CMAKE_PREFIX_PATH` is searched ahead of system defaults, so both the SDK CMake
+package and its headers resolve to the same install. Do not silence
+`-Wmacro-redefined` to work around this — the clashing version macros mean you
+would be compiling against one SDK's headers while linking another's libraries.
+
 ## Supported commands
 
 The engine drives this command set end to end against real DynamoDB:
