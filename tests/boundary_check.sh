@@ -96,7 +96,29 @@ for f in "${FILES[@]}"; do
     done
 done
 
+# --- SDK-free engine-header boundary (D5) -----------------------------------
+# The engine's PUBLIC headers under include/ddbsh/*.hpp must be SDK-free: no
+# `#include <aws/...>`. The AWS SDK is pulled only by the optional component's
+# headers under include/ddbsh/aws/*.hpp, which are the SDK-dependent zone. This
+# keeps the engine's public API compilable with only a C++23 toolchain (tenet 3
+# / D5). The aws/ subdirectory is EXCLUDED from this scan — it is allowed, by
+# design, to include <aws/...>. (Comments are not stripped here; the pattern
+# matches an actual #include line, and no engine header legitimately mentions
+# an `#include <aws/...>` in prose.)
+ENGINE_HDR_DIR="$ROOT/include/ddbsh"
+if [ -d "$ENGINE_HDR_DIR" ]; then
+    while IFS= read -r f; do
+        if hits="$(grep -nE '^[[:space:]]*#include[[:space:]]*<aws/' "$f" 2>/dev/null)"; then
+            echo "BOUNDARY VIOLATION: SDK header included by an SDK-free engine header $f:" >&2
+            printf '%s\n' "$hits" | sed "s#^#  $f:#" >&2
+            status=1
+        fi
+    done < <(find "$ENGINE_HDR_DIR" -path "$ENGINE_HDR_DIR/aws" -prune -o \
+                 -name '*.hpp' -type f -print 2>/dev/null)
+fi
+
 if [ "$status" -eq 0 ]; then
-    echo "engine boundary check: clean (no terminal/I/O/exit in include/ddbsh + src)"
+    echo "engine boundary check: clean (no terminal/I/O/exit in include/ddbsh + src;"
+    echo "  no AWS SDK include in the SDK-free include/ddbsh/*.hpp headers)"
 fi
 exit "$status"

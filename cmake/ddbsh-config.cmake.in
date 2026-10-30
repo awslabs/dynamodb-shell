@@ -1,0 +1,33 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-config.cmake — the installed find_package(ddbsh) package config (D6).
+#
+# Always defines the SDK-free engine target ddbsh::ddbsh. When the package was
+# built with DDBSH_BUILD_AWS=ON it ALSO defines the AWS-backed client component
+# ddbsh::aws; because that component links the AWS SDK for C++, this config
+# resolves AWSSDK (find_dependency) before pulling in its targets. The consumer
+# still controls WHICH SDK install is found via CMAKE_PREFIX_PATH. An
+# engine-only install (DDBSH_BUILD_AWS=OFF) ships no aws targets file, so this
+# config never calls find_dependency(AWSSDK) and offers just ddbsh::ddbsh.
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# The SDK-free engine — always present.
+include("${CMAKE_CURRENT_LIST_DIR}/ddbsh-targets.cmake")
+
+# The optional AWS-backed client component. Present only when the package was
+# built with the AWS component; its imported target links the AWS SDK, so
+# resolve AWSSDK first (same components the component links — D1/Q2).
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ddbsh-aws-targets.cmake")
+    find_dependency(AWSSDK COMPONENTS dynamodb sts iam)
+    # The AWS SDK core imported target's interface links ZLIB::ZLIB but
+    # find_package(AWSSDK) does not itself define it, so resolve ZLIB here (the
+    # main project build calls find_package(ZLIB) for the same reason).
+    find_dependency(ZLIB)
+    include("${CMAKE_CURRENT_LIST_DIR}/ddbsh-aws-targets.cmake")
+endif()
+
+check_required_components(ddbsh)

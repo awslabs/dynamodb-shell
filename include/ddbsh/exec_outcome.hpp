@@ -207,6 +207,21 @@ struct MultiOutcome {
     std::vector<ExecOutcome> parts;
 };
 
+/// Collect the item rows an ExecOutcome carries, regardless of which arm holds
+/// them. A convenience for embedders consuming query results: it hides the
+/// ExecOutcome variant dig so an application loop never switches on the arm
+/// (D11). Rows come from:
+///   * SelectOutcome        — the returned items;
+///   * TransactReadOutcome  — one row per Get in request order (a miss is an
+///                            empty ItemRow, matching the arm's own shape);
+///   * VectorSearchOutcome  — the item of each scored row (the score is NOT a
+///                            row attribute and is omitted — read it from the
+///                            VectorSearchOutcome arm directly when needed);
+///   * MultiOutcome         — flattened in production order.
+/// Every other arm (status tokens, reports, writes, explain, empty) carries no
+/// rows and contributes nothing. This is a pure, SDK-free read of the outcome.
+std::vector<ItemRow> items(const ExecOutcome& outcome);
+
 }  // namespace ddbsh
 
 #endif  // DDBSH_EXEC_OUTCOME_HPP

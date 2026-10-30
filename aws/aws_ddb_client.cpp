@@ -1,7 +1,7 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// aws_ddb_client.cpp — CLI-side IDDBClient adapter.
+// aws_ddb_client.cpp — AWS-backed IDDBClient adapter (the ddbsh-aws component).
 //
 // Constructs a real DynamoDBClient with the standard credential resolution and
 // optional endpoint override (mirrors the original CDDBShDDBClientConfig, arch
@@ -13,7 +13,7 @@
 // translation. This is the sole place the SDK meets the library's SDK-free
 // structs (D11).
 
-#include "aws_ddb_client.hpp"
+#include "ddbsh/aws/aws_ddb_client.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -69,7 +69,7 @@
 #include <aws/dynamodb/model/VectorAttributeDefinition.h>
 #include <aws/dynamodb/model/VectorIndex.h>
 #include <aws/dynamodb/model/VectorIndexUpdate.h>
-namespace ddbsh::cli {
+namespace ddbsh::aws {
 
 namespace {
 
@@ -2093,4 +2093,4 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
         request);
 }
 
-}  // namespace ddbsh::cli
+}  // namespace ddbsh::aws
