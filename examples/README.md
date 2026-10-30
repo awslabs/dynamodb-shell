@@ -3,7 +3,22 @@ Copyright 2026 ddbsh reimplementation contributors.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# ddbsh library embedding example
+# ddbsh library embedding examples
+
+Two worked examples of the same library/CLI boundary (tenet 3), differing only
+in the `IDDBClient` they use:
+
+- **`embed_demo`** — OFFLINE. Supplies its own in-memory `IDDBClient`, so it
+  needs no AWS account and incurs no cost. Builds with a plain Makefile against
+  the SDK-free engine (`-lddbsh`). Deterministic; the project's `embed_sample`
+  CTest diffs its output against a committed golden.
+- **`live_demo`** (in `live_demo/`) — LIVE. Uses the ready-made
+  `ddbsh::aws::AwsDDBClient` (the real AWS SDK DynamoDB client) against **real
+  DynamoDB**. Builds as an external `find_package(ddbsh)` CMake consumer linking
+  `ddbsh::aws`. It creates and deletes a real table (self-cleaning) and costs
+  real (tiny) money.
+
+## `embed_demo` (offline)
 
 `embed_demo` is a standalone program that embeds the ddbsh engine library
 (`libddbsh`). It exists to prove the library is consumable on its own — it
@@ -47,10 +62,60 @@ make run DDBSH_PREFIX=/path/to/prefix
 `DDBSH_PREFIX` defaults to `/usr/local`. `make run` sets an rpath to the
 install `lib` directory, so no `LD_LIBRARY_PATH` is needed.
 
-## Going live
+## `live_demo` (real DynamoDB, `ddbsh::aws`)
 
-This sample is offline by design. A real embedder implements `IDDBClient`
-against the AWS SDK for C++ — translating the library's SDK-free request and
-response structs to and from `Aws::DynamoDB::Model::*` — exactly as the shipping
-CLI does in `cli/aws_ddb_client.cpp`. That translation lives on the CLI side of
-the seam so the engine library stays SDK-free and terminal-free.
+`live_demo/live_demo.cpp` is the LIVE counterpart. Instead of writing an
+`IDDBClient`, it uses the ready-made **`ddbsh::aws::AwsDDBClient`** — the AWS
+SDK-backed adapter the CLI and the golden suite run on, shipped as the optional
+`ddbsh::aws` component — plus `ddbsh::aws::AwsApiGuard` for SDK lifecycle. It
+runs a real sequence against real DynamoDB:
+
+`CREATE TABLE` (on-demand) → `INSERT` → `SELECT` three ways (full key → GetItem,
+hash key → Query, no WHERE → Scan) → `DROP TABLE`.
+
+The table name is uniquified per run and a teardown scope-guard drops it on
+every exit path, so a run never strands a live table. It shows **both**
+result-consumption paths:
+
+1. the application path — iterate typed rows with `ddbsh::items()` and print
+   each cell with `ddbsh::render::render_value()`, no variant handling; and
+2. the byte-exact path — hand the whole `ExecOutcome` to
+   `ddbsh::render::Renderer`.
+
+It builds as an external CMake consumer of the installed `find_package(ddbsh)`
+package (it needs the AWS SDK's transitive dependencies resolved, which a plain
+Makefile cannot do):
+
+```sh
+# install the library + the ddbsh::aws component first
+cmake -S . -B build
+cmake --build build
+cmake --install build --prefix /path/to/prefix
+
+# then build the live demo against that install (+ the AWS SDK)
+cmake -S examples/live_demo -B build-live \
+    -DCMAKE_PREFIX_PATH="/path/to/prefix;/path/to/aws-sdk-cpp"
+cmake --build build-live
+./build-live/live_demo        # talks to REAL DynamoDB — costs real money
+```
+
+> **WARNING:** `live_demo` creates and deletes a real DynamoDB table and
+> writes/reads real items, incurring real (tiny) cost. Credentials/region
+> resolve through the standard AWS chain (`~/.aws`, `AWS_PROFILE`, `AWS_REGION`;
+> default region `us-east-1`).
+
+As a CTest, it is `live_demo_sample` — OFF by default (it spends and needs
+credentials); enable with `-DDDBSH_TEST_LIVE_SAMPLE=ON`. The harness
+(`run_live_test.sh`) installs to a throwaway prefix, builds the demo as a
+`find_package(ddbsh)` consumer, runs it against real DynamoDB, echoes the target
+(endpoint + access key id), and asserts the run completes.
+
+## Writing your own `IDDBClient`
+
+The offline `embed_demo` implements `IDDBClient` by hand against an in-memory
+table. A real embedder who does not want the ready-made `ddbsh::aws` client can
+likewise implement `IDDBClient` against the AWS SDK for C++ — translating the
+library's SDK-free request/response structs to and from
+`Aws::DynamoDB::Model::*` — exactly as `aws/aws_ddb_client.cpp` does. That
+translation lives in the `ddbsh::aws` component (not the engine) so the engine
+library stays SDK-free and terminal-free.

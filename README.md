@@ -48,20 +48,29 @@ cmake -S . -B build
 cmake --build build
 ```
 
-This produces three targets from one build: the engine library (`ddbsh`), the
-CLI (CMake target `ddbsh-cli`, installed as the executable `ddbsh`), and the
-native unit tests (`ddbsh-tests`). If the AWS
-SDK is installed to a non-default prefix, point CMake at it:
+This produces, from one build: the engine library (`ddbsh`, SDK-free), the
+optional AWS-backed client component (`ddbsh-aws`, alias `ddbsh::aws` — the
+ready-made `AwsDDBClient` plus `AwsApiGuard`), the CLI (CMake target
+`ddbsh-cli`, installed as the executable `ddbsh`), and the native unit tests
+(`ddbsh-tests`). The AWS component (and the CLI, which needs it) is built when
+`DDBSH_BUILD_AWS` is ON (the default); set it OFF for a pure SDK-free
+engine-only build/install that requires no AWS SDK at all. If the AWS SDK is
+installed to a non-default prefix, point CMake at it:
 
 ```sh
 cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/aws-sdk-cpp
 ```
 
-Install the library (headers + lib) and CLI to a prefix:
+Install the library (headers + lib), the AWS component, and the CLI to a prefix:
 
 ```sh
 cmake --install build --prefix /path/to/prefix
 ```
+
+The install ships a `find_package(ddbsh)` CMake package (under
+`lib/cmake/ddbsh`) exporting `ddbsh::ddbsh` and — when the AWS component was
+built — `ddbsh::aws`. A consumer links either target with no hand-written
+include/lib wiring; see [Embedding the library](#embedding-the-library).
 
 ### macOS (Homebrew)
 
@@ -435,6 +444,77 @@ standalone Makefile against that install, runs it, and diffs its stdout against
 the committed golden `examples/embed_demo.expected.txt`. It is OFF by default
 (it needs an install step and a second compiler invocation) and offline (no AWS
 account), so it never touches the real-DDB gate.
+
+### Embedding against real DynamoDB (`ddbsh::aws`)
+
+To build your own application on `libddbsh` and talk to **real DynamoDB**, you
+do not have to reimplement the `Aws::DynamoDB::Model::*` translation: the
+installed **`ddbsh::aws`** component gives you the ready-made, tested
+`ddbsh::aws::AwsDDBClient` (a concrete `IDDBClient` over the AWS SDK for C++ —
+the same adapter the CLI and the golden suite run on) plus
+`ddbsh::aws::AwsApiGuard` (SDK-lifecycle RAII). Consume it via
+`find_package(ddbsh)`:
+
+```cmake
+find_package(ddbsh CONFIG REQUIRED)        # defines ddbsh::ddbsh and ddbsh::aws
+find_package(AWSSDK REQUIRED COMPONENTS dynamodb)
+target_link_libraries(myapp PRIVATE ddbsh::aws)   # pulls ddbsh::ddbsh + the SDK
+```
+
+A minimal program then stands the engine up against real DynamoDB and consumes
+typed rows without any variant handling or `Value::Type` switch:
+
+```cpp
+#include "ddbsh/aws/aws_api_guard.hpp"
+#include "ddbsh/aws/aws_ddb_client.hpp"
+#include "ddbsh/renderer.hpp"
+#include "ddbsh/session.hpp"
+
+ddbsh::aws::AwsApiGuard guard;                       // SDK lifecycle (construct once)
+ddbsh::aws::AwsDDBClient client("us-east-1", "");    // default credential chain
+ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, client);
+
+auto r = session.run("SELECT * FROM Movies WHERE year = 2014;");
+if (!r) { /* r.error() -> ddbsh::render::Renderer::render_error */ }
+for (const auto& row : ddbsh::items(*r))             // rows from any SELECT-ish arm
+    for (const auto& [name, val] : row.attributes)
+        std::printf("%s = %s\n", name.c_str(), ddbsh::render::render_value(val).c_str());
+```
+
+`ddbsh::items(outcome)`, `ddbsh::render::render_value(value)`, and
+`ItemRow::get("name")` are the result-consumption convenience API: they let an
+embedder iterate and print results directly. You can still hand the whole
+`ExecOutcome` to `ddbsh::render::Renderer` to reproduce byte-exact ddbsh output.
+
+**Header boundary:** `ddbsh/*.hpp` are SDK-free (compile with only a C++23
+toolchain); `ddbsh/aws/*.hpp` require the AWS SDK for C++. Link `ddbsh::ddbsh`
+for the engine alone, `ddbsh::aws` for the ready-made AWS client.
+
+`examples/live_demo/` is a complete, runnable version of the above: it
+`CREATE`s a uniquified on-demand table, `INSERT`s rows, runs `SELECT` three ways
+(GetItem / Query / Scan), and `DROP`s the table, self-cleaning on every exit
+path. It builds as an external `find_package(ddbsh)` consumer via its own
+`CMakeLists.txt`. Because it spends (a real table, real items), its CTest
+(`live_demo_sample`) is OFF by default; enable it with
+`-DDDBSH_TEST_LIVE_SAMPLE=ON` where credentials are present. See
+[`examples/README.md`](examples/README.md).
+
+#### Getting the AWS SDK for C++
+
+The `ddbsh::aws` component and the CLI need the AWS SDK for C++ (`dynamodb`,
+`sts`, `iam` components, version ≥ 1.11.916 for vector search):
+
+- **macOS:** `brew install aws-sdk-cpp` (see
+  [Avoiding AWS SDK version conflicts](#avoiding-aws-sdk-version-conflicts) if
+  you have more than one SDK installed).
+- **Linux:** a distribution package where available, or build from source
+  (<https://github.com/aws/aws-sdk-cpp>); point CMake at a custom install with
+  `-DCMAKE_PREFIX_PATH=/prefix/of/aws-sdk-cpp`.
+- **Windows:** build from source and add the install prefix to
+  `CMAKE_PREFIX_PATH`.
+
+The engine library alone (`ddbsh::ddbsh`, `DDBSH_BUILD_AWS=OFF`) needs no AWS
+SDK — the offline `embed_demo` builds against just that.
 
 ## Tests
 

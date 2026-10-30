@@ -1,7 +1,16 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// aws_ddb_client.hpp — the CLI-side IDDBClient adapter over the AWS SDK.
+// aws_ddb_client.hpp — the AWS-backed IDDBClient adapter (the ddbsh-aws
+// component, alias ddbsh::aws).
+//
+// SDK BOUNDARY (D5): this header REQUIRES the AWS SDK for C++ — it includes
+// <aws/dynamodb/DynamoDBClient.h> and only compiles where the SDK's include
+// paths are present. It is deliberately NOT one of the SDK-free engine headers:
+// everything under include/ddbsh/*.hpp is SDK-free; everything under
+// include/ddbsh/aws/*.hpp pulls the AWS SDK. An embedder who wants only the
+// engine links ddbsh::ddbsh and never includes this; an embedder who wants the
+// ready-made AWS client links ddbsh::aws and includes this.
 //
 // This is the SOLE place ddbsh::Value/request structs meet
 // Aws::DynamoDB::Model::* (D11). It owns the real DynamoDBClient and translates
@@ -13,10 +22,11 @@
 // and the data-plane ops (get_item / query / scan / put_item) with full
 // ddbsh::Value <-> Aws::AttributeValue translation. It also serves EXPLAIN via
 // explain_request(), which serializes the exact SDK request each op would send
-// (SerializePayload) without issuing it (P2a-03 §4.3).
+// (SerializePayload) without issuing it (P2a-03 §4.3). It is the single, shared
+// AWS translation used by BOTH the CLI and external embedders.
 
-#ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
-#define DDBSH_CLI_AWS_DDB_CLIENT_HPP
+#ifndef DDBSH_AWS_AWS_DDB_CLIENT_HPP
+#define DDBSH_AWS_AWS_DDB_CLIENT_HPP
 
 #include <memory>
 #include <string>
@@ -25,7 +35,7 @@
 
 #include "ddbsh/iddbclient.hpp"
 
-namespace ddbsh::cli {
+namespace ddbsh::aws {
 
 /// Concrete IDDBClient backed by the AWS SDK for C++.
 class AwsDDBClient : public ddbsh::IDDBClient {
@@ -87,6 +97,6 @@ private:
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;
 };
 
-}  // namespace ddbsh::cli
+}  // namespace ddbsh::aws
 
-#endif  // DDBSH_CLI_AWS_DDB_CLIENT_HPP
+#endif  // DDBSH_AWS_AWS_DDB_CLIENT_HPP

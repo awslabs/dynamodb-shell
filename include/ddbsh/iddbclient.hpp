@@ -18,6 +18,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -32,6 +33,20 @@ namespace ddbsh {
 /// sorts).
 struct ItemRow {
     ValueMap attributes;
+
+    /// Look up one attribute by its real (unaliased) name. Returns the Value
+    /// when the row carries that attribute, std::nullopt otherwise. A
+    /// convenience for embedders consuming SELECT results so they do not scan
+    /// `attributes` by hand (D11). Linear over `attributes` (a DynamoDB item
+    /// has few top-level attributes); the first match wins.
+    std::optional<Value> get(std::string_view name) const {
+        for (const auto& [attr_name, value] : attributes) {
+            if (attr_name == name) {
+                return value;
+            }
+        }
+        return std::nullopt;
+    }
 };
 
 /// ExpressionAttributeNames: token (`#a...`) -> real attribute name, in token

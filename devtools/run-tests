@@ -68,6 +68,13 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # args pass through to ctest.
 SUITE=""
 FULL_ENGINE=0
+# --live-sample (opt-in): additionally build + run the examples/live_demo LIVE
+# CTest (live_demo_sample) as an external find_package(ddbsh) consumer against
+# real DynamoDB. OFF by default — it SPENDS (creates+drops a real table) and
+# needs credentials, so the default gate never builds or runs it. When set, it
+# configures the native build with -DDDBSH_TEST_LIVE_SAMPLE=ON so the sample is
+# registered and runs alongside the native suite (D8).
+LIVE_SAMPLE=0
 CTEST_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -77,6 +84,10 @@ while [ $# -gt 0 ]; do
             ;;
         --full-engine)
             FULL_ENGINE=1
+            shift
+            ;;
+        --live-sample)
+            LIVE_SAMPLE=1
             shift
             ;;
         *)
@@ -243,14 +254,26 @@ if [ "${DDBSH_SKIP_NATIVE:-0}" -eq 0 ]; then
     NATIVE_BUILD="${DDBSH_NATIVE_BUILD_DIR:-$REPO_DIR/build-unit}"
     NATIVE_LOG="$DISCUSSIONS_DIR/test-native-${HASH}.log"
     echo "=== Configuring + building native unit tests ($HASH) ===" | tee -a "$SUMMARY_FILE"
-    if [ ! -f "$NATIVE_BUILD/CMakeCache.txt" ]; then
-        cmake -S "$ENGINE_SRC" -B "$NATIVE_BUILD" \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX" \
-            -DCMAKE_C_COMPILER="$DDBSH_CC" \
-            -DCMAKE_CXX_COMPILER="$DDBSH_CXX"
+    NATIVE_CFG=(-DCMAKE_BUILD_TYPE=Debug
+                -DCMAKE_PREFIX_PATH="$DDBSH_SDK_PREFIX"
+                -DCMAKE_C_COMPILER="$DDBSH_CC"
+                -DCMAKE_CXX_COMPILER="$DDBSH_CXX")
+    if [ "$LIVE_SAMPLE" -eq 1 ]; then
+        # Register the LIVE examples/live_demo CTest (opt-in; it spends).
+        NATIVE_CFG+=(-DDDBSH_TEST_LIVE_SAMPLE=ON)
     fi
-    cmake --build "$NATIVE_BUILD" --target ddbsh-tests
+    # Reconfigure when there is no cache OR when --live-sample is requested (the
+    # flag must take effect even on a pre-existing cache).
+    if [ ! -f "$NATIVE_BUILD/CMakeCache.txt" ] || [ "$LIVE_SAMPLE" -eq 1 ]; then
+        cmake -S "$ENGINE_SRC" -B "$NATIVE_BUILD" "${NATIVE_CFG[@]}"
+    fi
+    if [ "$LIVE_SAMPLE" -eq 1 ]; then
+        # The live sample installs from this build dir, so the engine + the AWS
+        # component must be built (not just the test binary).
+        cmake --build "$NATIVE_BUILD"
+    else
+        cmake --build "$NATIVE_BUILD" --target ddbsh-tests
+    fi
     echo "=== Running native unit tests ($HASH) ===" | tee -a "$SUMMARY_FILE"
     set +e
     ctest --test-dir "$NATIVE_BUILD" --output-on-failure 2>&1 | tee "$NATIVE_LOG"

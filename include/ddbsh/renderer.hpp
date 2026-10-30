@@ -20,8 +20,20 @@
 
 #include "ddbsh/error.hpp"
 #include "ddbsh/exec_outcome.hpp"
+#include "ddbsh/value.hpp"
 
 namespace ddbsh::render {
+
+/// Format a single DynamoDB attribute Value into the exact ddbsh cell string:
+/// a bare "simple" string, a quote-if-required string (space/tab/`,`/`:`/
+/// newline/bracket/brace), a bare number, `TRUE`/`FALSE`, `NULL`, a `[..]`
+/// list, or a `{k:v}` nested map (keys alpha-sorted, no space after the nested
+/// colon) — arch §9. This is the SAME value formatter the Renderer uses for
+/// item cells, exposed as a free function so an embedder building its own
+/// output over typed rows can render one value in a single call without
+/// reimplementing the Value::Type switch (D11). It is a pure function — no
+/// globals, no locale dependence, no terminal.
+std::string render_value(const Value& value);
 
 /// Formats engine results into the exact bytes the golden .exp files expect.
 class Renderer {

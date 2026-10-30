@@ -59,50 +59,11 @@ std::string quote_if_required(const std::string& input) {
     return input;
 }
 
-/// Serialize one attribute Value (CSelectHelper::serialize_value). Nested maps
-/// use `:` with NO space after the key (contrast the top-level item `: `), and
-/// map keys are emitted alphabetically — the original iterated an Aws::Map
-/// (std::map, sorted); our ValueMap keeps source order, so we sort here.
-std::string serialize_value(const Value& v) {
-    switch (v.type) {
-        case Value::Type::S:
-            return quote_if_required(v.s);
-        case Value::Type::N:
-            return v.s;
-        case Value::Type::BOOL:
-            return v.boolean ? "TRUE" : "FALSE";
-        case Value::Type::NUL:
-            // A stored null attribute renders NULL (the original's "NOT NULL"
-            // branch is for the IS NOT NULL display path, not a stored value).
-            return "NULL";
-        case Value::Type::L: {
-            std::string out;
-            for (const auto& e : v.list) {
-                out += (out.empty() ? "[" : ", ") + serialize_value(e);
-            }
-            return out.empty() ? "[]" : out + "]";
-        }
-        case Value::Type::M: {
-            std::vector<const std::pair<std::string, Value>*> entries;
-            entries.reserve(v.map.size());
-            for (const auto& e : v.map) {
-                entries.push_back(&e);
-            }
-            std::sort(entries.begin(), entries.end(),
-                      [](const auto* a, const auto* b) { return a->first < b->first; });
-            std::string out;
-            for (const auto* e : entries) {
-                out += (out.empty() ? "{" : ", ") + quote_if_required(e->first) + ":" +
-                       serialize_value(e->second);
-            }
-            return out.empty() ? "{}" : out + "}";
-        }
-        default:
-            // Sets (SS/NS/BS) and binary (B) are not reachable via the in-scope
-            // commands; the original likewise rendered them "Unknown Type".
-            return "Unknown Type";
-    }
-}
+// serialize_value is the public render_value (defined at namespace scope below,
+// declared in renderer.hpp) — ONE value-formatting implementation, shared by
+// the Renderer's item path here and by embedders calling ddbsh::render::
+// render_value directly (D11). Anonymous-namespace helpers below call it by its
+// public name.
 
 /// Render one item (CSelectHelper::show_item): `{name: value, ...}` with
 /// attribute names sorted alphabetically and the top-level `: ` separator.
@@ -121,7 +82,7 @@ std::string show_item(const ItemRow& item) {
     std::string out;
     for (const auto* a : attrs) {
         out += (out.empty() ? "{" : ", ") + quote_if_required(a->first) + ": " +
-               serialize_value(a->second);
+               render_value(a->second);
     }
     return out + "}";
 }
@@ -381,6 +342,53 @@ std::string render_outcome_stderr(const ExecOutcome& outcome) {
 }
 
 }  // namespace
+
+std::string render_value(const Value& v) {
+    // Port of CSelectHelper::serialize_value (arch §9). Nested maps use `:`
+    // with NO space after the key (contrast the top-level item `: `), and map
+    // keys are emitted alphabetically — the original iterated an Aws::Map
+    // (std::map, sorted); our ValueMap keeps source order, so we sort here.
+    // This is the single value-formatting implementation; the Renderer's item
+    // path (show_item, above) and external embedders both route through it.
+    switch (v.type) {
+        case Value::Type::S:
+            return quote_if_required(v.s);
+        case Value::Type::N:
+            return v.s;
+        case Value::Type::BOOL:
+            return v.boolean ? "TRUE" : "FALSE";
+        case Value::Type::NUL:
+            // A stored null attribute renders NULL (the original's "NOT NULL"
+            // branch is for the IS NOT NULL display path, not a stored value).
+            return "NULL";
+        case Value::Type::L: {
+            std::string out;
+            for (const auto& e : v.list) {
+                out += (out.empty() ? "[" : ", ") + render_value(e);
+            }
+            return out.empty() ? "[]" : out + "]";
+        }
+        case Value::Type::M: {
+            std::vector<const std::pair<std::string, Value>*> entries;
+            entries.reserve(v.map.size());
+            for (const auto& e : v.map) {
+                entries.push_back(&e);
+            }
+            std::sort(entries.begin(), entries.end(),
+                      [](const auto* a, const auto* b) { return a->first < b->first; });
+            std::string out;
+            for (const auto* e : entries) {
+                out += (out.empty() ? "{" : ", ") + quote_if_required(e->first) + ":" +
+                       render_value(e->second);
+            }
+            return out.empty() ? "{}" : out + "}";
+        }
+        default:
+            // Sets (SS/NS/BS) and binary (B) are not reachable via the in-scope
+            // commands; the original likewise rendered them "Unknown Type".
+            return "Unknown Type";
+    }
+}
 
 std::string Renderer::render(const ExecOutcome& outcome) const {
     return render_outcome(outcome);
