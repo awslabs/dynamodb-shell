@@ -308,6 +308,10 @@ if(DDBSH_BUILD_TESTS)
                    examples/ddbshlib_inmemory_sample/ddbshlib_inmemory_sample.cpp)
     target_link_libraries(ddbshlib_inmemory_sample PRIVATE ddbsh::ddbsh ddbsh_warnings)
     add_test(NAME ddbshlib_inmemory_sample COMMAND ddbshlib_inmemory_sample)
+    # Build the offline sample whenever the test binary is built, so a
+    # `--target ddbsh-tests` build (the gate's native step) produces it and its
+    # default-on CTest runs rather than reporting "Not Run".
+    add_dependencies(ddbsh-tests ddbshlib_inmemory_sample)
 
     # LIVE embedding sample (D28): built in-tree against ddbsh::aws and run
     # against REAL DynamoDB (us-east-1) via the standard ~/.aws chain. OFF by
