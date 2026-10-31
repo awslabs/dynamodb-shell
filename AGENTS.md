@@ -52,7 +52,8 @@ tests/             native GoogleTest unit tests + boundary_check.sh
     suite/         the original ddbsh golden suite (family .txt, results/*.exp,
                    .sql seeds, ddbsh-wait) — the fidelity regression contract
     reimpl/        golden families authored for the reimplementation (phase 2i)
-examples/          embed_demo.cpp (offline) + live_demo/ (real DynamoDB)
+examples/          ddbshlib_inmemory_sample/ (offline, MemoryClient) +
+                   ddbshlib_sample/ (live, ddbsh::aws::open) — embedding API
 devtools/          run-tests (the ONLY sanctioned test entry point)
 ```
 
