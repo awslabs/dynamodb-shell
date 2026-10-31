@@ -43,5 +43,5 @@ build*
 /Testing/
 /ddbsh/tests/Testing/
 
-# examples build output (examples/Makefile compiles embed_demo in-tree)
-/examples/embed_demo
+# examples build output (standalone external-consumer sample build dirs)
+/examples/*/build*
