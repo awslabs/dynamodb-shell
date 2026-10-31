@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.10.5
+        VERSION 0.10.6
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -323,6 +323,17 @@ if(DDBSH_BUILD_TESTS)
         add_executable(ddbshlib_sample examples/ddbshlib_sample/ddbshlib_sample.cpp)
         target_link_libraries(ddbshlib_sample PRIVATE ddbsh::aws ddbsh_warnings)
         add_test(NAME ddbshlib_sample COMMAND ddbshlib_sample)
+
+        # Real-DynamoDB functional tests of the embedding API (acceptance
+        # criterion 1). A separate GoogleTest binary linking ddbsh::aws — it
+        # SPENDS (creates/drops a real table), so it is gated the same way as
+        # the live sample and is never part of the default offline suite.
+        add_executable(ddbsh-live-tests tests/connection_live_test.cpp)
+        target_include_directories(ddbsh-live-tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+        target_link_libraries(ddbsh-live-tests
+            PRIVATE ddbsh::aws ddbsh_warnings GTest::gtest_main)
+        add_test(NAME ddbsh_live_api COMMAND ddbsh-live-tests)
     endif()
 endif()
 
