@@ -30,23 +30,12 @@
 namespace ddbsh {
 
 /// A single returned row: attribute name -> Value (source order; Renderer
-/// sorts).
+/// sorts). This is an engine SPI request/response type; the embedding API
+/// exposes rows through the typed, null-aware ddbsh::Row / ddbsh::Cell surface
+/// (ddbsh/connection.hpp). (The former ItemRow::get convenience was removed in
+/// P4d — superseded by Row::get_string/get_int/... and Row::cell.)
 struct ItemRow {
     ValueMap attributes;
-
-    /// Look up one attribute by its real (unaliased) name. Returns the Value
-    /// when the row carries that attribute, std::nullopt otherwise. A
-    /// convenience for embedders consuming SELECT results so they do not scan
-    /// `attributes` by hand (D11). Linear over `attributes` (a DynamoDB item
-    /// has few top-level attributes); the first match wins.
-    std::optional<Value> get(std::string_view name) const {
-        for (const auto& [attr_name, value] : attributes) {
-            if (attr_name == name) {
-                return value;
-            }
-        }
-        return std::nullopt;
-    }
 };
 
 /// ExpressionAttributeNames: token (`#a...`) -> real attribute name, in token
