@@ -115,6 +115,7 @@ add_library(ddbsh
             src/statement.cpp
             src/items.cpp
             src/version.cpp
+            src/connection/connection.cpp
             src/render/renderer.cpp
             src/parser/driver.cpp
             src/parser/lex_debug.cpp
@@ -258,6 +259,7 @@ if(DDBSH_BUILD_TESTS)
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
                    tests/items_api_test.cpp
+                   tests/connection_api_test.cpp
                    tests/reentrancy_test.cpp
                    tests/lexer_test.cpp
                    tests/parse_test.cpp
