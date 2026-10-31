@@ -113,7 +113,6 @@ ADD_FLEX_BISON_DEPENDENCY(ddbsh_scanner ddbsh_parser)
 add_library(ddbsh
             src/session.cpp
             src/statement.cpp
-            src/items.cpp
             src/version.cpp
             src/connection/connection.cpp
             src/render/renderer.cpp
@@ -214,7 +213,7 @@ if(DDBSH_BUILD_AWS)
     # where AwsApiGuard is instantiated, which is correct for both a static and
     # a shared SDK. (TODO(portability): revisit if a shared AWS SDK build is
     # adopted and a shared component is wanted.)
-    add_library(ddbsh-aws STATIC aws/aws_ddb_client.cpp)
+    add_library(ddbsh-aws STATIC aws/aws_ddb_client.cpp aws/database.cpp)
     add_library(ddbsh::aws ALIAS ddbsh-aws)
     # EXPORT_NAME `aws` so the INSTALLED imported target is `ddbsh::aws` (the
     # NAMESPACE `ddbsh::` prefixes the EXPORT_NAME, not the raw target name) —
@@ -258,7 +257,6 @@ if(DDBSH_BUILD_TESTS)
     enable_testing()
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
-                   tests/items_api_test.cpp
                    tests/connection_api_test.cpp
                    tests/reentrancy_test.cpp
                    tests/lexer_test.cpp
@@ -299,44 +297,32 @@ if(DDBSH_BUILD_TESTS)
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
 
-    # Opt-in verification of the library-embedding sample as an EXTERNAL
-    # consumer (2h-4, D-2h-4): install the library to a temp prefix, build
-    # examples/embed_demo via its standalone Makefile against that install, run
-    # it, and diff its stdout against the committed golden. OFF by default
-    # because it needs an install step + a second compiler invocation (the
-    # sample itself is offline — no AWS). Enable with -DDDBSH_TEST_EMBED_SAMPLE=ON.
-    option(DDBSH_TEST_EMBED_SAMPLE
-        "Build + run the examples/ embedding sample against an install as a CTest."
-        OFF)
-    if(DDBSH_TEST_EMBED_SAMPLE)
-        add_test(NAME embed_sample
-                 COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_embed_test.sh"
-                         "${CMAKE_COMMAND}"
-                         "${CMAKE_BINARY_DIR}"
-                         "${CMAKE_CURRENT_SOURCE_DIR}/examples"
-                         "${CMAKE_CXX_COMPILER}"
-                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/embed_demo.expected.txt")
-    endif()
+    # OFFLINE embedding sample (D29): built in-tree against the SDK-free engine
+    # and run as a default-on, credential-less CTest. It drives the embedding
+    # API (ddbsh::Connection) over the in-memory ddbsh::testing::MemoryClient,
+    # so it compiles + runs anywhere with no AWS SDK and no credentials,
+    # restoring the offline example + CI signal the retired embed_demo provided.
+    # (Its own standalone examples/ddbshlib_inmemory_sample/CMakeLists.txt
+    # additionally proves it as an EXTERNAL find_package(ddbsh) consumer.)
+    add_executable(ddbshlib_inmemory_sample
+                   examples/ddbshlib_inmemory_sample/ddbshlib_inmemory_sample.cpp)
+    target_link_libraries(ddbshlib_inmemory_sample PRIVATE ddbsh::ddbsh ddbsh_warnings)
+    add_test(NAME ddbshlib_inmemory_sample COMMAND ddbshlib_inmemory_sample)
 
-    # Opt-in LIVE verification of the examples/live_demo sample as an EXTERNAL
-    # consumer of the installed find_package(ddbsh) package (D8): install the
-    # library + the ddbsh::aws component to a temp prefix, configure+build
-    # examples/live_demo via its own CMakeLists (find_package(ddbsh) +
-    # find_package(AWSSDK)), then run it against REAL DynamoDB (us-east-1) via
-    # the standard ~/.aws chain. OFF by default because it needs credentials and
-    # SPENDS (it creates+drops a real on-demand table). Requires DDBSH_BUILD_AWS.
-    # Enable with -DDDBSH_TEST_LIVE_SAMPLE=ON (the gate's live path passes it).
+    # LIVE embedding sample (D28): built in-tree against ddbsh::aws and run
+    # against REAL DynamoDB (us-east-1) via the standard ~/.aws chain. OFF by
+    # default because it needs credentials and SPENDS (it creates+drops a real
+    # on-demand table). Requires DDBSH_BUILD_AWS. Enable with
+    # -DDDBSH_TEST_LIVE_SAMPLE=ON (the gate's live path passes it). Its own
+    # standalone examples/ddbshlib_sample/CMakeLists.txt proves it as an
+    # EXTERNAL find_package(ddbsh) consumer.
     option(DDBSH_TEST_LIVE_SAMPLE
-        "Build + run the examples/live_demo sample against real DynamoDB as a CTest."
+        "Build + run the live embedding sample against real DynamoDB as a CTest."
         OFF)
     if(DDBSH_TEST_LIVE_SAMPLE AND DDBSH_BUILD_AWS)
-        add_test(NAME live_demo_sample
-                 COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_live_test.sh"
-                         "${CMAKE_COMMAND}"
-                         "${CMAKE_BINARY_DIR}"
-                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/live_demo"
-                         "${CMAKE_CXX_COMPILER}"
-                         "${CMAKE_PREFIX_PATH}")
+        add_executable(ddbshlib_sample examples/ddbshlib_sample/ddbshlib_sample.cpp)
+        target_link_libraries(ddbshlib_sample PRIVATE ddbsh::aws ddbsh_warnings)
+        add_test(NAME ddbshlib_sample COMMAND ddbshlib_sample)
     endif()
 endif()
 

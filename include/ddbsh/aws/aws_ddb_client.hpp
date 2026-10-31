@@ -28,9 +28,12 @@
 #ifndef DDBSH_AWS_AWS_DDB_CLIENT_HPP
 #define DDBSH_AWS_AWS_DDB_CLIENT_HPP
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
+#include <aws/core/client/ClientConfiguration.h>
 #include <aws/dynamodb/DynamoDBClient.h>
 
 #include "ddbsh/iddbclient.hpp"
@@ -43,6 +46,22 @@ public:
     /// @param region    AWS region (empty => SDK default resolution).
     /// @param endpoint  endpoint override (empty => regional endpoint).
     AwsDDBClient(const std::string& region, const std::string& endpoint);
+
+    /// Full-configuration ctor used by ddbsh::aws::open (R-P4d-3). The caller's
+    /// `base_config` is the BASE the SDK client builds on (timeouts, retry
+    /// strategy, max connections, proxy, …); ddbsh overlays region/endpoint
+    /// (non-empty wins) and ALWAYS sets the ddbsh user-agent last (D25), so the
+    /// service still sees "ddbsh - version X.Y[.Z]" regardless of the caller's
+    /// config. `waiter_timeout` caps how long the CREATE/DROP ACTIVE/gone
+    /// waiters poll (a poll-loop budget, SDK-free in nature — D27); nullopt
+    /// preserves the original's unbounded backoff loop byte-for-byte. `profile`
+    /// (non-empty) resolves credentials from that named profile instead of the
+    /// default chain.
+    AwsDDBClient(const std::string& region, const std::string& endpoint,
+                 const Aws::Client::ClientConfiguration& base_config,
+                 std::optional<std::chrono::milliseconds> waiter_timeout = std::nullopt,
+                 const std::string& profile = "");
+
     ~AwsDDBClient() override;
 
     /// Rebuild the underlying SDK client for a new region/endpoint, mirroring
@@ -91,10 +110,14 @@ public:
 private:
     // Construct (or replace) the underlying SDK client for a region/endpoint.
     // Shared by the ctor and connect() so both resolve credentials/endpoint the
-    // same way (D-2j-10).
+    // same way (D-2j-10). Applies base_config_ (if any) as the base, overlays
+    // region/endpoint/user-agent, and honors profile_ for credentials.
     void rebuild(const std::string& region, const std::string& endpoint);
 
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;
+    std::optional<Aws::Client::ClientConfiguration> base_config_;  // caller's base (R-P4d-3)
+    std::optional<std::chrono::milliseconds> waiter_timeout_;      // waiter poll budget (D27)
+    std::string profile_;                                          // explicit credential profile
 };
 
 }  // namespace ddbsh::aws
