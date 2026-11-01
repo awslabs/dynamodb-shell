@@ -27,8 +27,7 @@ namespace {
 // engine's CONNECT arm reconnects the injected client with the right target.
 class RecordingConnectClient : public ddbsh::test::FakeDDBClient {
 public:
-    ddbsh::Result<void> connect(const std::string& region,
-                                const std::string& endpoint) override {
+    ddbsh::Result<void> connect(const std::string& region, const std::string& endpoint) override {
         connects.push_back({region, endpoint});
         return {};
     }
@@ -91,8 +90,8 @@ TEST(ConnectReconnect, HintTracksEndpointOverrideAfterConnect) {
     RecordingConnectClient client;
     ddbsh::Session session = make_session(client, "us-east-1", "");
 
-    ASSERT_TRUE(session.run("connect us-west-2 with endpoint \"http://localhost:8000\";")
-                    .has_value());
+    ASSERT_TRUE(
+        session.run("connect us-west-2 with endpoint \"http://localhost:8000\";").has_value());
     const ddbsh::ConnectionHint hint = session.connection_hint();
     EXPECT_EQ(hint.region, "us-west-2");
     EXPECT_TRUE(hint.endpoint_overridden);
