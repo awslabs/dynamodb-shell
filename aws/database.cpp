@@ -64,8 +64,8 @@ Result<Database> open(const OpenOptions& opts) {
         client = std::make_unique<AwsDDBClient>(opts.region, opts.endpoint);
     }
 
-    auto conn = std::make_unique<Connection>(SessionConfig{opts.region, opts.endpoint},
-                                             std::move(client));
+    auto conn =
+        std::make_unique<Connection>(SessionConfig{opts.region, opts.endpoint}, std::move(client));
     return Database(std::move(token), std::move(conn));
 }
 

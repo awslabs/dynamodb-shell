@@ -128,9 +128,7 @@ public:
         return cell(name).as_string();
     }
     std::optional<long long> get_int(std::string_view name) const { return cell(name).as_int(); }
-    std::optional<double> get_double(std::string_view name) const {
-        return cell(name).as_double();
-    }
+    std::optional<double> get_double(std::string_view name) const { return cell(name).as_double(); }
     std::optional<bool> get_bool(std::string_view name) const { return cell(name).as_bool(); }
 
     /// Attribute count.

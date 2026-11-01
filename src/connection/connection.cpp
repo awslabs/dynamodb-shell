@@ -217,8 +217,7 @@ PreparedStatement& PreparedStatement::bind(int index1, Value v) {
         // first such error and surface it from expand() (no silent swallow).
         if (!bind_error_.has_value()) {
             bind_error_ = Error{Errc::invalid_argument,
-                                "positional bind index must be >= 1, got " +
-                                    std::to_string(index1),
+                                "positional bind index must be >= 1, got " + std::to_string(index1),
                                 std::nullopt, std::nullopt};
         }
         return *this;
@@ -273,9 +272,9 @@ Result<std::string> PreparedStatement::expand() const {
         }
         if (c == '?') {
             if (next_positional >= positional_.size()) {
-                return fail(Errc::invalid_argument,
-                            "positional placeholder #" + std::to_string(next_positional + 1) +
-                                " has no bound value");
+                return fail(Errc::invalid_argument, "positional placeholder #" +
+                                                        std::to_string(next_positional + 1) +
+                                                        " has no bound value");
             }
             if (auto e = render_literal(positional_[next_positional], out)) {
                 return fail(*e);
@@ -313,9 +312,9 @@ Result<std::string> PreparedStatement::expand() const {
     }
 
     if (next_positional < positional_.size()) {
-        return fail(Errc::invalid_argument,
-                    "bound positional parameter #" + std::to_string(next_positional + 1) +
-                        " has no matching ? placeholder");
+        return fail(Errc::invalid_argument, "bound positional parameter #" +
+                                                std::to_string(next_positional + 1) +
+                                                " has no matching ? placeholder");
     }
     for (std::size_t k = 0; k < named_.size(); ++k) {
         if (!named_used[k]) {
@@ -545,7 +544,9 @@ bool Results::next_row() {
     return true;
 }
 
-std::size_t Results::column_count() const { return impl_->current_row.size(); }
+std::size_t Results::column_count() const {
+    return impl_->current_row.size();
+}
 
 std::string Results::column_name(std::size_t i) const {
     if (i >= impl_->current_row.size()) {
@@ -554,7 +555,9 @@ std::string Results::column_name(std::size_t i) const {
     return impl_->current_row.name_at(i);
 }
 
-Cell Results::column(std::string_view name) const { return impl_->current_row.cell(name); }
+Cell Results::column(std::string_view name) const {
+    return impl_->current_row.cell(name);
+}
 
 Cell Results::column(std::size_t i) const {
     if (i >= impl_->current_row.size()) {
@@ -563,7 +566,9 @@ Cell Results::column(std::size_t i) const {
     return impl_->current_row.cell_at(i);
 }
 
-const Row& Results::row() const { return impl_->current_row; }
+const Row& Results::row() const {
+    return impl_->current_row;
+}
 
 double Results::score() const {
     const auto* c = impl_->current();
@@ -624,7 +629,9 @@ const std::vector<std::string>& Results::diagnostics() const {
     return c != nullptr ? c->diagnostics : impl_->empty_lines;
 }
 
-std::optional<Error> Results::error() const { return impl_->error; }
+std::optional<Error> Results::error() const {
+    return impl_->error;
+}
 
 std::string Results::render() const {
     const auto* c = impl_->current();
