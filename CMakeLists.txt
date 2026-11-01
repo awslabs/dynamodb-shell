@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.10.6
+        VERSION 0.10.7
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -295,6 +295,13 @@ if(DDBSH_BUILD_TESTS)
 
     add_test(NAME engine_boundary_check
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary_check.sh"
+                     "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # D19 (P4d): the embedding API's own misuse messages must never appear in a
+    # golden .exp — the CLI does not drive those paths, so the 705/705 CLI
+    # fidelity contract stays intact. This gate makes that guarantee mechanical.
+    add_test(NAME golden_absence_check
+             COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/golden_absence_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
 
     # OFFLINE embedding sample (D29): built in-tree against the SDK-free engine

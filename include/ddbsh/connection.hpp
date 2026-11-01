@@ -307,6 +307,7 @@ private:
     std::string sql_;
     std::vector<Value> positional_;
     std::vector<std::pair<std::string, Value>> named_;
+    std::optional<Error> bind_error_;  ///< first bind misuse; surfaced by expand()
 };
 
 /// The embedding handle: open over an injected IDDBClient, submit statements,

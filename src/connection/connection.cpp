@@ -145,16 +145,17 @@ std::optional<double> Cell::as_double() const {
     if (value_ == nullptr || value_->type != Value::Type::N) {
         return std::nullopt;
     }
-    try {
-        std::size_t pos = 0;
-        double d = std::stod(value_->s, &pos);
-        if (pos != value_->s.size()) {
-            return std::nullopt;
-        }
-        return d;
-    } catch (...) {
-        return std::nullopt;
+    // Locale-independent parse: DynamoDB N values always use '.' as the decimal
+    // point, so std::stod (which follows the global C++ locale and can misparse
+    // under a comma-decimal locale) must not be used. std::from_chars is
+    // locale-independent by contract.
+    const std::string& s = value_->s;
+    double result = 0.0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+    if (ec != std::errc{} || ptr != s.data() + s.size()) {
+        return std::nullopt;  // not a number / trailing chars / out of range
     }
+    return result;
 }
 
 std::optional<bool> Cell::as_bool() const {
@@ -211,7 +212,15 @@ Cell Row::cell(std::string_view name) const {
 
 PreparedStatement& PreparedStatement::bind(int index1, Value v) {
     if (index1 < 1) {
-        // Deferred to expand(); keep a placeholder so the count is visible.
+        // A positional index is 1-based; a value <1 is caller misuse. bind()
+        // returns *this for chaining and cannot return a Result, so record the
+        // first such error and surface it from expand() (no silent swallow).
+        if (!bind_error_.has_value()) {
+            bind_error_ = Error{Errc::invalid_argument,
+                                "positional bind index must be >= 1, got " +
+                                    std::to_string(index1),
+                                std::nullopt, std::nullopt};
+        }
         return *this;
     }
     auto idx = static_cast<std::size_t>(index1 - 1);
@@ -234,6 +243,9 @@ PreparedStatement& PreparedStatement::bind(std::string_view name, Value v) {
 }
 
 Result<std::string> PreparedStatement::expand() const {
+    if (bind_error_.has_value()) {
+        return fail(*bind_error_);
+    }
     std::string out;
     out.reserve(sql_.size() + 16);
     std::size_t next_positional = 0;
@@ -734,7 +746,7 @@ Result<RowSet> Connection::query(std::string_view sql) {
             return fail(*e);
         }
         return fail(Errc::invalid_argument,
-                    "query() requires a row-returning statement; got a " + kind_name + " result");
+                    "query() requires a row-returning statement; the result kind is " + kind_name);
     }
     std::vector<Row> rows;
     while (results.next_row()) {

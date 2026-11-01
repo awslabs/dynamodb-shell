@@ -88,7 +88,8 @@ public:
                                          in.expression_attribute_values);
         for (const auto& item : t->items) {
             if (matches_all(item, preds)) {
-                out.items.push_back(item);
+                out.items.push_back(
+                    project(item, in.projection_expression, in.expression_attribute_names));
             }
         }
         return out;
@@ -100,7 +101,13 @@ public:
         if (t == nullptr) {
             return fail(Errc::no_such_table, "Table: " + in.table_name + " not found");
         }
-        out.items = t->items;  // whole table (no filter evaluation — see header)
+        // Whole table (no filter evaluation — see header), with the projection
+        // applied so an enumeration read returns only its projected attributes
+        // (the engine projects just the key attributes to drive bulk writes).
+        for (const auto& item : t->items) {
+            out.items.push_back(
+                project(item, in.projection_expression, in.expression_attribute_names));
+        }
         return out;
     }
 
@@ -393,6 +400,46 @@ private:
                          std::nullopt, std::nullopt};
         }
         return std::nullopt;
+    }
+
+    // Apply a ProjectionExpression: return a copy of `item` keeping only the
+    // projected attributes (source order preserved). A ProjectionExpression is
+    // a comma-separated list of `#token`s (resolved via expression_attribute_
+    // names) or bare attribute names. When no projection is set the whole item
+    // is returned. Real DynamoDB does this; the engine relies on it to project
+    // just the key attributes when enumerating rows for a bulk write, so the
+    // per-item write key carries no stray non-key attributes. Dotted/nested
+    // projection paths are not modeled (out of scope — see the header note).
+    static ItemRow project(const ItemRow& item, const std::optional<std::string>& projection,
+                           const ExpressionAttributeNames& names) {
+        if (!projection.has_value() || projection->empty()) {
+            return item;
+        }
+        std::vector<std::string> wanted;
+        std::size_t i = 0;
+        const std::string& p = *projection;
+        while (i < p.size()) {
+            while (i < p.size() && (p[i] == ' ' || p[i] == ',')) {
+                ++i;
+            }
+            std::size_t start = i;
+            while (i < p.size() && p[i] != ' ' && p[i] != ',') {
+                ++i;
+            }
+            if (i > start) {
+                wanted.push_back(resolve_name(names, p.substr(start, i - start)));
+            }
+        }
+        ItemRow out;
+        for (const auto& [name, value] : item.attributes) {
+            for (const auto& w : wanted) {
+                if (w == name) {
+                    out.attributes.emplace_back(name, value);
+                    break;
+                }
+            }
+        }
+        return out;
     }
 
     static std::string resolve_name(const ExpressionAttributeNames& names, const std::string& tok) {
