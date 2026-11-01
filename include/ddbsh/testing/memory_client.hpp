@@ -330,8 +330,7 @@ private:
 
     template <class T>
     Result<T> not_impl(const char* op) {
-        return fail(Errc::not_implemented,
-                    std::string("MemoryClient does not implement ") + op);
+        return fail(Errc::not_implemented, std::string("MemoryClient does not implement ") + op);
     }
 
     static std::string value_key(const Value& v) {
@@ -389,8 +388,7 @@ private:
         }
         const std::string& c = *cond;
         const bool wants_absent = c.find("attribute_not_exists") != std::string::npos;
-        const bool wants_present =
-            !wants_absent && c.find("attribute_exists") != std::string::npos;
+        const bool wants_present = !wants_absent && c.find("attribute_exists") != std::string::npos;
         if (wants_absent && key_exists) {
             return Error{Errc::conditional_check_failed, "The conditional request failed",
                          std::nullopt, std::nullopt};
@@ -492,7 +490,8 @@ private:
         std::size_t t = 0;
         auto upper = [](std::string s) {
             for (char& c : s) {
-                if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+                if (c >= 'a' && c <= 'z')
+                    c = static_cast<char>(c - 'a' + 'A');
             }
             return s;
         };
@@ -555,24 +554,33 @@ private:
             try {
                 double da = std::stod(a.s);
                 double db = std::stod(b.s);
-                if (da < db) return -1;
-                if (da > db) return 1;
+                if (da < db)
+                    return -1;
+                if (da > db)
+                    return 1;
                 return 0;
             } catch (...) {
                 // fall through to string compare
             }
         }
-        if (a.s < b.s) return -1;
-        if (a.s > b.s) return 1;
+        if (a.s < b.s)
+            return -1;
+        if (a.s > b.s)
+            return 1;
         return 0;
     }
 
     static bool matches(const Value& item_v, const Predicate& p) {
-        if (p.op == "=") return compare(item_v, p.v1) == 0;
-        if (p.op == "<") return compare(item_v, p.v1) < 0;
-        if (p.op == "<=") return compare(item_v, p.v1) <= 0;
-        if (p.op == ">") return compare(item_v, p.v1) > 0;
-        if (p.op == ">=") return compare(item_v, p.v1) >= 0;
+        if (p.op == "=")
+            return compare(item_v, p.v1) == 0;
+        if (p.op == "<")
+            return compare(item_v, p.v1) < 0;
+        if (p.op == "<=")
+            return compare(item_v, p.v1) <= 0;
+        if (p.op == ">")
+            return compare(item_v, p.v1) > 0;
+        if (p.op == ">=")
+            return compare(item_v, p.v1) >= 0;
         if (p.op == "begins_with") {
             return item_v.s.size() >= p.v1.s.size() &&
                    item_v.s.compare(0, p.v1.s.size(), p.v1.s) == 0;
@@ -605,14 +613,18 @@ private:
         std::vector<std::string> toks;
         std::size_t i = 0;
         while (i < norm.size()) {
-            while (i < norm.size() && norm[i] == ' ') ++i;
+            while (i < norm.size() && norm[i] == ' ')
+                ++i;
             std::size_t start = i;
-            while (i < norm.size() && norm[i] != ' ') ++i;
-            if (i > start) toks.push_back(norm.substr(start, i - start));
+            while (i < norm.size() && norm[i] != ' ')
+                ++i;
+            if (i > start)
+                toks.push_back(norm.substr(start, i - start));
         }
         auto upper = [](std::string s) {
             for (char& c : s) {
-                if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+                if (c >= 'a' && c <= 'z')
+                    c = static_cast<char>(c - 'a' + 'A');
             }
             return s;
         };

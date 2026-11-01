@@ -81,8 +81,8 @@ TEST(ConnectionApi, CellThreeState) {
     MemoryClient client;
     Connection db(SessionConfig{"us-east-1", ""}, client);
     ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
-    ASSERT_TRUE(db.exec("insert into t ( id, present, nul ) values ( \"a\", \"v\", null );")
-                    .has_value());
+    ASSERT_TRUE(
+        db.exec("insert into t ( id, present, nul ) values ( \"a\", \"v\", null );").has_value());
 
     auto rows = db.query("select * from t where id = \"a\";");
     ASSERT_TRUE(rows.has_value());
@@ -175,8 +175,9 @@ TEST(ConnectionApi, MultiStatementResultSets) {
     Connection db(SessionConfig{"us-east-1", ""}, client);
     seed(db);
 
-    auto r = db.exec("insert into movies ( id, yr ) values ( \"m3\", 1 ); "
-                     "select * from movies where id = \"m3\";");
+    auto r = db.exec(
+        "insert into movies ( id, yr ) values ( \"m3\", 1 ); "
+        "select * from movies where id = \"m3\";");
     ASSERT_TRUE(r.has_value());
     ddbsh::Results& res = *r;
 
@@ -275,8 +276,9 @@ TEST(ConnectionApi, RenderAllConcatenatesResultSets) {
 
     // Two statements => two status result sets; render_all concatenates the
     // byte-exact CLI output of each in order.
-    auto r = db.exec("insert into t ( id ) values ( \"a\" ); "
-                     "insert into t ( id ) values ( \"b\" );");
+    auto r = db.exec(
+        "insert into t ( id ) values ( \"a\" ); "
+        "insert into t ( id ) values ( \"b\" );");
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->render_all(), "INSERT\nINSERT\n");
 }

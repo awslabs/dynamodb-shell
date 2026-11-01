@@ -137,10 +137,9 @@ int main() {
             return 1;
         }
         for (const ddbsh::Row& r : *rows) {
-            std::printf("  row: id=%s year=%lld title=%s\n",
-                        r.get_string("id").value_or("<none>").c_str(),
-                        r.get_int("year").value_or(-1),
-                        r.get_string("title").value_or("<none>").c_str());
+            std::printf(
+                "  row: id=%s year=%lld title=%s\n", r.get_string("id").value_or("<none>").c_str(),
+                r.get_int("year").value_or(-1), r.get_string("title").value_or("<none>").c_str());
         }
     }
     std::puts("");

@@ -46,11 +46,16 @@ int main() {
     ddbsh::testing::MemoryClient client;
     ddbsh::Connection db(ddbsh::SessionConfig{"local", ""}, client);
 
-    if (!run(db, "create table movies ( id string, year number ) "
-                 "primary key ( id hash, year range );") ||
-        !run(db, "insert into movies ( id, year, title ) values ( \"movie\", 2010, \"Inception\" );") ||
-        !run(db, "insert into movies ( id, year, title ) values ( \"movie\", 2014, \"Interstellar\" );") ||
-        !run(db, "insert into movies ( id, year, title ) values ( \"show\", 2016, \"Westworld\" );")) {
+    if (!run(db,
+             "create table movies ( id string, year number ) "
+             "primary key ( id hash, year range );") ||
+        !run(db,
+             "insert into movies ( id, year, title ) values ( \"movie\", 2010, \"Inception\" );") ||
+        !run(db,
+             "insert into movies ( id, year, title ) values ( \"movie\", 2014, \"Interstellar\" "
+             ");") ||
+        !run(db,
+             "insert into movies ( id, year, title ) values ( \"show\", 2016, \"Westworld\" );")) {
         return 1;
     }
     std::puts("");
@@ -70,10 +75,9 @@ int main() {
         }
         std::puts("ddbsh> select * from movies where id = \"movie\";   (typed rows)");
         for (const ddbsh::Row& r : *rows) {
-            std::printf("  row: id=%s year=%lld title=%s\n",
-                        r.get_string("id").value_or("<none>").c_str(),
-                        r.get_int("year").value_or(-1),
-                        r.get_string("title").value_or("<none>").c_str());
+            std::printf(
+                "  row: id=%s year=%lld title=%s\n", r.get_string("id").value_or("<none>").c_str(),
+                r.get_int("year").value_or(-1), r.get_string("title").value_or("<none>").c_str());
         }
     }
     std::puts("");

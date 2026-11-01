@@ -585,7 +585,8 @@ void AwsDDBClient::rebuild(const std::string& region, const std::string& endpoin
     // Start from the caller's base configuration when supplied (R-P4d-3:
     // timeouts, retry, max connections, proxy, …); otherwise a default one,
     // exactly as before.
-    Aws::Client::ClientConfiguration cfg = base_config_.value_or(Aws::Client::ClientConfiguration{});
+    Aws::Client::ClientConfiguration cfg =
+        base_config_.value_or(Aws::Client::ClientConfiguration{});
     // Overlay region/endpoint (non-empty wins), then ALWAYS the ddbsh
     // user-agent last (D25), so the service sees "ddbsh - version X.Y[.Z]"
     // regardless of the caller's config.
@@ -601,9 +602,8 @@ void AwsDDBClient::rebuild(const std::string& region, const std::string& endpoin
         // Explicit named-profile credential resolution (R-P4d-3 OpenOptions
         // profile). The default-chain path below is unchanged when no profile
         // is named.
-        auto provider =
-            Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>(
-                "ddbsh", profile_.c_str());
+        auto provider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>(
+            "ddbsh", profile_.c_str());
         client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(provider, cfg);
     } else {
         // Default-chain credential resolution (honors AWS_PROFILE and a

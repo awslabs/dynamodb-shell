@@ -88,8 +88,8 @@ private:
     Database(std::shared_ptr<void> sdk_token, std::unique_ptr<Connection> conn)
         : sdk_token_(std::move(sdk_token)), conn_(std::move(conn)) {}
 
-    std::shared_ptr<void> sdk_token_;     // reference-counted Aws::InitAPI/Shutdown
-    std::unique_ptr<Connection> conn_;    // owns the AwsDDBClient
+    std::shared_ptr<void> sdk_token_;   // reference-counted Aws::InitAPI/Shutdown
+    std::unique_ptr<Connection> conn_;  // owns the AwsDDBClient
 };
 
 /// Open an AWS-backed Database. Resolves region/endpoint/credentials through

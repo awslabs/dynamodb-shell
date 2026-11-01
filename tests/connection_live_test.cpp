@@ -72,9 +72,9 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
     }
 
     // INSERT three rows.
-    for (const char* row : {R"(( "movie", 2010, "Inception" ))",
-                            R"(( "movie", 2014, "Interstellar" ))",
-                            R"(( "show", 2016, "Westworld" ))"}) {
+    for (const char* row :
+         {R"(( "movie", 2010, "Inception" ))", R"(( "movie", 2014, "Interstellar" ))",
+          R"(( "show", 2016, "Westworld" ))"}) {
         auto r = db->exec("insert into " + table + " ( id, year, title ) values " + row + ";");
         ASSERT_TRUE(r.has_value()) << (r.has_value() ? "" : r.error().message);
         EXPECT_EQ(r->status_token(), "INSERT");
@@ -109,8 +109,7 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
 
     // Prepared, parameter-bound query (injection-safe path).
     {
-        ddbsh::PreparedStatement stmt("select * from " + table +
-                                      " where id = ? and year = ?;");
+        ddbsh::PreparedStatement stmt("select * from " + table + " where id = ? and year = ?;");
         stmt.bind(1, std::string("show")).bind(2, 2016LL);
         auto rows = db->query(stmt);
         ASSERT_TRUE(rows.has_value()) << (rows.has_value() ? "" : rows.error().message);
