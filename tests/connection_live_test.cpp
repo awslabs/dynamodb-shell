@@ -39,7 +39,8 @@ std::string unique_table() {
 // Opens a real Database, creates a uniquified table, runs the full embedding-API
 // surface against it, and self-cleans. One test to minimize table churn/cost.
 TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
-    const std::string region = env_or("AWS_REGION", env_or("AWS_DEFAULT_REGION", "us-east-1").c_str());
+    const std::string region =
+        env_or("AWS_REGION", env_or("AWS_DEFAULT_REGION", "us-east-1").c_str());
 
     auto db = ddbsh::aws::open(region);
     ASSERT_TRUE(db.has_value()) << (db.has_value() ? "" : db.error().message);

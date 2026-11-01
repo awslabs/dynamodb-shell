@@ -146,7 +146,8 @@ public:
         apply_update(item, in.update_expression, in.expression_attribute_names,
                      in.expression_attribute_values);
         t->put(k, item);
-        if (in.return_values == ReturnValue::all_new || in.return_values == ReturnValue::updated_new) {
+        if (in.return_values == ReturnValue::all_new ||
+            in.return_values == ReturnValue::updated_new) {
             out.attributes = item;
         }
         return out;
@@ -526,7 +527,8 @@ private:
         if (p.op == ">") return compare(item_v, p.v1) > 0;
         if (p.op == ">=") return compare(item_v, p.v1) >= 0;
         if (p.op == "begins_with") {
-            return item_v.s.size() >= p.v1.s.size() && item_v.s.compare(0, p.v1.s.size(), p.v1.s) == 0;
+            return item_v.s.size() >= p.v1.s.size() &&
+                   item_v.s.compare(0, p.v1.s.size(), p.v1.s) == 0;
         }
         if (p.op == "between") {
             return compare(item_v, p.v1) >= 0 && compare(item_v, p.v2) <= 0;
