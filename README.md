@@ -463,7 +463,9 @@ DB-Library-style — `next_result()` steps result sets, `next_row()` steps rows,
 `column()` reads a typed `Cell`:
 
 ```cpp
-ddbsh::Results r = *db->exec("INSERT INTO t (id) VALUES (1),(2); SELECT * FROM t;");
+auto res = db->exec("INSERT INTO t (id) VALUES (1),(2); SELECT * FROM t;");
+if (!res) { std::fputs(res.error().message.c_str(), stderr); return 1; }
+ddbsh::Results& r = *res;
 do {
     switch (r.kind()) {
     case ddbsh::ResultKind::rows:

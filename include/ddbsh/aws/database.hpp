@@ -94,9 +94,12 @@ private:
 
 /// Open an AWS-backed Database. Resolves region/endpoint/credentials through
 /// the standard AWS chain (~/.aws, AWS_PROFILE, AWS_REGION), overridden by the
-/// non-empty option fields. Performs no network probe (a liveness check is a
-/// cheap statement the caller runs). On an SDK/config failure returns an Error
-/// (Errc::service_error).
+/// non-empty option fields, and constructs the client. It performs no network
+/// probe and no credential validation, so it does not fail on an unreachable
+/// endpoint or bad credentials — those surface on the first exec()/query().
+/// The Result is for future-proofing (and any construction-time failure the SDK
+/// client setup could raise); a successful open() does not imply a live
+/// connection. Run a cheap statement for a liveness check.
 Result<Database> open(const OpenOptions& opts);
 
 /// Convenience: open with a region and optional endpoint override.
