@@ -22,7 +22,7 @@
 namespace {
 
 bool run(ddbsh::Connection& db, const std::string& sql) {
-    std::printf("ddbsh> %s\n", sql.c_str());
+    std::printf("running: %s\n", sql.c_str());
     ddbsh::Result<ddbsh::Results> r = db.exec(sql);
     if (!r.has_value()) {
         std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
@@ -73,7 +73,7 @@ int main() {
             std::fprintf(stderr, "error: %s\n", rows.error().message.c_str());
             return 1;
         }
-        std::puts("ddbsh> select * from movies where id = \"movie\";   (typed rows)");
+        std::puts("running: select * from movies where id = \"movie\";   (typed rows)");
         for (const ddbsh::Row& r : *rows) {
             std::printf(
                 "  row: id=%s year=%lld title=%s\n", r.get_string("id").value_or("<none>").c_str(),
