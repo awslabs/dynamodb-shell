@@ -59,7 +59,7 @@ struct ScopeGuard {
 // Run a statement for its byte-exact ddbsh output; return false on error (and
 // print the error message to stderr). Checks the Result — no unchecked deref.
 bool run(ddbsh::aws::Database& db, const std::string& sql) {
-    std::printf("ddbsh> %s\n", sql.c_str());
+    std::printf("running: %s\n", sql.c_str());
     ddbsh::Result<ddbsh::Results> r = db.exec(sql);
     if (!r.has_value()) {
         std::fprintf(stderr, "error: %s\n", r.error().message.c_str());
@@ -130,7 +130,7 @@ int main() {
     // variant dig, no Value::Type switch.
     {
         const std::string sql = "select * from " + table + " where id = \"movie\";";
-        std::printf("ddbsh> %s   (consumed as typed rows)\n", sql.c_str());
+        std::printf("running: %s   (consumed as typed rows)\n", sql.c_str());
         ddbsh::Result<ddbsh::RowSet> rows = db->query(sql);
         if (!rows.has_value()) {
             std::fprintf(stderr, "error: %s\n", rows.error().message.c_str());

@@ -45,3 +45,12 @@ build*
 
 # examples build output (standalone external-consumer sample build dirs)
 /examples/*/build*
+
+# in-source CMake configure litter under the standalone examples. Prefer an
+# out-of-source build (cmake -S . -B build), but an in-source `cmake .` leaves
+# these behind; ignore them so a stray configure does not show up as untracked.
+/examples/*/CMakeCache.txt
+/examples/*/CMakeFiles/
+/examples/*/cmake_install.cmake
+/examples/*/CTestTestfile.cmake
+/examples/*/Makefile

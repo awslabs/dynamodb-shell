@@ -15,13 +15,17 @@
 // under DDBSH_TEST_LIVE_SAMPLE (the live gate); never part of the default
 // offline suite.
 
+#include "ddbsh/aws/aws_ddb_client.hpp"
 #include "ddbsh/aws/database.hpp"
 
 #include <gtest/gtest.h>
 
 #include <unistd.h>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
+#include <optional>
 #include <string>
 
 namespace {
@@ -31,10 +35,88 @@ std::string env_or(const char* name, const char* fallback) {
     return (v != nullptr && v[0] != '\0') ? std::string(v) : std::string(fallback);
 }
 
+// The shared prefix for every table this suite creates. The sweep (below) keys
+// off it, and unique_table() builds `<prefix><pid>_<unix-ts>`.
+constexpr const char* kLiveTablePrefix = "ddbsh_live_api_test_";
+
+// Tables younger than this are left alone by the sweep, so a concurrently
+// running live suite's fresh table is never clobbered. Any single round-trip
+// test completes well inside this window; a stranded table is always older.
+constexpr long long kStaleTableAgeSeconds = 300;  // 5 minutes
+
 std::string unique_table() {
-    return "ddbsh_live_api_test_" + std::to_string(static_cast<long>(getpid())) + "_" +
+    return std::string(kLiveTablePrefix) + std::to_string(static_cast<long>(getpid())) + "_" +
            std::to_string(static_cast<long long>(std::time(nullptr)));
 }
+
+// Drop every stranded `ddbsh_live_api_test_*` table older than the staleness
+// window. A live run that aborts (crash, interrupt, or a failed teardown) can
+// leave its uniquified table behind; this keeps the suite self-healing instead
+// of leaking tables into the account over time (P4d human-acceptance item A2).
+//
+// Best-effort: it logs each drop and ignores individual failures. The caller
+// guarantees the AWS SDK is initialized (the environment below holds a Database
+// for the whole suite, which owns the refcounted SDK-init token).
+void sweep_stale_live_tables(const std::string& region) {
+    ddbsh::aws::AwsDDBClient client(region, "");
+    auto listed = client.list_tables({});
+    if (!listed.has_value()) {
+        return;  // cannot enumerate tables; leave the account untouched
+    }
+    const long long now = static_cast<long long>(std::time(nullptr));
+    for (const std::string& name : listed->table_names) {
+        if (name.rfind(kLiveTablePrefix, 0) != 0) {
+            continue;  // not one of this suite's tables
+        }
+        const std::size_t sep = name.find_last_of('_');
+        if (sep == std::string::npos || sep + 1 >= name.size()) {
+            continue;  // no parseable timestamp suffix
+        }
+        long long created = 0;
+        try {
+            created = std::stoll(name.substr(sep + 1));
+        } catch (const std::exception&) {
+            continue;  // unparseable suffix — do not touch it
+        }
+        if (now - created < kStaleTableAgeSeconds) {
+            continue;  // too fresh — may belong to a concurrent run (or this one)
+        }
+        std::fprintf(stderr, "[sweep] dropping stranded live table %s\n", name.c_str());
+        (void)client.delete_table(ddbsh::DeleteTableIn{name});
+    }
+}
+
+// A global test environment that holds the SDK alive for the whole suite (one
+// refcounted open, so SetUp/TearDown and the tests share a single
+// InitAPI/ShutdownAPI) and sweeps stranded tables before the first test and
+// after the last one.
+class LiveTableSweeper : public ::testing::Environment {
+public:
+    explicit LiveTableSweeper(std::string region) : region_(std::move(region)) {}
+
+    void SetUp() override {
+        auto opened = ddbsh::aws::open(region_);
+        if (opened.has_value()) {
+            db_.emplace(std::move(*opened));
+            sweep_stale_live_tables(region_);
+        }
+    }
+
+    void TearDown() override {
+        if (db_.has_value()) {
+            sweep_stale_live_tables(region_);
+            db_.reset();
+        }
+    }
+
+private:
+    std::string region_;
+    std::optional<ddbsh::aws::Database> db_;
+};
+
+[[maybe_unused]] const ::testing::Environment* const kLiveSweepEnv =
+    ::testing::AddGlobalTestEnvironment(new LiveTableSweeper(
+        env_or("AWS_REGION", env_or("AWS_DEFAULT_REGION", "us-east-1").c_str())));
 
 // Opens a real Database, creates a uniquified table, runs the full embedding-API
 // surface against it, and self-cleans. One test to minimize table churn/cost.
