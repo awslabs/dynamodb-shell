@@ -37,9 +37,28 @@ std::string env_or(const char* name, const char* fallback) {
     return (v != nullptr && v[0] != '\0') ? std::string(v) : std::string(fallback);
 }
 
-// The shared prefix for every table this suite creates. The sweep (below) keys
-// off it, and unique_table() builds `<prefix><pid>_<unix-ts>`.
+// The shared prefix for every table this suite creates. unique_table() builds
+// `<prefix><pid>_<unix-ts>` from it.
 constexpr const char* kLiveTablePrefix = "ddbsh_live_api_test_";
+
+// Every prefix the sweep reclaims (D-P5-5). The live suite's own tables carry
+// kLiveTablePrefix; the examples/ddbshlib_sample live demo names its table
+// `ddbshlib_sample_<pid>_<unix-ts>` — the same `<prefix><pid>_<unix-ts>` shape.
+// A crashed sample run can strand its table just like this suite can, so the
+// sweep reclaims both prefixes, making the whole live gate self-healing (P4d
+// Nit N1). Adding a prefix here is all it takes to cover a new live-table
+// naming convention.
+constexpr const char* kSweepPrefixes[] = {"ddbsh_live_api_test_", "ddbshlib_sample_"};
+
+// True iff `name` starts with any known live-table prefix.
+bool has_live_prefix(const std::string& name) {
+    for (const char* prefix : kSweepPrefixes) {
+        if (name.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Tables younger than this are left alone by the sweep, so a concurrently
 // running live suite's fresh table is never clobbered. Any single round-trip
@@ -51,10 +70,11 @@ std::string unique_table() {
            std::to_string(static_cast<long long>(std::time(nullptr)));
 }
 
-// Drop every stranded `ddbsh_live_api_test_*` table older than the staleness
-// window. A live run that aborts (crash, interrupt, or a failed teardown) can
-// leave its uniquified table behind; this keeps the suite self-healing instead
-// of leaking tables into the account over time (P4d human-acceptance item A2).
+// Drop every stranded live-suite table (any prefix in kSweepPrefixes) older
+// than the staleness window. A live run that aborts (crash, interrupt, or a
+// failed teardown) can leave its uniquified table behind; this keeps the suite
+// self-healing instead of leaking tables into the account over time (P4d
+// human-acceptance item A2, extended to the sample prefix in D-P5-5).
 //
 // Best-effort: it logs each drop and ignores individual failures. The caller
 // guarantees the AWS SDK is initialized (the environment below holds a Database
@@ -67,8 +87,8 @@ void sweep_stale_live_tables(const std::string& region) {
     }
     const long long now = static_cast<long long>(std::time(nullptr));
     for (const std::string& name : listed->table_names) {
-        if (name.rfind(kLiveTablePrefix, 0) != 0) {
-            continue;  // not one of this suite's tables
+        if (!has_live_prefix(name)) {
+            continue;  // not a live-suite or live-sample table
         }
         const std::size_t sep = name.find_last_of('_');
         if (sep == std::string::npos || sep + 1 >= name.size()) {

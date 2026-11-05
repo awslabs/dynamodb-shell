@@ -54,6 +54,22 @@ add_test(NAME iexp-alter-billing-ondemand COMMAND ddbshtest -q -T ${RD}/iexp-alt
 add_test(NAME iexp-alter-billing-provisioned COMMAND ddbshtest -q -T ${RD}/iexp-alter-billing-provisioned.exp -c "explain alter table foo set billing mode provisioned ( 5 rcu, 10 wcu );")
 add_test(NAME iexp-alter-pitr-enabled COMMAND ddbshtest -q -T ${RD}/iexp-alter-pitr-enabled.exp -c "explain alter table foo set pitr enabled;")
 add_test(NAME iexp-alter-pitr-disabled COMMAND ddbshtest -q -T ${RD}/iexp-alter-pitr-disabled.exp -c "explain alter table foo set pitr disabled;")
+
+# Backend-free EXPLAIN ALTER TABLE ... REPLICA serialization (global-tables
+# surface, D-P5-7 gap-fill). An ADD/DROP/UPDATE REPLICA is a pure UpdateTable
+# serialization carrying a ReplicationGroupUpdate (Create/Delete/Update member
+# action) — it issues no DescribeTable probe (arch §7; confirmed by the native
+# AlterTableExec.Explain*Replica* tests recording exactly one UpdateTable and no
+# describe), so these are backend-free like the EXPLAIN DDL forms above. They
+# pin the byte-exact serialized ReplicaUpdates JSON that the AWS adapter emits —
+# the one replica fidelity signal the native FakeDDBClient tests cannot give
+# (the fake stubs the explain body). These goldens are AUTHORED (the original
+# ddbsh predates the reimplementation's REPLICA grammar) and human-audited
+# before merge (D-4a-10 / D-2i-5 discipline); EXPLAIN output is deterministic.
+add_test(NAME iexp-alter-add-replica COMMAND ddbshtest -q -T ${RD}/iexp-alter-add-replica.exp -c "explain alter table foo add replica us-west-2;")
+add_test(NAME iexp-alter-add-replica-full COMMAND ddbshtest -q -T ${RD}/iexp-alter-add-replica-full.exp -c "explain alter table foo add replica us-west-2 table class standard infrequent access ( 50 rcu ) gsi ( g1 ( 10 rcu ), g2 ( 20 rcu ) );")
+add_test(NAME iexp-alter-drop-replica COMMAND ddbshtest -q -T ${RD}/iexp-alter-drop-replica.exp -c "explain alter table foo drop replica us-west-2;")
+add_test(NAME iexp-alter-update-replica COMMAND ddbshtest -q -T ${RD}/iexp-alter-update-replica.exp -c "explain alter table foo update replica us-west-2 ( 99 rcu );")
 add_test(NAME iexp-backup COMMAND ddbshtest -q -T ${RD}/iexp-backup.exp -c "explain backup table foo called \"mybackup\";")
 add_test(NAME iexp-drop-backup COMMAND ddbshtest -q -T ${RD}/iexp-drop-backup.exp -c "explain drop backup \"arn:aws:dynamodb:us-east-1:632195519165:table/foo/backup/01234567890123-abcdef00\";")
 add_test(NAME iexp-describe-backup COMMAND ddbshtest -q -T ${RD}/iexp-describe-backup.exp -c "explain describe backup \"arn:aws:dynamodb:us-east-1:632195519165:table/foo/backup/01234567890123-abcdef00\";")

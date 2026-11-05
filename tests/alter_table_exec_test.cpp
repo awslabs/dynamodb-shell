@@ -700,6 +700,53 @@ TEST(AlterTableExec, ExplainReplicaEmitsUpdateTableBlockNoTrailingStatus) {
     EXPECT_TRUE(client.update_table_requests().empty());
 }
 
+TEST(AlterTableExec, ExplainDropReplicaEmitsUpdateTableBlockNoMutation) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // DROP REPLICA is an UpdateTable with a DeleteReplicationGroupMemberAction;
+    // EXPLAIN labels it `UpdateTable(...)`, carries only the region, and issues
+    // no mutation. (The byte-exact serialized ReplicationGroupUpdate body is
+    // pinned by the backend-free EXPLAIN golden iexp-alter-drop-replica; the
+    // FakeDDBClient stubs the explain body, so here we pin the request struct.)
+    auto out = session.run("explain alter table t drop replica us-west-2;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "UpdateTable({\n   \"stub\":   \"explain\"\n})\n");
+
+    ASSERT_EQ(client.explain_requests().size(), 1u);
+    const auto* req = std::get_if<UpdateTableIn>(&client.explain_requests()[0]);
+    ASSERT_NE(req, nullptr);
+    ASSERT_TRUE(req->replica.has_value());
+    EXPECT_EQ(req->replica->action, ddbsh::ReplicaUpdate::Action::drop);
+    EXPECT_EQ(req->replica->region, "us-west-2");
+    // DROP carries region only — no class/throughput/GSI fields.
+    EXPECT_FALSE(req->replica->table_class.has_value());
+    EXPECT_FALSE(req->replica->throughput_override.has_value());
+    EXPECT_TRUE(req->replica->replica_gsis.empty());
+    EXPECT_TRUE(client.update_table_requests().empty());
+}
+
+TEST(AlterTableExec, ExplainUpdateReplicaEmitsUpdateTableBlockNoMutation) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+
+    // UPDATE REPLICA is an UpdateTable with an UpdateReplicationGroupMemberAction;
+    // EXPLAIN labels it `UpdateTable(...)` and issues no mutation.
+    auto out = session.run("explain alter table t update replica us-west-2 ( 99 rcu );");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "UpdateTable({\n   \"stub\":   \"explain\"\n})\n");
+
+    ASSERT_EQ(client.explain_requests().size(), 1u);
+    const auto* req = std::get_if<UpdateTableIn>(&client.explain_requests()[0]);
+    ASSERT_NE(req, nullptr);
+    ASSERT_TRUE(req->replica.has_value());
+    EXPECT_EQ(req->replica->action, ddbsh::ReplicaUpdate::Action::update);
+    EXPECT_EQ(req->replica->region, "us-west-2");
+    ASSERT_TRUE(req->replica->throughput_override.has_value());
+    EXPECT_EQ(req->replica->throughput_override->read_capacity_units, 99);
+    EXPECT_TRUE(client.update_table_requests().empty());
+}
+
 // ---- Vector index (phase 4b) ----------------------------------------------
 
 TEST(AlterTableExec, CreateVsiCaptured) {

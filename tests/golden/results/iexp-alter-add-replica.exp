@@ -1,0 +1,9 @@
+UpdateTable({
+   "TableName":   "foo",
+   "ReplicaUpdates":   [{
+         "Create":   {
+            "RegionName":   "us-west-2",
+            "TableClassOverride":   "STANDARD"
+         }
+      }]
+})
