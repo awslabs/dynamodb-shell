@@ -207,6 +207,13 @@ struct MultiOutcome {
     std::vector<ExecOutcome> parts;
 };
 
+// NOTE (P4d): the former free function `std::vector<ItemRow> items(const
+// ExecOutcome&)` was removed — it was an embedding convenience superseded by
+// the ddbsh::Connection / Results / Row / Cell surface (ddbsh/connection.hpp),
+// which hides the variant dig behind a typed, null-aware row/column API. The
+// ExecOutcome variant remains the engine SPI the Connection layer and the CLI
+// drive internally.
+
 }  // namespace ddbsh
 
 #endif  // DDBSH_EXEC_OUTCOME_HPP

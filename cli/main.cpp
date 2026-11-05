@@ -59,8 +59,9 @@
 #include "ddbsh/session.hpp"
 #include "ddbsh/version.hpp"
 
-#include "aws_api_guard.hpp"
-#include "aws_ddb_client.hpp"
+#include "ddbsh/aws/aws_api_guard.hpp"
+#include "ddbsh/aws/aws_ddb_client.hpp"
+
 #include "repl.hpp"
 
 namespace {
@@ -145,7 +146,7 @@ void install_signal_handlers() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    ddbsh::cli::AwsApiGuard aws_guard;
+    ddbsh::aws::AwsApiGuard aws_guard;
     install_signal_handlers();
 
     bool quiet = false;
@@ -206,7 +207,7 @@ int main(int argc, char** argv) {
     const std::string region = env_or("AWS_REGION", env_or("AWS_DEFAULT_REGION", "us-east-1"));
     const std::string endpoint = env_or("DDBSH_ENDPOINT_OVERRIDE", "");
 
-    ddbsh::cli::AwsDDBClient client(region, endpoint);
+    ddbsh::aws::AwsDDBClient client(region, endpoint);
     ddbsh::Session session(ddbsh::SessionConfig{region, endpoint}, client);
     ddbsh::render::Renderer renderer;
 

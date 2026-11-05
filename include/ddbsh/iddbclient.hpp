@@ -18,6 +18,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -29,7 +30,10 @@
 namespace ddbsh {
 
 /// A single returned row: attribute name -> Value (source order; Renderer
-/// sorts).
+/// sorts). This is an engine SPI request/response type; the embedding API
+/// exposes rows through the typed, null-aware ddbsh::Row / ddbsh::Cell surface
+/// (ddbsh/connection.hpp). (The former ItemRow::get convenience was removed in
+/// P4d — superseded by Row::get_string/get_int/... and Row::cell.)
 struct ItemRow {
     ValueMap attributes;
 };

@@ -44,13 +44,16 @@ src/               engine library implementation
   planner/         key-schema resolution, SELECT GetItem/Query/Scan planner
   execute/         per-command executors
   render/          output + EXPLAIN formatting
-cli/               the ddbsh CLI (readline + AWS SDK client seam)
+aws/               the optional AWS-backed client component (ddbsh::aws):
+                   aws_ddb_client.cpp — the AWS SDK IDDBClient adapter
+cli/               the ddbsh CLI (readline; links ddbsh::aws)
 tests/             native GoogleTest unit tests + boundary_check.sh
   golden/          golden-parity CTest project (drives the shipping binary)
     suite/         the original ddbsh golden suite (family .txt, results/*.exp,
                    .sql seeds, ddbsh-wait) — the fidelity regression contract
     reimpl/        golden families authored for the reimplementation (phase 2i)
-examples/          embed_demo.cpp — standalone library-embedding sample
+examples/          ddbshlib_inmemory_sample/ (offline, MemoryClient) +
+                   ddbshlib_sample/ (live, ddbsh::aws::open) — embedding API
 devtools/          run-tests (the ONLY sanctioned test entry point)
 ```
 
@@ -144,8 +147,10 @@ flex/bison translation units are the only `-Wno-error` exceptions.
   `Result<T> = std::expected<T, ddbsh::Error>`.
 - `tests/boundary_check.sh` enforces this and runs as a CTest
   (`engine_boundary_check`). Run it before every handoff.
-- SDK translation lives only in `cli/aws_ddb_client.cpp`, behind the
-  `ddbsh::IDDBClient` seam.
+- SDK translation lives only in `aws/aws_ddb_client.cpp` (the optional
+  `ddbsh::aws` component), behind the `ddbsh::IDDBClient` seam. The
+  `engine_boundary_check` also asserts no SDK-free `include/ddbsh/*.hpp` header
+  includes `<aws/...>` (SDK-dependent headers live under `include/ddbsh/aws/`).
 
 ## Interactive input: the isql `go` model
 
