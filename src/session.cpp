@@ -14,6 +14,8 @@
 #include <utility>
 
 #include "ddbsh/version.hpp"
+#include "session_internal.hpp"
+
 #include "execute/alter_table_executor.hpp"
 #include "execute/backup_restore_executor.hpp"
 #include "execute/create_table_executor.hpp"
@@ -101,6 +103,18 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
         void emit(const ExecOutcome& fragment) override { parts.push_back(fragment); }
     } sink;
 
+    // A non-EXPLAIN SELECT buffers into ONE SelectOutcome / VectorSearchOutcome
+    // (the buffering contract the native tests and the embedding connection
+    // layer rely on). The streaming overload emits per-page fragments for
+    // bounded CLI memory (D-P5-1); routing the buffering overload through it
+    // would fold a multi-page SELECT into a MultiOutcome of SelectOutcomes.
+    // Short-circuit to the buffering executor so this overload's result shape
+    // is unchanged.
+    if (statement.kind() == StatementKind::select_statement && !statement.ast()->explain) {
+        const auto& select = std::get<engine::SelectCmd>(statement.ast()->command);
+        return engine::execute_select(select, impl_->client, impl_->next_alias_prefix());
+    }
+
     auto streamed = execute(statement, sink);
     if (!streamed.has_value()) {
         return fail(streamed.error());
@@ -176,8 +190,13 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 return emit_single(engine::execute_select_explain(select, impl_->client,
                                                                   impl_->next_alias_prefix()));
             }
-            return emit_single(
-                engine::execute_select(select, impl_->client, impl_->next_alias_prefix()));
+            // Stream the SELECT with bounded memory: one SelectOutcome fragment
+            // per page, then a final capacity fragment if the user asked
+            // (D-P5-1 / D2). Byte-identical to the old single-outcome path. The
+            // CLI's RenderingSink renders each page and drops it, so a large
+            // Scan is no longer resident in memory.
+            return engine::execute_select_streaming(select, impl_->client,
+                                                    impl_->next_alias_prefix(), sink);
         }
         case StatementKind::drop_table: {
             const auto& drop = std::get<engine::DropTableCmd>(statement.ast()->command);
@@ -335,5 +354,40 @@ Result<void> Session::run(std::string_view text, OutcomeSink& sink) {
 ConnectionHint Session::connection_hint() const {
     return ConnectionHint{impl_->config.region, !impl_->config.endpoint.empty()};
 }
+
+namespace engine {
+
+// Narrow friend accessors into Session::Impl (declared in session_internal.hpp).
+// Defined here, where Impl is complete.
+IDDBClient& SessionAccess::client(Session& session) { return session.impl_->client; }
+
+std::string SessionAccess::next_alias_prefix(Session& session) {
+    return session.impl_->next_alias_prefix();
+}
+
+Result<std::optional<SelectRowCursor>> open_select_cursor_for(Session& session,
+                                                              const Statement& stmt) {
+    // Only a non-EXPLAIN SELECT can stream; everything else (and EXPLAIN) uses
+    // the buffering Session::execute path.
+    if (stmt.kind() != StatementKind::select_statement || stmt.ast() == nullptr ||
+        stmt.ast()->explain) {
+        return std::optional<SelectRowCursor>{};
+    }
+    const auto& select = std::get<SelectCmd>(stmt.ast()->command);
+    // A vector NEAREST search is a single bounded SearchVectors request — keep
+    // it on the buffering path (execute_select builds the VectorSearchOutcome,
+    // scores and all); the cursor never models vectors.
+    if (select.search_vector.has_value()) {
+        return std::optional<SelectRowCursor>{};
+    }
+    auto cursor = open_select_cursor(select, SessionAccess::client(session),
+                                     SessionAccess::next_alias_prefix(session));
+    if (!cursor.has_value()) {
+        return fail(cursor.error());
+    }
+    return std::optional<SelectRowCursor>{std::move(*cursor)};
+}
+
+}  // namespace engine
 
 }  // namespace ddbsh

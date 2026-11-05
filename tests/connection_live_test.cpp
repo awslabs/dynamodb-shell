@@ -199,6 +199,32 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
         EXPECT_EQ((*rows)[0].get_string("title"), "Westworld");
     }
 
+    // Streaming cursor against the REAL backend with a larger result set
+    // (D-P5-1 / phase 5b). ddbsh's SELECT has no LIMIT clause and DynamoDB only
+    // paginates a Scan past ~1MB, so forcing a true multi-page (LastEvaluatedKey)
+    // scan here would mean seeding thousands of items — cost-prohibitive for a
+    // live test. The explicit cross-page-boundary follow is pinned offline by
+    // the MemoryClient paging tests (set_page_size); this block confirms the
+    // lazy cursor drives a many-row real Query/Scan end-to-end and surfaces
+    // every row.
+    {
+        constexpr int kBulk = 15;
+        for (int i = 0; i < kBulk; ++i) {
+            auto r = db->exec("insert into " + table + " ( id, year ) values ( \"bulk\", " +
+                              std::to_string(3000 + i) + " );");
+            ASSERT_TRUE(r.has_value()) << (r.has_value() ? "" : r.error().message);
+            ASSERT_FALSE(r->error().has_value());
+        }
+        // Query (hash only) pages the lazy cursor over the bulk partition.
+        auto bulk = db->query("select * from " + table + " where id = \"bulk\";");
+        ASSERT_TRUE(bulk.has_value()) << (bulk.has_value() ? "" : bulk.error().message);
+        EXPECT_EQ(bulk->size(), static_cast<std::size_t>(kBulk));
+        // Whole-table scan now surfaces the 3 original + 15 bulk rows.
+        auto all = db->query("select * from " + table + ";");
+        ASSERT_TRUE(all.has_value()) << (all.has_value() ? "" : all.error().message);
+        EXPECT_EQ(all->size(), static_cast<std::size_t>(3 + kBulk));
+    }
+
     // DROP — explicit, waits gone. Then dismiss teardown's NOWAIT drop.
     {
         auto r = db->exec("drop table " + table + ";");

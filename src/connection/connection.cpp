@@ -20,6 +20,8 @@
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
+#include "execute/select_cursor.hpp"
+#include "session_internal.hpp"
 
 namespace ddbsh {
 
@@ -343,6 +345,15 @@ struct ResultSetData {
     std::vector<std::string> lines;
     std::vector<ExplainBlock> explain_blocks;
     ExecOutcome render_source{EmptyOutcome{}};
+
+    // Lazy SELECT path (D-P5-1): a non-EXPLAIN, non-vector row SELECT backs its
+    // `rows` result set with a streaming cursor instead of a materialized
+    // `rows` vector. next_row() pages lazily through it; render()/render_all()
+    // drain it into `render_source` on demand. Empty for every other result set
+    // (including vector-search / read-transaction rows sets, which stay
+    // materialized in `rows`). A result set uses EITHER `cursor` (lazy) OR
+    // `rows` (materialized), never both.
+    std::optional<engine::SelectRowCursor> cursor;
 };
 
 void flatten(const ExecOutcome& o, std::vector<ResultSetData>& out);
@@ -456,11 +467,20 @@ struct Results::Impl {
     long long row_index = -1;
     Row current_row;
 
+    // Lazy-cursor iteration state for the CURRENT result set (valid only when
+    // that set is a lazy SELECT — sets[set_index].cursor present). `lazy_page_`
+    // points into the cursor's current page and is valid until the next
+    // next_page()/materialize; `lazy_pos_` is the index within it.
+    const std::vector<ItemRow>* lazy_page_ = nullptr;
+    std::size_t lazy_pos_ = 0;
+
     const std::vector<std::string> empty_lines{};
 
     void reset_row_cursor() {
         row_index = -1;
         current_row = Row{};
+        lazy_page_ = nullptr;
+        lazy_pos_ = 0;
     }
 
     const ResultSetData* current() const {
@@ -468,6 +488,81 @@ struct Results::Impl {
             return nullptr;
         }
         return &sets[set_index];
+    }
+
+    ResultSetData* current_mutable() {
+        if (!loaded || set_index >= sets.size()) {
+            return nullptr;
+        }
+        return &sets[set_index];
+    }
+
+    /// Advance within a lazy (cursor-backed) rows result set, paging the cursor
+    /// as needed. Bounded memory: only the current page is resident. On
+    /// exhaustion it records the totalized capacity so consumed_capacity()
+    /// reflects it; a service error ends the set and is readable via error().
+    bool lazy_next_row(ResultSetData& c) {
+        if (lazy_page_ != nullptr && lazy_pos_ + 1 < lazy_page_->size()) {
+            ++lazy_pos_;
+            current_row = Row((*lazy_page_)[lazy_pos_]);
+            return true;
+        }
+        auto page = c.cursor->next_page();
+        if (!page.has_value()) {
+            error = page.error();
+            c.cc = c.cursor->consumed_capacity();
+            lazy_page_ = nullptr;
+            return false;
+        }
+        if (*page == nullptr) {  // end of the row stream
+            c.cc = c.cursor->consumed_capacity();
+            lazy_page_ = nullptr;
+            return false;
+        }
+        lazy_page_ = *page;
+        lazy_pos_ = 0;
+        current_row = Row((*lazy_page_)[0]);
+        return true;
+    }
+
+    /// Drain a lazy result set from its current position into a buffered
+    /// SelectOutcome cached in `render_source`, so render()/render_all() produce
+    /// the byte-exact CLI output. Idempotent (once drained the cursor is gone).
+    /// Forward-only: it includes the unconsumed tail of the current page then
+    /// every remaining page — matching DB-Library cursor semantics (a render
+    /// after a partial next_row walk renders what is left). A no-op on a
+    /// non-lazy set.
+    void materialize_lazy(ResultSetData& c) {
+        if (!c.cursor.has_value()) {
+            return;
+        }
+        SelectOutcome out;
+        if (lazy_page_ != nullptr) {
+            for (std::size_t i = lazy_pos_ + 1; i < lazy_page_->size(); ++i) {
+                out.items.push_back((*lazy_page_)[i]);
+            }
+        }
+        for (;;) {
+            auto page = c.cursor->next_page();
+            if (!page.has_value()) {
+                if (!error.has_value()) {
+                    error = page.error();
+                }
+                break;
+            }
+            if (*page == nullptr) {
+                break;
+            }
+            for (const auto& item : **page) {
+                out.items.push_back(item);
+            }
+        }
+        out.consumed_capacity = c.cursor->consumed_capacity();
+        c.cc = out.consumed_capacity;
+        c.render_source = ExecOutcome{std::move(out)};
+        c.cursor.reset();
+        lazy_page_ = nullptr;
+        lazy_pos_ = 0;
     }
 
     bool advance_statement() {
@@ -485,6 +580,33 @@ struct Results::Impl {
             return false;
         }
         stmt_index = next;
+
+        // Lazy SELECT: a non-EXPLAIN, non-vector row SELECT is backed by a
+        // streaming cursor rather than a buffered result (D-P5-1). Planning
+        // failures surface here exactly as the buffering path would.
+        auto cursor = engine::open_select_cursor_for(*session, statements[stmt_index]);
+        if (!cursor.has_value()) {
+            error = cursor.error();
+            done = true;
+            loaded = false;
+            sets.clear();
+            return false;
+        }
+        if (cursor->has_value()) {
+            sets.clear();
+            ResultSetData r;
+            r.kind = ResultKind::rows;
+            r.cursor = std::move(**cursor);
+            sets.push_back(std::move(r));
+            set_index = 0;
+            loaded = true;
+            reset_row_cursor();
+            return true;
+        }
+
+        // Everything else buffers via Session::execute and flattens (the
+        // existing eager path: status/report/write/explain/vector/transact and
+        // multi-row writes).
         auto r = session->execute(statements[stmt_index]);
         if (!r.has_value()) {
             error = r.error();
@@ -531,10 +653,15 @@ bool Results::next_result() {
 }
 
 bool Results::next_row() {
-    const auto* c = impl_->current();
+    auto* c = impl_->current_mutable();
     if (c == nullptr || c->kind != ResultKind::rows) {
         return false;
     }
+    if (c->cursor.has_value()) {
+        // Lazy SELECT: page through the streaming cursor (bounded memory).
+        return impl_->lazy_next_row(*c);
+    }
+    // Materialized rows (vector search, read transaction): index the buffer.
     auto next = impl_->row_index + 1;
     if (next < 0 || static_cast<std::size_t>(next) >= c->rows.size()) {
         return false;
@@ -634,10 +761,11 @@ std::optional<Error> Results::error() const {
 }
 
 std::string Results::render() const {
-    const auto* c = impl_->current();
+    auto* c = impl_->current_mutable();
     if (c == nullptr || impl_->renderer == nullptr) {
         return {};
     }
+    impl_->materialize_lazy(*c);  // drain a lazy SELECT into render_source first
     return impl_->renderer->render(c->render_source);
 }
 
@@ -646,15 +774,18 @@ std::string Results::render_all() {
     if (impl_->renderer == nullptr) {
         return out;
     }
-    // Render the current result set, then every remaining one in order.
-    const auto* c = impl_->current();
+    // Render the current result set, then every remaining one in order. A lazy
+    // SELECT is drained into its render_source before rendering.
+    auto* c = impl_->current_mutable();
     if (c != nullptr) {
+        impl_->materialize_lazy(*c);
         out += impl_->renderer->render(c->render_source);
         out += impl_->renderer->render_stderr(c->render_source);
     }
     while (next_result()) {
-        const auto* cur = impl_->current();
+        auto* cur = impl_->current_mutable();
         if (cur != nullptr) {
+            impl_->materialize_lazy(*cur);
             out += impl_->renderer->render(cur->render_source);
             out += impl_->renderer->render_stderr(cur->render_source);
         }

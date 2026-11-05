@@ -24,16 +24,34 @@
 
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/iddbclient.hpp"
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
 
-/// Execute a (non-EXPLAIN) SELECT. `alias_prefix` seeds the single SymbolTable
-/// the planner uses (one per statement; obtained from
-/// Session::next_alias_prefix()). Returns a SelectOutcome.
+/// Execute a (non-EXPLAIN) SELECT, BUFFERING the whole result into one
+/// SelectOutcome (GetItem/Query/Scan) or VectorSearchOutcome. `alias_prefix`
+/// seeds the single SymbolTable the planner uses (one per statement; obtained
+/// from Session::next_alias_prefix()). This is the buffering contract the
+/// Session::execute(stmt) overload and the native unit tests rely on; the
+/// streaming CLI path uses execute_select_streaming instead (D-P5-1).
 Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
                                    const std::string& alias_prefix);
+
+/// Execute a (non-EXPLAIN) SELECT, STREAMING the result to `sink` with bounded
+/// memory (D-P5-1 / D2). For Query/Scan it drives a SelectRowCursor and emits
+/// one SelectOutcome{page_items, nullopt} fragment per page, then — iff the
+/// user asked for capacity (RETURN CONSUMED CAPACITY) and the service returned
+/// any — a final SelectOutcome{{}, capacity} fragment. GetItem (a single item)
+/// and SearchVectors (a single bounded request) emit their one outcome directly
+/// (no per-page split). The concatenation of the emitted fragments renders
+/// byte-identically to the single buffered SelectOutcome (the Renderer emits
+/// item lines then, iff present, the one `SELECT (...)` line — arch §9), so the
+/// golden output is unchanged. Returns success, or the Error that stopped the
+/// paging (fragments already emitted are the partial output).
+Result<void> execute_select_streaming(const SelectCmd& cmd, IDDBClient& client,
+                                      const std::string& alias_prefix, OutcomeSink& sink);
 
 /// EXPLAIN a SELECT: plan the access pattern (same decision as execute_select)
 /// and serialize the chosen GetItem/Query/Scan request into an ExplainOutcome

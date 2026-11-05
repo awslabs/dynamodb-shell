@@ -19,11 +19,17 @@
 // unit-testable (the engine_boundary_check asserts this header pulls no
 // <aws/...>).
 //
-// The engine is materialized-fetch (D11): a Query/Scan is paged internally and
-// its rows buffered, so a large scan buffers in memory. Row-at-a-time lazy
-// pagination is a future enhancement (TODO(phase-N)); result-SET advancement
-// (next_result) IS lazy — the next statement in a batch runs only when the
-// caller advances to it.
+// Fetch model (D-P5-1): a row-returning SELECT (GetItem/Query/Scan) pages
+// LAZILY — next_row() pulls the next page only when the current one is
+// exhausted, so a large Scan is bounded to one page in memory, never fully
+// resident. consumed_capacity() for such a set is a post-fetch figure, valid
+// once the rows are exhausted (it is the totalized capacity across pages). A
+// vector search and a read transaction are single, bounded requests and remain
+// materialized. render()/render_all() drain a lazy SELECT to produce the
+// byte-exact CLI output (forward-only: a render after a partial next_row walk
+// renders the remaining rows, matching DB-Library cursor semantics).
+// Result-SET advancement (next_result) is also lazy — the next statement in a
+// batch runs only when the caller advances to it.
 
 #ifndef DDBSH_CONNECTION_HPP
 #define DDBSH_CONNECTION_HPP

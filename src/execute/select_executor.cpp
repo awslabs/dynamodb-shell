@@ -7,53 +7,12 @@
 
 #include <utility>
 
+#include "execute/consumed_capacity_totalizer.hpp"
 #include "execute/rate_limiter.hpp"
+#include "execute/select_cursor.hpp"
 #include "planner/select_planner.hpp"
 
 namespace ddbsh::engine {
-
-namespace {
-
-/// SDK-free port of CConsumedCapacityTotalizer (arch §10): sums the optional
-/// capacity figures across paginated Query/Scan responses. The original
-/// asserted the table name stayed constant across pages; per D12 we do not
-/// assert on service-derived data — we seed the table name from the first
-/// response that carries one and sum the numeric fields.
-class ConsumedCapacityTotalizer {
-public:
-    void add(const std::optional<ConsumedCapacity>& cc) {
-        if (!cc.has_value()) {
-            return;
-        }
-        seen_ = true;
-        if (!total_.table_name.has_value() && cc->table_name.has_value()) {
-            total_.table_name = cc->table_name;
-        }
-        accumulate(total_.capacity_units, cc->capacity_units);
-        accumulate(total_.read_capacity_units, cc->read_capacity_units);
-        accumulate(total_.write_capacity_units, cc->write_capacity_units);
-    }
-
-    /// The totalized capacity, or nullopt if no response carried any.
-    std::optional<ConsumedCapacity> get() const {
-        if (!seen_) {
-            return std::nullopt;
-        }
-        return total_;
-    }
-
-private:
-    static void accumulate(std::optional<double>& sink, const std::optional<double>& v) {
-        if (v.has_value()) {
-            sink = sink.value_or(0.0) + *v;
-        }
-    }
-
-    bool seen_ = false;
-    ConsumedCapacity total_;
-};
-
-}  // namespace
 
 Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
                                    const std::string& alias_prefix) {
@@ -171,6 +130,54 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
     }
 
     return ExecOutcome{std::move(outcome)};
+}
+
+Result<void> execute_select_streaming(const SelectCmd& cmd, IDDBClient& client,
+                                      const std::string& alias_prefix, OutcomeSink& sink) {
+    // A vector SELECT (NEAREST) is a single, naturally bounded SearchVectors
+    // request (or a planning error) — buffer it via execute_select and emit the
+    // one outcome. Keeping this here means the cursor never models vectors.
+    if (cmd.search_vector.has_value()) {
+        auto buffered = execute_select(cmd, client, alias_prefix);
+        if (!buffered.has_value()) {
+            return fail(buffered.error());
+        }
+        sink.emit(*buffered);
+        return {};
+    }
+
+    auto opened = open_select_cursor(cmd, client, alias_prefix);
+    if (!opened.has_value()) {
+        return fail(opened.error());
+    }
+    SelectRowCursor cursor = std::move(*opened);
+
+    // Emit one SelectOutcome fragment per non-empty page; memory is bounded to
+    // the current page. The Renderer prints each page's item lines, so the
+    // concatenation is byte-identical to one SelectOutcome{all_items, ...}.
+    for (;;) {
+        auto page = cursor.next_page();
+        if (!page.has_value()) {
+            return fail(page.error());
+        }
+        if (*page == nullptr) {
+            break;
+        }
+        SelectOutcome fragment;
+        fragment.items = **page;
+        sink.emit(ExecOutcome{std::move(fragment)});
+    }
+
+    // After the item pages, emit the totalized capacity as its own fragment —
+    // iff the user asked for it and the service returned any. The Renderer then
+    // emits the one `SELECT (...)` line, exactly as the buffered path did
+    // (arch §9); when the user did not ask, no fragment is emitted.
+    if (auto cc = cursor.consumed_capacity(); cc.has_value()) {
+        SelectOutcome capacity_fragment;
+        capacity_fragment.consumed_capacity = std::move(cc);
+        sink.emit(ExecOutcome{std::move(capacity_fragment)});
+    }
+    return {};
 }
 
 Result<ExecOutcome> execute_select_explain(const SelectCmd& cmd, IDDBClient& client,
