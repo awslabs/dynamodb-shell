@@ -1,7 +1,16 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// aws_ddb_client.hpp — the CLI-side IDDBClient adapter over the AWS SDK.
+// aws_ddb_client.hpp — the AWS-backed IDDBClient adapter (the ddbsh-aws
+// component, alias ddbsh::aws).
+//
+// SDK BOUNDARY (D5): this header REQUIRES the AWS SDK for C++ — it includes
+// <aws/dynamodb/DynamoDBClient.h> and only compiles where the SDK's include
+// paths are present. It is deliberately NOT one of the SDK-free engine headers:
+// everything under include/ddbsh/*.hpp is SDK-free; everything under
+// include/ddbsh/aws/*.hpp pulls the AWS SDK. An embedder who wants only the
+// engine links ddbsh::ddbsh and never includes this; an embedder who wants the
+// ready-made AWS client links ddbsh::aws and includes this.
 //
 // This is the SOLE place ddbsh::Value/request structs meet
 // Aws::DynamoDB::Model::* (D11). It owns the real DynamoDBClient and translates
@@ -13,19 +22,23 @@
 // and the data-plane ops (get_item / query / scan / put_item) with full
 // ddbsh::Value <-> Aws::AttributeValue translation. It also serves EXPLAIN via
 // explain_request(), which serializes the exact SDK request each op would send
-// (SerializePayload) without issuing it (P2a-03 §4.3).
+// (SerializePayload) without issuing it (P2a-03 §4.3). It is the single, shared
+// AWS translation used by BOTH the CLI and external embedders.
 
-#ifndef DDBSH_CLI_AWS_DDB_CLIENT_HPP
-#define DDBSH_CLI_AWS_DDB_CLIENT_HPP
+#ifndef DDBSH_AWS_AWS_DDB_CLIENT_HPP
+#define DDBSH_AWS_AWS_DDB_CLIENT_HPP
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
+#include <aws/core/client/ClientConfiguration.h>
 #include <aws/dynamodb/DynamoDBClient.h>
 
 #include "ddbsh/iddbclient.hpp"
 
-namespace ddbsh::cli {
+namespace ddbsh::aws {
 
 /// Concrete IDDBClient backed by the AWS SDK for C++.
 class AwsDDBClient : public ddbsh::IDDBClient {
@@ -33,6 +46,22 @@ public:
     /// @param region    AWS region (empty => SDK default resolution).
     /// @param endpoint  endpoint override (empty => regional endpoint).
     AwsDDBClient(const std::string& region, const std::string& endpoint);
+
+    /// Full-configuration ctor used by ddbsh::aws::open (R-P4d-3). The caller's
+    /// `base_config` is the BASE the SDK client builds on (timeouts, retry
+    /// strategy, max connections, proxy, …); ddbsh overlays region/endpoint
+    /// (non-empty wins) and ALWAYS sets the ddbsh user-agent last (D25), so the
+    /// service still sees "ddbsh - version X.Y[.Z]" regardless of the caller's
+    /// config. `waiter_timeout` caps how long the CREATE/DROP ACTIVE/gone
+    /// waiters poll (a poll-loop budget, SDK-free in nature — D27); nullopt
+    /// preserves the original's unbounded backoff loop byte-for-byte. `profile`
+    /// (non-empty) resolves credentials from that named profile instead of the
+    /// default chain.
+    AwsDDBClient(const std::string& region, const std::string& endpoint,
+                 const Aws::Client::ClientConfiguration& base_config,
+                 std::optional<std::chrono::milliseconds> waiter_timeout = std::nullopt,
+                 const std::string& profile = "");
+
     ~AwsDDBClient() override;
 
     /// Rebuild the underlying SDK client for a new region/endpoint, mirroring
@@ -81,12 +110,16 @@ public:
 private:
     // Construct (or replace) the underlying SDK client for a region/endpoint.
     // Shared by the ctor and connect() so both resolve credentials/endpoint the
-    // same way (D-2j-10).
+    // same way (D-2j-10). Applies base_config_ (if any) as the base, overlays
+    // region/endpoint/user-agent, and honors profile_ for credentials.
     void rebuild(const std::string& region, const std::string& endpoint);
 
     std::unique_ptr<Aws::DynamoDB::DynamoDBClient> client_;
+    std::optional<Aws::Client::ClientConfiguration> base_config_;  // caller's base (R-P4d-3)
+    std::optional<std::chrono::milliseconds> waiter_timeout_;      // waiter poll budget (D27)
+    std::string profile_;                                          // explicit credential profile
 };
 
-}  // namespace ddbsh::cli
+}  // namespace ddbsh::aws
 
-#endif  // DDBSH_CLI_AWS_DDB_CLIENT_HPP
+#endif  // DDBSH_AWS_AWS_DDB_CLIENT_HPP

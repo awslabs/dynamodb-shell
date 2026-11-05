@@ -1,7 +1,7 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// aws_ddb_client.cpp — CLI-side IDDBClient adapter.
+// aws_ddb_client.cpp — AWS-backed IDDBClient adapter (the ddbsh-aws component).
 //
 // Constructs a real DynamoDBClient with the standard credential resolution and
 // optional endpoint override (mirrors the original CDDBShDDBClientConfig, arch
@@ -13,13 +13,15 @@
 // translation. This is the sole place the SDK meets the library's SDK-free
 // structs (D11).
 
-#include "aws_ddb_client.hpp"
+#include "ddbsh/aws/aws_ddb_client.hpp"
+#include "ddbsh/version.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <thread>
 #include <type_traits>
 
+#include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
@@ -69,7 +71,7 @@
 #include <aws/dynamodb/model/VectorAttributeDefinition.h>
 #include <aws/dynamodb/model/VectorIndex.h>
 #include <aws/dynamodb/model/VectorIndexUpdate.h>
-namespace ddbsh::cli {
+namespace ddbsh::aws {
 
 namespace {
 
@@ -569,20 +571,47 @@ AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoin
     rebuild(region, endpoint);
 }
 
+AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint,
+                           const Aws::Client::ClientConfiguration& base_config,
+                           std::optional<std::chrono::milliseconds> waiter_timeout,
+                           const std::string& profile)
+    : base_config_(base_config), waiter_timeout_(waiter_timeout), profile_(profile) {
+    rebuild(region, endpoint);
+}
+
 AwsDDBClient::~AwsDDBClient() = default;
 
 void AwsDDBClient::rebuild(const std::string& region, const std::string& endpoint) {
-    Aws::Client::ClientConfiguration cfg;
+    // Start from the caller's base configuration when supplied (R-P4d-3:
+    // timeouts, retry, max connections, proxy, …); otherwise a default one,
+    // exactly as before.
+    Aws::Client::ClientConfiguration cfg =
+        base_config_.value_or(Aws::Client::ClientConfiguration{});
+    // Overlay region/endpoint (non-empty wins), then ALWAYS the ddbsh
+    // user-agent last (D25), so the service sees "ddbsh - version X.Y[.Z]"
+    // regardless of the caller's config.
     if (!region.empty()) {
         cfg.region = region;
     }
     if (!endpoint.empty()) {
         cfg.endpointOverride = endpoint;
     }
-    // Default-chain credential resolution (honors AWS_PROFILE and a profile's
-    // role_arn/source_profile AssumeRole), re-run on every rebuild so a
-    // cross-account/region CONNECT re-resolves credentials as the original did.
-    client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
+    cfg.userAgent = Aws::String("ddbsh - version ") + Aws::String(ddbsh::version().c_str());
+
+    if (!profile_.empty()) {
+        // Explicit named-profile credential resolution (R-P4d-3 OpenOptions
+        // profile). The default-chain path below is unchanged when no profile
+        // is named.
+        auto provider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>(
+            "ddbsh", profile_.c_str());
+        client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(provider, cfg);
+    } else {
+        // Default-chain credential resolution (honors AWS_PROFILE and a
+        // profile's role_arn/source_profile AssumeRole), re-run on every rebuild
+        // so a cross-account/region CONNECT re-resolves credentials as the
+        // original did.
+        client_ = std::make_unique<Aws::DynamoDB::DynamoDBClient>(cfg);
+    }
 }
 
 Result<void> AwsDDBClient::connect(const std::string& region, const std::string& endpoint) {
@@ -1949,6 +1978,7 @@ Result<void> AwsDDBClient::wait_for_table_gone(const std::string& table_name) {
     // and polled again, matching the original wait_for_table_gone.
     std::chrono::milliseconds interval(100);
     const std::chrono::milliseconds cap(2000);
+    const auto deadline_start = std::chrono::steady_clock::now();
     while (true) {
         Aws::DynamoDB::Model::DescribeTableRequest request;
         request.SetTableName(table_name);
@@ -1965,6 +1995,15 @@ Result<void> AwsDDBClient::wait_for_table_gone(const std::string& table_name) {
             }
             // transient: fall through and keep polling
         }
+        // Optional poll-loop budget (D27): default unset => the original's
+        // unbounded loop, so no golden/fidelity change. On expiry return a
+        // service_error (embedding-API-side only — the CLI sets no budget).
+        if (waiter_timeout_.has_value() &&
+            std::chrono::steady_clock::now() - deadline_start >= *waiter_timeout_) {
+            return fail(Error{Errc::service_error,
+                              "Timed out waiting for table " + table_name + " to become gone",
+                              std::nullopt, std::nullopt});
+        }
         std::this_thread::sleep_for(interval);
         interval = std::min(interval * 2, cap);
     }
@@ -1980,6 +2019,7 @@ Result<void> AwsDDBClient::wait_for_table_active(const std::string& table_name) 
     using Status = Aws::DynamoDB::Model::TableStatus;
     std::chrono::milliseconds interval(100);
     const std::chrono::milliseconds cap(2000);
+    const auto deadline_start = std::chrono::steady_clock::now();
     while (true) {
         Aws::DynamoDB::Model::DescribeTableRequest request;
         request.SetTableName(table_name);
@@ -2008,6 +2048,12 @@ Result<void> AwsDDBClient::wait_for_table_active(const std::string& table_name) 
                                   std::string(err.GetRequestId().c_str())});
             }
             // not-found (eventual consistency) or transient: keep polling.
+        }
+        if (waiter_timeout_.has_value() &&
+            std::chrono::steady_clock::now() - deadline_start >= *waiter_timeout_) {
+            return fail(Error{Errc::service_error,
+                              "Timed out waiting for table " + table_name + " to become active",
+                              std::nullopt, std::nullopt});
         }
         std::this_thread::sleep_for(interval);
         interval = std::min(interval * 2, cap);
@@ -2093,4 +2139,4 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
         request);
 }
 
-}  // namespace ddbsh::cli
+}  // namespace ddbsh::aws

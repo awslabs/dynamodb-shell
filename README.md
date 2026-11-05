@@ -48,20 +48,29 @@ cmake -S . -B build
 cmake --build build
 ```
 
-This produces three targets from one build: the engine library (`ddbsh`), the
-CLI (CMake target `ddbsh-cli`, installed as the executable `ddbsh`), and the
-native unit tests (`ddbsh-tests`). If the AWS
-SDK is installed to a non-default prefix, point CMake at it:
+This produces, from one build: the engine library (`ddbsh`, SDK-free), the
+optional AWS-backed client component (`ddbsh-aws`, alias `ddbsh::aws` — the
+ready-made `AwsDDBClient` plus `AwsApiGuard`), the CLI (CMake target
+`ddbsh-cli`, installed as the executable `ddbsh`), and the native unit tests
+(`ddbsh-tests`). The AWS component (and the CLI, which needs it) is built when
+`DDBSH_BUILD_AWS` is ON (the default); set it OFF for a pure SDK-free
+engine-only build/install that requires no AWS SDK at all. If the AWS SDK is
+installed to a non-default prefix, point CMake at it:
 
 ```sh
 cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/aws-sdk-cpp
 ```
 
-Install the library (headers + lib) and CLI to a prefix:
+Install the library (headers + lib), the AWS component, and the CLI to a prefix:
 
 ```sh
 cmake --install build --prefix /path/to/prefix
 ```
+
+The install ships a `find_package(ddbsh)` CMake package (under
+`lib/cmake/ddbsh`) exporting `ddbsh::ddbsh` and — when the AWS component was
+built — `ddbsh::aws`. A consumer links either target with no hand-written
+include/lib wiring; see [Embedding the library](#embedding-the-library).
 
 ### macOS (Homebrew)
 
@@ -414,27 +423,145 @@ endpoint override, which marks the prompt with a `(*)` suffix.
 
 ## Embedding the library
 
-`examples/embed_demo.cpp` is a standalone program (built by its own plain
-Makefile, independent of this project's CMake) that embeds `libddbsh`: it
-implements the injected `ddbsh::IDDBClient` seam, constructs a `ddbsh::Session`,
-runs SQL-ish statements through `Session::run()`, and renders the result with
-`ddbsh::render::Renderer`. It is offline (an in-memory client, no AWS account
-needed). See [`examples/README.md`](examples/README.md).
+The embedding API is a simple, ODBC / Sybase-DB-Library-style C++ surface:
+**open a connection, submit a statement, walk result sets, walk rows, read a
+typed column.** You open one handle and work through it — no four-object
+ceremony, no variant switching, no separate renderer in your code.
 
-```sh
-cmake --install build --prefix /path/to/prefix
-cd examples
-make DDBSH_PREFIX=/path/to/prefix
-make run DDBSH_PREFIX=/path/to/prefix
+### Embedding against real DynamoDB (`ddbsh::aws::open`)
+
+`ddbsh::aws::open(region)` returns a ready-to-use `Database`: it resolves
+region/endpoint/credentials through the standard AWS chain, manages the AWS SDK
+lifecycle internally (you never write `AwsApiGuard`), builds the shared
+`AwsDDBClient`, and owns a `ddbsh::Connection` over it. Consume it via
+`find_package(ddbsh)`:
+
+```cmake
+find_package(ddbsh CONFIG REQUIRED)        # defines ddbsh::ddbsh and ddbsh::aws
+find_package(AWSSDK REQUIRED COMPONENTS dynamodb)
+target_link_libraries(myapp PRIVATE ddbsh::aws)   # pulls ddbsh::ddbsh + the SDK
 ```
 
-The sample doubles as a verified, external-consumer smoke test: configure with
-`-DDDBSH_TEST_EMBED_SAMPLE=ON` and the build registers a CTest (`embed_sample`)
-that installs the library to a throwaway prefix, builds the sample through its
-standalone Makefile against that install, runs it, and diffs its stdout against
-the committed golden `examples/embed_demo.expected.txt`. It is OFF by default
-(it needs an install step and a second compiler invocation) and offline (no AWS
-account), so it never touches the real-DDB gate.
+```cpp
+#include "ddbsh/aws/database.hpp"
+
+auto db = ddbsh::aws::open("us-east-1");             // ONE object
+if (!db) { std::fputs(db.error().message.c_str(), stderr); return 1; }
+
+// The single-SELECT shortcut: iterate typed, null-aware rows directly.
+auto rows = db->query("SELECT * FROM Movies WHERE id = \"m1\";");
+if (!rows) { std::fputs(rows.error().message.c_str(), stderr); return 1; }
+for (const ddbsh::Row& row : *rows) {
+    std::optional<std::string> title = row.get_string("title");
+    std::optional<long long>   year  = row.get_int("year");
+    // ...
+}
+```
+
+Any statement (or a batch, or a multi-row write) returns a `Results` you walk
+DB-Library-style — `next_result()` steps result sets, `next_row()` steps rows,
+`column()` reads a typed `Cell`:
+
+```cpp
+auto res = db->exec("INSERT INTO t (id) VALUES (1),(2); SELECT * FROM t;");
+if (!res) { std::fputs(res.error().message.c_str(), stderr); return 1; }
+ddbsh::Results& r = *res;
+do {
+    switch (r.kind()) {
+    case ddbsh::ResultKind::rows:
+        while (r.next_row()) use(r.column("id").as_string());
+        break;
+    case ddbsh::ResultKind::status: note(r.status_token()); break;   // "INSERT"
+    case ddbsh::ResultKind::write:  account(r.read(), r.modified(), r.ccf()); break;
+    case ddbsh::ResultKind::report: for (auto& ln : r.lines()) show(ln); break;
+    case ddbsh::ResultKind::explain: show(r.explain_text()); break;
+    case ddbsh::ResultKind::empty: break;
+    }
+} while (r.next_result());
+if (auto e = r.error()) std::fputs(e->message.c_str(), stderr);  // per-statement failure
+```
+
+A `Cell` separates the three DynamoDB states (`missing()` / `is_null()` / a
+typed value) and offers `as_string` / `as_int` / `as_double` / `as_bool`. To
+reproduce **byte-exact ddbsh output** (what the shell prints), call
+`r.render()` (current result set) or `r.render_all()` (the whole batch).
+
+**Parameterized statements (injection-safe).** Build statements from untrusted
+input with `PreparedStatement` and positional `?` / named `:name` placeholders;
+the API substitutes correctly-escaped ddbsh literals, so you never concatenate:
+
+```cpp
+ddbsh::PreparedStatement stmt("SELECT * FROM Movies WHERE id = ? AND year = ?;");
+stmt.bind(1, std::string("m1")).bind(2, 2010LL);
+auto rows = db->query(stmt);
+```
+
+**Client configuration (timeouts, retry).** The `OpenOptions` struct form of
+`open()` passes a full `Aws::Client::ClientConfiguration` through (timeouts,
+retry strategy, max connections, proxy); ddbsh overlays region/endpoint and its
+own user-agent. A separate `waiter_timeout` bounds the CREATE/DROP waiters.
+
+**Header boundary:** `ddbsh/*.hpp` (including `ddbsh/connection.hpp`) are
+SDK-free (compile with only a C++23 toolchain); `ddbsh/aws/*.hpp` require the
+AWS SDK for C++. Link `ddbsh::ddbsh` for the engine alone, `ddbsh::aws` for the
+ready-made AWS client and `open()`.
+
+`examples/ddbshlib_sample/` is a complete, runnable live program: `open()`,
+`CREATE` a uniquified on-demand table, `INSERT`, `SELECT` three ways
+(GetItem / Query / Scan), `DROP`, self-cleaning on every exit path via an RAII
+guard. It builds as an external `find_package(ddbsh)` consumer via its own
+`CMakeLists.txt`. Because it spends, its CTest (`ddbshlib_sample`) and the
+real-DynamoDB functional test (`ddbsh_live_api`) are OFF by default; enable them
+with `-DDDBSH_TEST_LIVE_SAMPLE=ON` where credentials are present.
+
+### Embedding offline (`ddbsh::testing::MemoryClient`)
+
+A `ddbsh::Connection` works over ANY `IDDBClient`, so you can drive the exact
+same embedding API with **no AWS account, no credentials, no network, zero
+cost** against the in-memory `ddbsh::testing::MemoryClient` — ideal for
+unit-testing your own ddbsh usage:
+
+```cpp
+#include "ddbsh/connection.hpp"
+#include "ddbsh/testing/memory_client.hpp"
+
+ddbsh::testing::MemoryClient client;                 // genuine in-memory store
+ddbsh::Connection db(ddbsh::SessionConfig{"local", ""}, client);
+db.exec("create table t ( id string ) primary key ( id hash );");
+db.exec("insert into t ( id, v ) values ( \"a\", 1 );");
+for (const ddbsh::Row& r : *db.query("select * from t where id = \"a\";"))
+    use(r.get_string("v"));
+```
+
+`MemoryClient` is SDK-free and links `ddbsh::ddbsh` alone. It faithfully models
+the primary-key data plane (GetItem / Query / Scan / Put / Update / Delete);
+FilterExpressions and the full control-plane reports are not evaluated (see the
+header for the exact scope). `examples/ddbshlib_inmemory_sample/` is a complete
+runnable version, built as a default-on, credential-less CTest
+(`ddbshlib_inmemory_sample`). See [`examples/README.md`](examples/README.md).
+
+> **Advanced / injection interface.** The lower-level engine SPI — `Session`,
+> `IDDBClient`, `ExecOutcome`, `OutcomeSink`, and `ddbsh::render::Renderer` —
+> remains public for embedders who need the raw fragment stream or who inject
+> their own backend. Most applications want the `Connection`/`Database` surface
+> above.
+
+#### Getting the AWS SDK for C++
+
+The `ddbsh::aws` component and the CLI need the AWS SDK for C++ (`dynamodb`,
+`sts`, `iam` components, version ≥ 1.11.916 for vector search):
+
+- **macOS:** `brew install aws-sdk-cpp` (see
+  [Avoiding AWS SDK version conflicts](#avoiding-aws-sdk-version-conflicts) if
+  you have more than one SDK installed).
+- **Linux:** a distribution package where available, or build from source
+  (<https://github.com/aws/aws-sdk-cpp>); point CMake at a custom install with
+  `-DCMAKE_PREFIX_PATH=/prefix/of/aws-sdk-cpp`.
+- **Windows:** build from source and add the install prefix to
+  `CMAKE_PREFIX_PATH`.
+
+The engine library alone (`ddbsh::ddbsh`, `DDBSH_BUILD_AWS=OFF`) needs no AWS
+SDK — the offline `ddbshlib_inmemory_sample` builds against just that.
 
 ## Tests
 
