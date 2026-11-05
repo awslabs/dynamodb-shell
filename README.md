@@ -533,10 +533,13 @@ for (const ddbsh::Row& r : *db.query("select * from t where id = \"a\";"))
     use(r.get_string("v"));
 ```
 
-`MemoryClient` is SDK-free and links `ddbsh::ddbsh` alone. It faithfully models
-the primary-key data plane (GetItem / Query / Scan / Put / Update / Delete);
-FilterExpressions and the full control-plane reports are not evaluated (see the
-header for the exact scope). `examples/ddbshlib_inmemory_sample/` is a complete
+`MemoryClient` is SDK-free and links `ddbsh::ddbsh` alone. It models the
+primary-key data plane (GetItem / Query / Scan / Put / Update / Delete),
+evaluates the `FilterExpression`s the engine emits, offers opt-in bounded paging
+(`set_page_size`), runs transactions, and records enough control-plane state for
+an `ALTER` → `DESCRIBE` round-trip; backups/restore, vector search, and the full
+control-plane report formatting are not modeled (see the header for the exact
+scope). `examples/ddbshlib_inmemory_sample/` is a complete
 runnable version, built as a default-on, credential-less CTest
 (`ddbshlib_inmemory_sample`). See [`examples/README.md`](examples/README.md).
 
