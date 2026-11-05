@@ -7,8 +7,6 @@
 
 #include <utility>
 
-#include "execute/consumed_capacity_totalizer.hpp"
-#include "execute/rate_limiter.hpp"
 #include "execute/select_cursor.hpp"
 #include "planner/select_planner.hpp"
 
@@ -16,16 +14,22 @@ namespace ddbsh::engine {
 
 Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
                                    const std::string& alias_prefix) {
-    auto planned = plan_select(cmd, client, alias_prefix);
-    if (!planned.has_value()) {
-        return fail(planned.error());
-    }
-    const SelectPlan& plan = *planned;
-
-    // SearchVectors (phase 4b) is a single request (no pagination, no key
-    // schema); handle it before the paginated Query/Scan machinery and return a
-    // VectorSearchOutcome (item + score per row).
-    if (plan.api == SelectApi::search_vectors) {
+    // SearchVectors (phase 4b) is a single, naturally bounded request (no
+    // pagination, no key schema). It is buffered here and never modeled by the
+    // streaming SelectRowCursor; the streaming and embedding paths route a
+    // vector SELECT here too. Detect it on the AST (cmd.search_vector) exactly
+    // as execute_select_streaming / open_select_cursor_for do, so the non-vector
+    // path below plans once (via the cursor) without a second DescribeTable.
+    // When cmd.search_vector is set, plan_select yields a search_vectors plan or
+    // an already-formed Error (planner: a NEAREST on a non-vector/absent index,
+    // CONSISTENT, or a bad TopK/vector fails), so plan.search_vectors is valid
+    // on the success path.
+    if (cmd.search_vector.has_value()) {
+        auto planned = plan_select(cmd, client, alias_prefix);
+        if (!planned.has_value()) {
+            return fail(planned.error());
+        }
+        const SelectPlan& plan = *planned;
         auto result = client.search_vectors(plan.search_vectors);
         if (!result.has_value()) {
             return fail(result.error());
@@ -40,94 +44,33 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
         return ExecOutcome{std::move(vout)};
     }
 
+    // Non-vector GetItem/Query/Scan: drain the SAME SelectRowCursor the
+    // streaming (execute_select_streaming) and embedding (Results::next_row)
+    // paths use, so the engine has exactly ONE pagination loop (D2). The
+    // buffering contract is preserved — every page is folded into a single
+    // SelectOutcome. consumed_capacity() is gated on RETURN CONSUMED CAPACITY
+    // inside the cursor (nullopt when the user did not ask), reproducing the
+    // original's display gating (select.cpp display_consumed_capacity); a
+    // ratelimit alone shows nothing. The cursor builds a rate limiter only for
+    // Query/Scan (never GetItem), matching the original's select path.
+    auto opened = open_select_cursor(cmd, client, alias_prefix);
+    if (!opened.has_value()) {
+        return fail(opened.error());
+    }
+    SelectRowCursor cursor = std::move(*opened);
+
     SelectOutcome outcome;
-    ConsumedCapacityTotalizer totalizer;
-
-    // A WITH RATELIMIT clause meters the read bucket across pages (select.cpp
-    // do_query/do_scan: consume_reads per page, readlimit before the next). The
-    // GetItem path never constructs a limiter (one request, nothing to
-    // paginate — the original's select path builds no limiter for GetItem).
-    std::optional<RateLimiter> limiter;
-    if (cmd.ratelimit.has_value()) {
-        limiter.emplace(cmd.ratelimit->rcu, cmd.ratelimit->wcu);
-    }
-
-    switch (plan.api) {
-        case SelectApi::get_item: {
-            auto result = client.get_item(plan.get_item);
-            if (!result.has_value()) {
-                return fail(result.error());
-            }
-            if (result->item.has_value()) {
-                outcome.items.push_back(std::move(*result->item));
-            }
-            totalizer.add(result->consumed_capacity);
+    for (;;) {
+        auto page = cursor.next_page();
+        if (!page.has_value()) {
+            return fail(page.error());
+        }
+        if (*page == nullptr) {
             break;
         }
-        case SelectApi::query: {
-            QueryIn request = plan.query;
-            while (true) {
-                auto result = client.query(request);
-                if (!result.has_value()) {
-                    return fail(result.error());
-                }
-                for (auto& item : result->items) {
-                    outcome.items.push_back(std::move(item));
-                }
-                totalizer.add(result->consumed_capacity);
-                if (limiter.has_value()) {
-                    limiter->consume_reads(result->consumed_capacity);
-                }
-                if (!result->last_evaluated_key.has_value() ||
-                    result->last_evaluated_key->empty()) {
-                    break;
-                }
-                request.exclusive_start_key = std::move(result->last_evaluated_key);
-                // Throttle before fetching the next page (do_query: readlimit()
-                // after setting the next ExclusiveStartKey). Output is unchanged.
-                if (limiter.has_value()) {
-                    limiter->readlimit();
-                }
-            }
-            break;
-        }
-        case SelectApi::scan: {
-            ScanIn request = plan.scan;
-            while (true) {
-                auto result = client.scan(request);
-                if (!result.has_value()) {
-                    return fail(result.error());
-                }
-                for (auto& item : result->items) {
-                    outcome.items.push_back(std::move(item));
-                }
-                totalizer.add(result->consumed_capacity);
-                if (limiter.has_value()) {
-                    limiter->consume_reads(result->consumed_capacity);
-                }
-                if (!result->last_evaluated_key.has_value() ||
-                    result->last_evaluated_key->empty()) {
-                    break;
-                }
-                request.exclusive_start_key = std::move(result->last_evaluated_key);
-                if (limiter.has_value()) {
-                    limiter->readlimit();
-                }
-            }
-            break;
-        }
-        case SelectApi::search_vectors:
-            break;  // handled above via early return
+        outcome.items.insert(outcome.items.end(), (*page)->begin(), (*page)->end());
     }
-
-    // Display consumed capacity only when the user asked for it (RETURN
-    // CONSUMED CAPACITY). A ratelimit forces the request to TOTAL but the
-    // original gates the display on the user's `returns`, not the request's
-    // (select.cpp display_consumed_capacity), so a ratelimit alone shows
-    // nothing.
-    if (cmd.rcc != ReturnConsumedCapacity::none) {
-        outcome.consumed_capacity = totalizer.get();
-    }
+    outcome.consumed_capacity = cursor.consumed_capacity();
 
     return ExecOutcome{std::move(outcome)};
 }

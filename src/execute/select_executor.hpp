@@ -5,10 +5,14 @@
 //
 // PRIVATE engine header (not installed). SDK-free port of CSelectCommand::run()
 // and its do_getitem/do_query/do_scan paginated loops (arch §7/§8/§10). Given a
-// parsed SelectCmd, it plans the access pattern (planner), issues the matching
-// IDDBClient op, follows Query/Scan pagination via the LastEvaluatedKey cursor,
-// totalizes consumed capacity across pages, and returns a SelectOutcome (DATA,
-// never bytes — the Renderer formats it, P2a-03).
+// parsed SelectCmd, it plans the access pattern (planner) and drains the shared
+// SelectRowCursor (the ONE pagination loop — D2) for GetItem/Query/Scan,
+// folding every page into one SelectOutcome (DATA, never bytes — the Renderer
+// formats it, P2a-03). A vector SELECT (NEAREST) is a single bounded
+// SearchVectors request, buffered directly here. The cursor owns the
+// LastEvaluatedKey paging, the consumed-capacity totalizer, and the rate
+// limiter, so the buffering and streaming paths share exactly one
+// implementation.
 //
 // EXPLAIN of a SELECT is handled by execute_select_explain: it plans the same
 // access pattern but, instead of issuing the op, serializes the chosen request
