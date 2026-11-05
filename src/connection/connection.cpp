@@ -21,6 +21,7 @@
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
 #include "execute/select_cursor.hpp"
+#include "parser/param_bind.hpp"
 #include "session_internal.hpp"
 
 namespace ddbsh {
@@ -39,81 +40,6 @@ WriteVerb to_write_verb(BulkWriteOutcome::Verb v) {
             return WriteVerb::del;
     }
     return WriteVerb::update;
-}
-
-/// Render one Value to the ddbsh source literal that re-parses to it (the
-/// inverse of the lexer's literal rules). Returns an Error for a shape with no
-/// literal syntax (DynamoDB sets SS/NS/BS have none in the grammar).
-std::optional<Error> render_literal(const Value& v, std::string& out) {
-    switch (v.type) {
-        case Value::Type::S: {
-            out.push_back('"');
-            for (char c : v.s) {
-                if (c == '"') {
-                    out.push_back('"');  // SQL-style "" doubling (lexer §4)
-                }
-                out.push_back(c);
-            }
-            out.push_back('"');
-            return std::nullopt;
-        }
-        case Value::Type::N:
-            out += v.s;  // bare, exact lexeme
-            return std::nullopt;
-        case Value::Type::BOOL:
-            out += (v.boolean ? "true" : "false");
-            return std::nullopt;
-        case Value::Type::NUL:
-            out += "null";
-            return std::nullopt;
-        case Value::Type::L: {
-            out.push_back('[');
-            for (std::size_t i = 0; i < v.list.size(); ++i) {
-                if (i != 0) {
-                    out += ", ";
-                }
-                if (auto e = render_literal(v.list[i], out)) {
-                    return e;
-                }
-            }
-            out.push_back(']');
-            return std::nullopt;
-        }
-        case Value::Type::M: {
-            out.push_back('{');
-            for (std::size_t i = 0; i < v.map.size(); ++i) {
-                if (i != 0) {
-                    out += ", ";
-                }
-                out.push_back('"');
-                for (char c : v.map[i].first) {
-                    if (c == '"') {
-                        out.push_back('"');
-                    }
-                    out.push_back(c);
-                }
-                out += "\":";
-                if (auto e = render_literal(v.map[i].second, out)) {
-                    return e;
-                }
-            }
-            out.push_back('}');
-            return std::nullopt;
-        }
-        case Value::Type::B:
-        case Value::Type::SS:
-        case Value::Type::NS:
-        case Value::Type::BS:
-            return Error{Errc::invalid_argument,
-                         "cannot bind a DynamoDB binary or set value: no literal syntax",
-                         std::nullopt, std::nullopt};
-    }
-    return Error{Errc::invalid_argument, "cannot bind value of unknown type", std::nullopt,
-                 std::nullopt};
-}
-
-bool is_name_char(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
 }  // namespace
@@ -212,119 +138,56 @@ Cell Row::cell(std::string_view name) const {
 
 // ====================== PreparedStatement ===================================
 
+struct PreparedStatement::Impl {
+    Statement statement;                         ///< parsed once; owns the AST + its `?` markers
+    std::vector<Value*> slots;                   ///< slots[i] -> the (i+1)-th `?` marker Value
+    std::vector<std::optional<Value>> bindings;  ///< bindings[i] -> value bound to parameter i+1
+    std::optional<Error> bind_error;             ///< first bind misuse, surfaced at exec/query
+
+    /// Validate every parameter is bound, then write each bound Value into its
+    /// AST slot in place, leaving the statement ready for the normal planner /
+    /// serializer (Approach H). Re-callable: a re-execute rebinds and resolves
+    /// again over the same stable slots (the AST is not reallocated).
+    Result<void> resolve() {
+        if (bind_error.has_value()) {
+            return fail(*bind_error);
+        }
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            if (!bindings[i].has_value()) {
+                return fail(Errc::unbound_parameter,
+                            "parameter #" + std::to_string(i + 1) + " is not bound");
+            }
+            *slots[i] = *bindings[i];
+        }
+        return {};
+    }
+};
+
+PreparedStatement::PreparedStatement(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+PreparedStatement::~PreparedStatement() = default;
+PreparedStatement::PreparedStatement(PreparedStatement&&) noexcept = default;
+PreparedStatement& PreparedStatement::operator=(PreparedStatement&&) noexcept = default;
+
+int PreparedStatement::parameter_count() const {
+    return static_cast<int>(impl_->slots.size());
+}
+
 PreparedStatement& PreparedStatement::bind(int index1, Value v) {
-    if (index1 < 1) {
-        // A positional index is 1-based; a value <1 is caller misuse. bind()
+    if (index1 < 1 || static_cast<std::size_t>(index1) > impl_->slots.size()) {
+        // A positional index is 1-based and must name an actual `?`. bind()
         // returns *this for chaining and cannot return a Result, so record the
-        // first such error and surface it from expand() (no silent swallow).
-        if (!bind_error_.has_value()) {
-            bind_error_ = Error{Errc::invalid_argument,
-                                "positional bind index must be >= 1, got " + std::to_string(index1),
-                                std::nullopt, std::nullopt};
+        // first such misuse and surface it when the statement executes.
+        if (!impl_->bind_error.has_value()) {
+            impl_->bind_error =
+                Error{Errc::invalid_argument,
+                      "bind index " + std::to_string(index1) + " out of range [1, " +
+                          std::to_string(impl_->slots.size()) + "]",
+                      std::nullopt, std::nullopt};
         }
         return *this;
     }
-    auto idx = static_cast<std::size_t>(index1 - 1);
-    if (idx >= positional_.size()) {
-        positional_.resize(idx + 1);
-    }
-    positional_[idx] = std::move(v);
+    impl_->bindings[static_cast<std::size_t>(index1 - 1)] = std::move(v);
     return *this;
-}
-
-PreparedStatement& PreparedStatement::bind(std::string_view name, Value v) {
-    for (auto& [n, val] : named_) {
-        if (n == name) {
-            val = std::move(v);
-            return *this;
-        }
-    }
-    named_.emplace_back(std::string(name), std::move(v));
-    return *this;
-}
-
-Result<std::string> PreparedStatement::expand() const {
-    if (bind_error_.has_value()) {
-        return fail(*bind_error_);
-    }
-    std::string out;
-    out.reserve(sql_.size() + 16);
-    std::size_t next_positional = 0;
-    std::vector<bool> named_used(named_.size(), false);
-    bool in_string = false;
-
-    for (std::size_t i = 0; i < sql_.size(); ++i) {
-        char c = sql_[i];
-        if (in_string) {
-            out.push_back(c);
-            if (c == '"') {
-                if (i + 1 < sql_.size() && sql_[i + 1] == '"') {
-                    out.push_back('"');  // escaped "" — stay in string
-                    ++i;
-                } else {
-                    in_string = false;
-                }
-            }
-            continue;
-        }
-        if (c == '"') {
-            in_string = true;
-            out.push_back(c);
-            continue;
-        }
-        if (c == '?') {
-            if (next_positional >= positional_.size()) {
-                return fail(Errc::invalid_argument, "positional placeholder #" +
-                                                        std::to_string(next_positional + 1) +
-                                                        " has no bound value");
-            }
-            if (auto e = render_literal(positional_[next_positional], out)) {
-                return fail(*e);
-            }
-            ++next_positional;
-            continue;
-        }
-        if (c == ':' && i + 1 < sql_.size() && is_name_char(sql_[i + 1]) &&
-            !(sql_[i + 1] >= '0' && sql_[i + 1] <= '9')) {
-            std::size_t j = i + 1;
-            while (j < sql_.size() && is_name_char(sql_[j])) {
-                ++j;
-            }
-            std::string name = sql_.substr(i + 1, j - i - 1);
-            bool matched = false;
-            for (std::size_t k = 0; k < named_.size(); ++k) {
-                if (named_[k].first == name) {
-                    if (auto e = render_literal(named_[k].second, out)) {
-                        return fail(*e);
-                    }
-                    named_used[k] = true;
-                    matched = true;
-                    break;
-                }
-            }
-            if (matched) {
-                i = j - 1;
-                continue;
-            }
-            // Unbound :name — leave verbatim (the grammar deals with it).
-            out.push_back(c);
-            continue;
-        }
-        out.push_back(c);
-    }
-
-    if (next_positional < positional_.size()) {
-        return fail(Errc::invalid_argument, "bound positional parameter #" +
-                                                std::to_string(next_positional + 1) +
-                                                " has no matching ? placeholder");
-    }
-    for (std::size_t k = 0; k < named_.size(); ++k) {
-        if (!named_used[k]) {
-            return fail(Errc::invalid_argument,
-                        "bound parameter :" + named_[k].first + " has no matching placeholder");
-        }
-    }
-    return out;
 }
 
 // ============================ Results =======================================
@@ -844,16 +707,82 @@ Result<Results> Connection::exec(std::string_view sql) {
     return out;
 }
 
-Result<Results> Connection::exec(const PreparedStatement& stmt) {
-    auto expanded = stmt.expand();
-    if (!expanded.has_value()) {
-        return fail(expanded.error());
+Result<PreparedStatement> Connection::prepare(std::string_view sql) {
+    if (impl_->closed) {
+        return fail(Errc::invalid_argument, "connection is closed");
     }
-    return exec(*expanded);
+    // Parse ONCE into an owned AST (Approach H). A single statement is prepared
+    // (ODBC SQLPrepare semantics); parse() returns the first statement of the
+    // text and tolerates a missing trailing `;`.
+    auto stmt = impl_->session->parse(sql);
+    if (!stmt.has_value()) {
+        return fail(stmt.error());
+    }
+
+    auto pimpl = std::make_unique<PreparedStatement::Impl>();
+    pimpl->statement = std::move(*stmt);
+
+    // Locate the `?` markers in the parsed AST; order them by their 1-based
+    // ordinal (text-appearance order) and validate the numbering is contiguous
+    // 1..N with no gaps or duplicates.
+    std::vector<Value*> raw;
+    if (engine::ParsedStatement* ast = pimpl->statement.ast()) {
+        engine::collect_param_slots(ast->command, raw);
+    }
+    std::vector<Value*> ordered(raw.size(), nullptr);
+    for (Value* slot : raw) {
+        int ord = slot->param_ordinal;
+        if (ord < 1 || static_cast<std::size_t>(ord) > raw.size() ||
+            ordered[static_cast<std::size_t>(ord - 1)] != nullptr) {
+            return fail(Errc::internal_error,
+                        "malformed parameter numbering in prepared statement");
+        }
+        ordered[static_cast<std::size_t>(ord - 1)] = slot;
+    }
+    pimpl->slots = std::move(ordered);
+    pimpl->bindings.resize(pimpl->slots.size());
+
+    return PreparedStatement(std::move(pimpl));
 }
 
-Result<RowSet> Connection::query(std::string_view sql) {
-    auto r = exec(sql);
+Result<Results> Connection::exec(const PreparedStatement& stmt) {
+    if (impl_->closed) {
+        return fail(Errc::invalid_argument, "connection is closed");
+    }
+    // Resolve the bound parameters into the parsed AST in place, then execute
+    // the single statement eagerly and expose its outcome as a Results. The
+    // prepared AST stays intact (markers overwritten by bound Values), so the
+    // same handle can be re-bound and re-executed.
+    auto resolved = stmt.impl_->resolve();
+    if (!resolved.has_value()) {
+        return fail(resolved.error());
+    }
+
+    auto rimpl = std::make_unique<Results::Impl>();
+    rimpl->session = impl_->session.get();
+    rimpl->renderer = &impl_->renderer;
+
+    auto outcome = impl_->session->execute(stmt.impl_->statement);
+    if (!outcome.has_value()) {
+        // Mirror exec(sql)'s execution-error behavior: the Results carries the
+        // error (readable via error()); the handle is already parsed.
+        rimpl->error = outcome.error();
+        rimpl->done = true;
+        rimpl->loaded = false;
+        return Results(std::move(rimpl));
+    }
+    flatten(*outcome, rimpl->sets);
+    rimpl->loaded = true;
+    rimpl->set_index = 0;
+    rimpl->stmt_index = 0;  // no statements[]; next_result exhausts `sets` then ends
+    return Results(std::move(rimpl));
+}
+
+namespace {
+
+/// Drain a row-returning Results into a RowSet, or fail with the result's error
+/// / a kind-mismatch message. Shared by the query() overloads.
+Result<RowSet> drain_rowset(Result<Results> r) {
     if (!r.has_value()) {
         return fail(r.error());
     }
@@ -896,12 +825,12 @@ Result<RowSet> Connection::query(std::string_view sql) {
     return RowSet(std::move(rows));
 }
 
+}  // namespace
+
+Result<RowSet> Connection::query(std::string_view sql) { return drain_rowset(exec(sql)); }
+
 Result<RowSet> Connection::query(const PreparedStatement& stmt) {
-    auto expanded = stmt.expand();
-    if (!expanded.has_value()) {
-        return fail(expanded.error());
-    }
-    return query(*expanded);
+    return drain_rowset(exec(stmt));
 }
 
 Result<void> Connection::reconnect(const std::string& region, const std::string& endpoint) {

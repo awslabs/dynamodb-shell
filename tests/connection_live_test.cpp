@@ -21,12 +21,14 @@
 #include <gtest/gtest.h>
 
 #include <unistd.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <exception>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -189,14 +191,53 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
         EXPECT_EQ(rows->size(), 3u);
     }
 
-    // Prepared, parameter-bound query (injection-safe path).
+    // Prepared, parameter-bound query against the REAL backend (D-P5-2):
+    // prepare once, bind, execute, then re-bind and re-execute without
+    // re-parsing (ODBC / DB-Library shape).
     {
-        ddbsh::PreparedStatement stmt("select * from " + table + " where id = ? and year = ?;");
-        stmt.bind(1, std::string("show")).bind(2, 2016LL);
-        auto rows = db->query(stmt);
+        auto stmt = db->prepare("select * from " + table + " where id = ? and year = ?;");
+        ASSERT_TRUE(stmt.has_value()) << (stmt.has_value() ? "" : stmt.error().message);
+        EXPECT_EQ(stmt->parameter_count(), 2);
+
+        stmt->bind(1, std::string("show")).bind(2, 2016LL);
+        auto rows = db->query(*stmt);
         ASSERT_TRUE(rows.has_value()) << (rows.has_value() ? "" : rows.error().message);
         ASSERT_EQ(rows->size(), 1u);
         EXPECT_EQ((*rows)[0].get_string("title"), "Westworld");
+
+        // Re-execute with different bindings — no re-parse.
+        stmt->bind(1, std::string("movie")).bind(2, 2010LL);
+        auto rows2 = db->query(*stmt);
+        ASSERT_TRUE(rows2.has_value()) << (rows2.has_value() ? "" : rows2.error().message);
+        ASSERT_EQ(rows2->size(), 1u);
+        EXPECT_EQ((*rows2)[0].get_string("title"), "Inception");
+    }
+
+    // EXPLAIN-equivalence against the REAL adapter (D-P5-2 / D6): the serialized
+    // request of a `?`-bound prepared statement is BYTE-IDENTICAL to the
+    // equivalent literal statement (the resolved request is the same). The
+    // deterministic expression-alias prefix (#a<prefix><n>) advances per
+    // statement within a session, so each EXPLAIN is taken from a FRESH session
+    // (reconnect() resets the per-session alias counter) to compare like with
+    // like — exactly as two fresh connections would (arch §14 item 1).
+    {
+        const std::string region = db->region();
+
+        ASSERT_TRUE(db->reconnect(region).has_value());
+        auto prep = db->prepare("explain select * from " + table + " where id = ? and year = ?;");
+        ASSERT_TRUE(prep.has_value()) << (prep.has_value() ? "" : prep.error().message);
+        prep->bind(1, std::string("show")).bind(2, 2016LL);
+        auto bound = db->exec(*prep);
+        ASSERT_TRUE(bound.has_value()) << (bound.has_value() ? "" : bound.error().message);
+        std::string bound_text = bound->render();
+
+        ASSERT_TRUE(db->reconnect(region).has_value());
+        auto lit = db->exec("explain select * from " + table +
+                            " where id = \"show\" and year = 2016;");
+        ASSERT_TRUE(lit.has_value()) << (lit.has_value() ? "" : lit.error().message);
+        std::string lit_text = lit->render();
+
+        EXPECT_EQ(bound_text, lit_text);
     }
 
     // Streaming cursor against the REAL backend with a larger result set
@@ -223,6 +264,36 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
         auto all = db->query("select * from " + table + ";");
         ASSERT_TRUE(all.has_value()) << (all.has_value() ? "" : all.error().message);
         EXPECT_EQ(all->size(), static_cast<std::size_t>(3 + kBulk));
+    }
+
+    // Typed set / binary bind round-trip against the REAL backend (D-P5-3):
+    // sets (SS) and binary (B) have no ddbsh literal syntax, so a typed bind is
+    // the only way to write them. Insert via bound `?`, then read back. Placed
+    // after the whole-table scan above so it does not perturb that count.
+    {
+        auto ins = db->prepare("insert into " + table +
+                               " ( id, year, genres, poster ) values ( ?, ?, ?, ? );");
+        ASSERT_TRUE(ins.has_value()) << (ins.has_value() ? "" : ins.error().message);
+        ins->bind(1, std::string("binset"))
+            .bind(2, 1LL)
+            .bind(3, ddbsh::Value::string_set({"scifi", "thriller"}))
+            .bind(4, ddbsh::Value::binary_value("aGVsbG8="));  // base64("hello")
+        auto w = db->exec(*ins);
+        ASSERT_TRUE(w.has_value()) << (w.has_value() ? "" : w.error().message);
+
+        auto rows = db->query("select * from " + table +
+                              " where id = \"binset\" and year = 1;");
+        ASSERT_TRUE(rows.has_value()) << (rows.has_value() ? "" : rows.error().message);
+        ASSERT_EQ(rows->size(), 1u);
+        const auto* genres = (*rows)[0].cell("genres").as_string_set();
+        ASSERT_NE(genres, nullptr);
+        std::vector<std::string> got = *genres;
+        std::sort(got.begin(), got.end());
+        EXPECT_EQ(got, (std::vector<std::string>{"scifi", "thriller"}));
+        ddbsh::Cell poster = (*rows)[0].cell("poster");
+        ASSERT_FALSE(poster.missing());
+        EXPECT_EQ(poster.type(), ddbsh::Value::Type::B);
+        EXPECT_EQ(poster.value().s, "aGVsbG8=");
     }
 
     // DROP — explicit, waits gone. Then dismiss teardown's NOWAIT drop.

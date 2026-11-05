@@ -40,6 +40,7 @@ Driver::Step Driver::parse_next() {
     // statement's error reports the original's `[line, col]`).
     result_.reset();
     error_.reset();
+    param_count_ = 0;
 
     Parser parser(*this);
     int rc = parser.parse();

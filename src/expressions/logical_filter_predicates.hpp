@@ -33,6 +33,12 @@ public:
 
     int count(const std::string& lhs) const override { return m_lhs == lhs ? 1 : 0; }
 
+    void collect_param_slots(std::vector<Value*>& out) override {
+        for (auto& value : m_rhs) {
+            collect_value_slots(value, out);
+        }
+    }
+
 private:
     std::string do_serialize(SymbolTable* st) override {
         std::string rv = (st ? st->new_attribute(m_lhs) : m_lhs) + " IN (";
@@ -80,6 +86,10 @@ public:
     }
 
     int count(const std::string& lhs) const override { return m_lhs == lhs ? 1 : 0; }
+
+    void collect_param_slots(std::vector<Value*>& out) override {
+        collect_value_slots(m_operand, out);
+    }
 
 private:
     std::string do_serialize(SymbolTable* st) override {

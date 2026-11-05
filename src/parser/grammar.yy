@@ -1709,6 +1709,7 @@ insert_value:
     | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
     | K_NULL                    { $$ = ddbsh::Value::null_value(); }
     | '{' map_element_list '}'  { $$ = std::move($2); }
+    | '?'                       { $$ = ddbsh::Value::param_marker(drv.next_param_ordinal()); }
     ;
 
 /* lee_rhs is the full value literal (adds top-level empty []/{} over
@@ -1729,6 +1730,7 @@ lee_rhs:
     | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
     | '{' map_element_list '}'  { $$ = std::move($2); }
     | K_NULL                    { $$ = ddbsh::Value::null_value(); }
+    | '?'                       { $$ = ddbsh::Value::param_marker(drv.next_param_ordinal()); }
     | '[' ']'
         {
             ddbsh::Value v;

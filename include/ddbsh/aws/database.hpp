@@ -69,6 +69,7 @@ public:
     Database& operator=(const Database&) = delete;
 
     Result<Results> exec(std::string_view sql) { return conn_->exec(sql); }
+    Result<PreparedStatement> prepare(std::string_view sql) { return conn_->prepare(sql); }
     Result<Results> exec(const PreparedStatement& stmt) { return conn_->exec(stmt); }
     Result<RowSet> query(std::string_view sql) { return conn_->query(sql); }
     Result<RowSet> query(const PreparedStatement& stmt) { return conn_->query(stmt); }

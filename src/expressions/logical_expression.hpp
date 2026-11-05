@@ -133,6 +133,31 @@ public:
     /// (phase 4a).
     bool query_safe(const KeySchemaView& ks) const { return do_query_safe(ks); }
 
+    // ---- prepared-statement parameter binding (D-P5-2) ---------------------
+
+    /// Collect pointers to every unresolved parameter-marker Value slot
+    /// (Value::param_ordinal > 0) in this subtree, recursing into nested L/M
+    /// containers. The prepared-statement facility resolves the `?` markers in
+    /// place through these pointers before execution. Default: no slots —
+    /// leaves carrying a Value override; AND/OR recurse into their children.
+    virtual void collect_param_slots(std::vector<Value*>& out) { (void)out; }
+
+    /// Push the marker slots reachable from `v` — `v` itself when it is a
+    /// marker, else any markers nested inside its L/M container. Shared by the
+    /// leaf overrides so a marker inside `[?, ?]` or `{k: ?}` is reached too.
+    static void collect_value_slots(Value& v, std::vector<Value*>& out) {
+        if (v.param_ordinal > 0) {
+            out.push_back(&v);
+            return;
+        }
+        for (auto& element : v.list) {
+            collect_value_slots(element, out);
+        }
+        for (auto& entry : v.map) {
+            collect_value_slots(entry.second, out);
+        }
+    }
+
 protected:
     bool m_negate = false;
     bool m_parens = false;

@@ -30,6 +30,7 @@ enum class Errc {
     cancelled,
     not_reducible_to_getitem,
     not_implemented,
+    unbound_parameter,
     internal_error,
 };
 

@@ -64,6 +64,7 @@
 #ifndef DDBSH_TESTING_MEMORY_CLIENT_HPP
 #define DDBSH_TESTING_MEMORY_CLIENT_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <optional>
@@ -477,7 +478,12 @@ private:
                 std::string s = (v.type == Value::Type::SS   ? "SS:"
                                  : v.type == Value::Type::NS ? "NS:"
                                                              : "BS:");
-                for (const auto& e : v.set) {
+                // DynamoDB sets are UNORDERED (F1): sort the elements so a key
+                // is canonical regardless of element order, i.e. a bound
+                // {"b","a"} keys identically to a stored {"a","b"}.
+                std::vector<std::string> elems = v.set;
+                std::sort(elems.begin(), elems.end());
+                for (const auto& e : elems) {
                     s += e;
                     s += '\x1e';
                 }
@@ -1131,7 +1137,9 @@ private:
             case Value::Type::SS:
             case Value::Type::NS:
             case Value::Type::BS:
-                return a.set == b.set;
+                // Order-insensitive (F1): DynamoDB sets are unordered, so
+                // compare canonicalized (sorted) element lists.
+                return value_key(a) == value_key(b);
             default:
                 return value_key(a) == value_key(b);
         }

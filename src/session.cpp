@@ -31,6 +31,7 @@
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
 #include "parser/help_text.hpp"
+#include "parser/param_bind.hpp"
 
 namespace ddbsh {
 
@@ -98,6 +99,17 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
     // 1 -> that fragment, >1 -> MultiOutcome). On failure the Error is returned
     // and buffered fragments are discarded (D-2c-12). The streaming overload is
     // the primary; this wraps it with a collecting sink.
+    // An unbound `?` parameter marker must never reach serialization (it would
+    // become a bogus NULL request). A statement carrying markers is only legal
+    // through the prepared-statement bind path (which resolves them in place
+    // before execute); reaching execute with markers still present is caller
+    // misuse (D-P5-2). No standard CLI command ever carries a marker, so this
+    // guard never fires on the golden path.
+    if (statement.ast() != nullptr && engine::count_param_markers(*statement.ast()) > 0) {
+        return fail(Errc::unbound_parameter,
+                    "statement has unbound parameter marker(s); use prepare() and bind()");
+    }
+
     struct BufferingSink : OutcomeSink {
         std::vector<ExecOutcome> parts;
         void emit(const ExecOutcome& fragment) override { parts.push_back(fragment); }
@@ -129,6 +141,13 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
 }
 
 Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
+    // Reject an unbound `?` marker before any serialization (see the buffering
+    // overload); markers are legal only through the prepared bind path.
+    if (statement.ast() != nullptr && engine::count_param_markers(*statement.ast()) > 0) {
+        return fail(Errc::unbound_parameter,
+                    "statement has unbound parameter marker(s); use prepare() and bind()");
+    }
+
     // Emit a single buffered outcome (the common case for every command that
     // does not stream per-row), or propagate its Error unemitted.
     auto emit_single = [&sink](Result<ExecOutcome> outcome) -> Result<void> {
@@ -372,6 +391,13 @@ Result<std::optional<SelectRowCursor>> open_select_cursor_for(Session& session,
     if (stmt.kind() != StatementKind::select_statement || stmt.ast() == nullptr ||
         stmt.ast()->explain) {
         return std::optional<SelectRowCursor>{};
+    }
+    // An unbound `?` marker must not reach the lazy SELECT cursor either (it
+    // would serialize a bogus request); reject it here as the execute overloads
+    // do (D-P5-2). Prepared SELECTs are resolved before reaching this path.
+    if (count_param_markers(*stmt.ast()) > 0) {
+        return fail(Errc::unbound_parameter,
+                    "statement has unbound parameter marker(s); use prepare() and bind()");
     }
     const auto& select = std::get<SelectCmd>(stmt.ast()->command);
     // A vector NEAREST search is a single bounded SearchVectors request — keep

@@ -91,6 +91,13 @@ public:
     /// non-owning pointer valid for this Statement's lifetime.
     const engine::ParsedStatement* ast() const noexcept { return ast_.get(); }
 
+    /// Mutable library-internal accessor to the owned AST (nullptr for the
+    /// empty statement). Not part of the embedder-facing API surface; the
+    /// prepared-statement facility uses it to resolve `?` parameter markers in
+    /// place before execution (D-P5-2). Borrowed, non-owning, valid for this
+    /// Statement's lifetime.
+    engine::ParsedStatement* ast() noexcept { return ast_.get(); }
+
 private:
     std::unique_ptr<engine::ParsedStatement> ast_;
 };

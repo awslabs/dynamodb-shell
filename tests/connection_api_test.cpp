@@ -131,43 +131,95 @@ TEST(ConnectionApi, PreparedPositionalBinding) {
     Connection db(SessionConfig{"us-east-1", ""}, client);
     seed(db);
 
-    ddbsh::PreparedStatement stmt("select * from movies where id = ? and yr = ?;");
-    stmt.bind(1, std::string("m2")).bind(2, 2020LL);
-    auto rows = db.query(stmt);
+    auto stmt = db.prepare("select * from movies where id = ? and yr = ?;");
+    ASSERT_TRUE(stmt.has_value());
+    EXPECT_EQ(stmt->parameter_count(), 2);
+    stmt->bind(1, std::string("m2")).bind(2, 2020LL);
+    auto rows = db.query(*stmt);
     ASSERT_TRUE(rows.has_value());
     ASSERT_EQ(rows->size(), 1u);
     EXPECT_EQ((*rows)[0].get_string("title"), "Tenet");
 }
 
-TEST(ConnectionApi, PreparedNamedBinding) {
+TEST(ConnectionApi, PreparedReExecuteRebinds) {
     MemoryClient client;
     Connection db(SessionConfig{"us-east-1", ""}, client);
     seed(db);
 
-    // The ':' introduces the placeholder; bind by the bare name (no colon).
-    ddbsh::PreparedStatement stmt("select * from movies where id = :mid;");
-    stmt.bind("mid", std::string("m1"));
-    auto rows = db.query(stmt);
+    // Prepare ONCE, execute twice with different bindings (no re-parse).
+    auto stmt = db.prepare("select * from movies where id = ?;");
+    ASSERT_TRUE(stmt.has_value());
+
+    stmt->bind(1, std::string("m1"));
+    auto first = db.query(*stmt);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->size(), 2u);
+
+    stmt->bind(1, std::string("m2"));
+    auto second = db.query(*stmt);
+    ASSERT_TRUE(second.has_value());
+    ASSERT_EQ(second->size(), 1u);
+    EXPECT_EQ((*second)[0].get_string("title"), "Tenet");
+}
+
+TEST(ConnectionApi, PreparedStringBindingIsInjectionSafe) {
+    // A bound string carrying a quote is a typed Value, never re-lexed, so it
+    // cannot break out of the literal. It must round-trip verbatim.
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
+    ASSERT_TRUE(db.exec("insert into t ( id, s ) values ( \"a\", \"x\" );").has_value());
+
+    auto ins = db.prepare("insert into t ( id, s ) values ( ?, ? );");
+    ASSERT_TRUE(ins.has_value());
+    ins->bind(1, std::string("b")).bind(2, std::string("a\"b"));
+    ASSERT_TRUE(db.exec(*ins).has_value());
+
+    auto sel = db.prepare("select * from t where id = ?;");
+    ASSERT_TRUE(sel.has_value());
+    sel->bind(1, std::string("b"));
+    auto rows = db.query(*sel);
     ASSERT_TRUE(rows.has_value());
-    EXPECT_EQ(rows->size(), 2u);
+    ASSERT_EQ(rows->size(), 1u);
+    EXPECT_EQ((*rows)[0].get_string("s"), "a\"b");
 }
 
-TEST(ConnectionApi, PreparedStringEscaping) {
-    // A bound string with embedded quotes must round-trip through the lexer's
-    // "" doubling, not break out of the literal (injection-safe).
-    ddbsh::PreparedStatement stmt("select * from t where s = ?;");
-    stmt.bind(1, std::string("a\"b"));
-    auto expanded = stmt.expand();
-    ASSERT_TRUE(expanded.has_value());
-    EXPECT_EQ(*expanded, "select * from t where s = \"a\"\"b\";");
+TEST(ConnectionApi, PreparedUnboundParameterError) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    seed(db);
+
+    auto stmt = db.prepare("select * from movies where id = ? and yr = ?;");
+    ASSERT_TRUE(stmt.has_value());
+    stmt->bind(1, std::string("m2"));  // only one of two bound
+    auto rows = db.query(*stmt);
+    ASSERT_FALSE(rows.has_value());
+    EXPECT_EQ(rows.error().code, ddbsh::Errc::unbound_parameter);
 }
 
-TEST(ConnectionApi, PreparedUnboundPlaceholderError) {
-    ddbsh::PreparedStatement stmt("select * from t where a = ? and b = ?;");
-    stmt.bind(1, 1LL);  // only one of two bound
-    auto expanded = stmt.expand();
-    ASSERT_FALSE(expanded.has_value());
-    EXPECT_EQ(expanded.error().code, ddbsh::Errc::invalid_argument);
+TEST(ConnectionApi, PreparedBindIndexOutOfRange) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    seed(db);
+
+    auto stmt = db.prepare("select * from movies where id = ?;");
+    ASSERT_TRUE(stmt.has_value());
+    stmt->bind(2, std::string("x"));  // only one parameter exists
+    auto rows = db.query(*stmt);
+    ASSERT_FALSE(rows.has_value());
+    EXPECT_EQ(rows.error().code, ddbsh::Errc::invalid_argument);
+}
+
+TEST(ConnectionApi, UnpreparedMarkerIsRejected) {
+    // A bare `?` typed outside the prepared path parses but must not execute
+    // (it would serialize a bogus request); the engine rejects it cleanly.
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    seed(db);
+
+    auto rows = db.query("select * from movies where id = ?;");
+    ASSERT_FALSE(rows.has_value());
+    EXPECT_EQ(rows.error().code, ddbsh::Errc::unbound_parameter);
 }
 
 TEST(ConnectionApi, MultiStatementResultSets) {
@@ -296,12 +348,17 @@ TEST(ConnectionApi, ReconnectAndEndpointOverride) {
 
 TEST(ConnectionApi, BindRejectsNonPositiveIndex) {
     // A 1-based positional index < 1 is caller misuse; bind() cannot return a
-    // Result, so the error is surfaced at expand()/exec() (never swallowed).
-    ddbsh::PreparedStatement stmt("select * from t where a = ?;");
-    stmt.bind(0, 1LL);
-    auto expanded = stmt.expand();
-    ASSERT_FALSE(expanded.has_value());
-    EXPECT_EQ(expanded.error().code, ddbsh::Errc::invalid_argument);
+    // Result, so the error is surfaced at exec()/query() (never swallowed).
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    ASSERT_TRUE(db.exec("create table t ( a string ) primary key ( a hash );").has_value());
+
+    auto stmt = db.prepare("select * from t where a = ?;");
+    ASSERT_TRUE(stmt.has_value());
+    stmt->bind(0, 1LL);  // index < 1
+    auto rows = db.query(*stmt);
+    ASSERT_FALSE(rows.has_value());
+    EXPECT_EQ(rows.error().code, ddbsh::Errc::invalid_argument);
 }
 
 TEST(ConnectionApi, OwningClientConstructor) {

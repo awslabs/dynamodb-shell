@@ -51,6 +51,8 @@ public:
         return rv;
     }
 
+    void collect_param_slots(std::vector<Value*>& out) override { collect_value_slots(m_rhs, out); }
+
 private:
     std::string do_serialize(SymbolTable* st) override {
         std::string lhs = st ? st->new_attribute(m_lhs) : m_lhs;

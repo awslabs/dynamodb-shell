@@ -486,15 +486,37 @@ typed value) and offers `as_string` / `as_int` / `as_double` / `as_bool`. To
 reproduce **byte-exact ddbsh output** (what the shell prints), call
 `r.render()` (current result set) or `r.render_all()` (the whole batch).
 
-**Parameterized statements (injection-safe).** Build statements from untrusted
-input with `PreparedStatement` and positional `?` / named `:name` placeholders;
-the API substitutes correctly-escaped ddbsh literals, so you never concatenate:
+**Prepared / parameterized statements (injection-safe).** `prepare()` parses a
+single statement ONCE; bind its positional `?` parameters (1-based, by order of
+appearance), then `exec`/`query` it — and re-bind and re-run without re-parsing
+(ODBC `SQLPrepare` / Sybase DB-Library shape). Binding is *typed*: a bound value
+flows straight into the request, so you never concatenate, and you can bind any
+value type — including sets and binary, which have no literal syntax — via the
+`Value` factories:
 
 ```cpp
-ddbsh::PreparedStatement stmt("SELECT * FROM Movies WHERE id = ? AND year = ?;");
-stmt.bind(1, std::string("m1")).bind(2, 2010LL);
-auto rows = db->query(stmt);
+auto stmt = db->prepare("SELECT * FROM Movies WHERE id = ? AND year = ?;");
+if (!stmt) { /* parse error */ }
+stmt->bind(1, std::string("m1")).bind(2, 2010LL);
+auto rows = db->query(*stmt);
+
+// Re-execute with different bindings — no re-parse.
+stmt->bind(1, std::string("m2")).bind(2, 2020LL);
+auto more = db->query(*stmt);
+
+// Set / binary binds (no ddbsh literal syntax exists for these):
+auto ins = db->prepare("INSERT INTO Movies ( id, genres, poster ) VALUES ( ?, ?, ? );");
+ins->bind(1, std::string("m3"))
+   .bind(2, ddbsh::Value::string_set({"scifi", "thriller"}))
+   .bind(3, ddbsh::Value::binary_value("aGVsbG8="));  // base64 bytes
+auto r = db->exec(*ins);
 ```
+
+Markers are positional `?` only (the ODBC-canonical marker). Named `:name`
+markers are intentionally not offered: this grammar accepts the no-space
+`{key:value}` map form, which would make a `:name` marker ambiguous. An unbound
+parameter — or a bare `?` used outside the prepared path — is reported as an
+error, never silently executed.
 
 **Client configuration (timeouts, retry).** The `OpenOptions` struct form of
 `open()` passes a full `Aws::Client::ClientConfiguration` through (timeouts,

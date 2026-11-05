@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.10.12
+        VERSION 0.10.13
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -117,6 +117,7 @@ add_library(ddbsh
             src/connection/connection.cpp
             src/render/renderer.cpp
             src/parser/driver.cpp
+            src/parser/param_bind.cpp
             src/parser/lex_debug.cpp
             src/parser/help_text.cpp
             src/expressions/symbol_table.cpp
@@ -259,6 +260,7 @@ if(DDBSH_BUILD_TESTS)
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
                    tests/connection_api_test.cpp
+                   tests/prepared_test.cpp
                    tests/memory_client_test.cpp
                    tests/reentrancy_test.cpp
                    tests/lexer_test.cpp
