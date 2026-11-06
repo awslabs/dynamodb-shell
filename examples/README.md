@@ -5,21 +5,28 @@ SPDX-License-Identifier: Apache-2.0
 
 # ddbsh library embedding examples
 
-Two worked examples of the **embedding API** — the simple, ODBC / Sybase
+Three worked examples of the **embedding API** — the simple, ODBC / Sybase
 DB-Library-style surface (`ddbsh::Connection` / `Results` / `Row` / `Cell`).
-They differ only in the backend they open over:
+They differ in the backend they open over and in how much of the surface they
+show:
 
-- **`ddbshlib_inmemory_sample`** (in `ddbshlib_inmemory_sample/`) — OFFLINE.
-  Drives the API over the in-memory `ddbsh::testing::MemoryClient`, so it needs
-  no AWS account and incurs no cost. Links only the SDK-free engine
-  (`ddbsh::ddbsh`). Built as a default-on, credential-less CTest.
+- **`ddbshlib_inmemory_sample`** (in `ddbshlib_inmemory_sample/`) — OFFLINE,
+  BASIC. Drives the core API (CREATE / INSERT / the three read plans) over the
+  in-memory `ddbsh::testing::MemoryClient`, so it needs no AWS account and
+  incurs no cost. Links only the SDK-free engine (`ddbsh::ddbsh`). Built as a
+  default-on, credential-less CTest.
+- **`ddbshlib_features_sample`** (in `ddbshlib_features_sample/`) — OFFLINE,
+  PHASE-5 FEATURES. A heavily-commented tour of prepared statements, typed
+  set/binary bind, lazy streaming, and transactions, also over the in-memory
+  client. Links only `ddbsh::ddbsh`. Built as a default-on, credential-less
+  CTest.
 - **`ddbshlib_sample`** (in `ddbshlib_sample/`) — LIVE. Opens a `Database` with
   `ddbsh::aws::open()` against **real DynamoDB**. Links `ddbsh::aws` (which
   pulls `ddbsh::ddbsh` + the AWS SDK). It creates and deletes a real table
   (self-cleaning) and costs real (tiny) money.
 
-Both are standalone external consumers of the installed `find_package(ddbsh)`
-package, each with its own `CMakeLists.txt`.
+All three are standalone external consumers of the installed
+`find_package(ddbsh)` package, each with its own `CMakeLists.txt`.
 
 ## `ddbshlib_inmemory_sample` (offline)
 
@@ -49,6 +56,44 @@ cmake --build build-inmem
 ```
 
 As a CTest it is `ddbshlib_inmemory_sample`, built in-tree and run by default
+(no credentials, no cost).
+
+## `ddbshlib_features_sample` (offline, Phase-5 features)
+
+A worked, heavily-commented tour of the Phase-5 embedding capabilities, also
+over the in-memory `ddbsh::testing::MemoryClient` (no AWS account, no cost). It
+is organized into four labeled sections:
+
+1. **Prepared / parameterized statements** — `Connection::prepare()` parses the
+   SQL once; bind positional `?` parameters, `exec`/`query`, then **re-exec**
+   with different bindings without re-parsing (the ODBC `SQLPrepare` /
+   DB-Library `dbcmd`+`dbsqlexec` shape). Binding is injection-safe.
+2. **Typed set / binary bind** — `Value::string_set` / `number_set` /
+   `binary_set` / `binary_value` bound to a `?` parameter, then read back as
+   typed cells. These types have no ddbsh literal syntax, so binding is the only
+   way to write them.
+3. **Lazy streaming** — set a small `MemoryClient::set_page_size`, run a
+   multi-row `SELECT`, and drain it row-by-row through `Results::next_row()`, so
+   only one page is resident in memory at a time (a large `Scan` is never fully
+   materialized).
+4. **Transactions** — a `BEGIN … COMMIT` write transaction (atomic
+   `TransactWriteItems`) and a read transaction that reduces to
+   `TransactGetItems`, whose items arrive in one rows result set.
+
+```sh
+# install the engine first (DDBSH_BUILD_AWS may be OFF — no SDK needed)
+cmake -S . -B build
+cmake --build build
+cmake --install build --prefix /path/to/prefix
+
+# then build the feature sample against that install
+cmake -S examples/ddbshlib_features_sample -B build-features \
+    -DCMAKE_PREFIX_PATH="/path/to/prefix"
+cmake --build build-features
+./build-features/ddbshlib_features_sample
+```
+
+As a CTest it is `ddbshlib_features_sample`, built in-tree and run by default
 (no credentials, no cost).
 
 ## `ddbshlib_sample` (real DynamoDB, `ddbsh::aws::open`)

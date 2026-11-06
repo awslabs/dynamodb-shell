@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.10.14
+        VERSION 0.11.0
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -324,6 +324,20 @@ if(DDBSH_BUILD_TESTS)
     # `--target ddbsh-tests` build (the gate's native step) produces it and its
     # default-on CTest runs rather than reporting "Not Run".
     add_dependencies(ddbsh-tests ddbshlib_inmemory_sample)
+
+    # Phase-5 FEATURE sample (D9): a worked, heavily-commented tour of the P5
+    # embedding surface — prepared statements + re-exec, typed set/binary bind,
+    # lazy streaming (small page size), and transactions — driven offline over
+    # the in-memory ddbsh::testing::MemoryClient. Built in-tree against the
+    # SDK-free engine and run as a default-on, credential-less CTest, exactly
+    # like ddbshlib_inmemory_sample. Its own standalone
+    # examples/ddbshlib_features_sample/CMakeLists.txt additionally proves it as
+    # an EXTERNAL find_package(ddbsh) consumer.
+    add_executable(ddbshlib_features_sample
+                   examples/ddbshlib_features_sample/ddbshlib_features_sample.cpp)
+    target_link_libraries(ddbshlib_features_sample PRIVATE ddbsh::ddbsh ddbsh_warnings)
+    add_test(NAME ddbshlib_features_sample COMMAND ddbshlib_features_sample)
+    add_dependencies(ddbsh-tests ddbshlib_features_sample)
 
     # LIVE embedding sample (D28): built in-tree against ddbsh::aws and run
     # against REAL DynamoDB (us-east-1) via the standard ~/.aws chain. OFF by

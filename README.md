@@ -563,7 +563,11 @@ an `ALTER` → `DESCRIBE` round-trip; backups/restore, vector search, and the fu
 control-plane report formatting are not modeled (see the header for the exact
 scope). `examples/ddbshlib_inmemory_sample/` is a complete
 runnable version, built as a default-on, credential-less CTest
-(`ddbshlib_inmemory_sample`). See [`examples/README.md`](examples/README.md).
+(`ddbshlib_inmemory_sample`). For a tour of the Phase-5 embedding features —
+prepared statements, typed set/binary bind, lazy streaming, and transactions —
+see `examples/ddbshlib_features_sample/`, also offline over `MemoryClient` and
+built as a default-on CTest (`ddbshlib_features_sample`). See
+[`examples/README.md`](examples/README.md).
 
 > **Advanced / injection interface.** The lower-level engine SPI — `Session`,
 > `IDDBClient`, `ExecOutcome`, `OutcomeSink`, and `ddbsh::render::Renderer` —
