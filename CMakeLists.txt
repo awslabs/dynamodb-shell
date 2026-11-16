@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.11.0
+        VERSION 0.11.1
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -175,6 +175,32 @@ set_source_files_properties(
     "${GEN_DIR}/grammar.cpp" "${GEN_DIR}/lexer.cpp"
     PROPERTIES COMPILE_OPTIONS "-Wno-error")
 
+# --- ddbsh-wire: SDK-free AWS JSON 1.0 codec (ddbsh::wire, P6 / D-P6-13) ------
+# The JSON-string transport counterpart to ddbsh-aws (the AWS SDK transport):
+# serialize(request) -> (operation, AWS-JSON-1.0 body), and — in a later P6
+# sub-phase — parse(response) over the engine's SDK-free request/response
+# structs. It is portable, SDK-free, and terminal-free, built on ALL platforms
+# so its host unit tests run in the normal CI matrix independent of the
+# Emscripten target. The browser (Emscripten, DDBSH_BUILD_AWS=OFF) build links
+# this and NOT ddbsh-aws. It PUBLIC-links the engine purely for its SDK-free
+# public headers (the request structs); it uses no engine runtime symbols, and
+# it never pulls the AWS SDK (an engine_boundary_check-style invariant: nothing
+# under include/ddbsh/wire/ includes <aws/...>).
+add_library(ddbsh-wire wire/codec.cpp)
+add_library(ddbsh::wire ALIAS ddbsh-wire)
+# EXPORT_NAME `wire` so the INSTALLED imported target is `ddbsh::wire`, matching
+# the in-tree alias (the NAMESPACE `ddbsh::` prefixes the EXPORT_NAME).
+set_target_properties(ddbsh-wire PROPERTIES OUTPUT_NAME ddbsh-wire EXPORT_NAME wire
+                      POSITION_INDEPENDENT_CODE ON)
+target_include_directories(ddbsh-wire
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>)
+# ddbsh_warnings wrapped in $<BUILD_INTERFACE:> so it is not recorded in the
+# installed/exported link interface (it is not itself an exported target).
+target_link_libraries(ddbsh-wire
+    PUBLIC  ddbsh::ddbsh
+    PRIVATE $<BUILD_INTERFACE:ddbsh_warnings>)
+
 # --- CLI driver core (terminal-free, engine-only) ----------------------------
 # The terminal-free CLI driver (isql batch assembly + execute/exit loop) lives
 # in its own static lib so it can be linked by BOTH the CLI binary and the
@@ -302,6 +328,27 @@ if(DDBSH_BUILD_TESTS)
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
 
+    # --- ddbsh-wire EXPLAIN-vs-wire differential gate (P6a, P6-02 §9.1) ------
+    # The SDK-free ddbsh::wire serializer becomes a production codec the live
+    # browser transport depends on, so every byte it emits must match the AWS
+    # SDK. This test asserts serialize(in).body == AwsDDBClient::explain_request
+    # (in) (the raw SDK SerializePayload bytes) for a corpus covering every
+    # field and AttributeValue type of the data-plane ops. It needs the SDK
+    # (ddbsh::aws), so it is built only with DDBSH_BUILD_AWS; it makes no network
+    # call (serialization is offline). It provides its own main() to wrap the
+    # whole process in one AwsApiGuard, so it links GTest::gtest (not
+    # gtest_main). add_dependencies ties it to ddbsh-tests so run-tests'
+    # `--target ddbsh-tests` native step builds it and ctest runs it.
+    if(DDBSH_BUILD_AWS)
+        add_executable(ddbsh-wire-diff-tests tests/wire_serialize_diff_test.cpp)
+        target_include_directories(ddbsh-wire-diff-tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+        target_link_libraries(ddbsh-wire-diff-tests
+            PRIVATE ddbsh::wire ddbsh::aws ddbsh_warnings GTest::gtest)
+        add_test(NAME ddbsh_wire_serialize_diff COMMAND ddbsh-wire-diff-tests)
+        add_dependencies(ddbsh-tests ddbsh-wire-diff-tests)
+    endif()
+
     # D19 (P4d): the embedding API's own misuse messages must never appear in a
     # golden .exp — the CLI does not drive those paths, so the 705/705 CLI
     # fidelity contract stays intact. This gate makes that guarantee mechanical.
@@ -378,7 +425,7 @@ endif()
 #                        needs no SDK at all.
 include(CMakePackageConfigHelpers)
 
-install(TARGETS ddbsh
+install(TARGETS ddbsh ddbsh-wire
         EXPORT ddbsh-targets
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib
