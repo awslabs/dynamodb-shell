@@ -203,6 +203,15 @@ Json av(const Value& v) {
             o.members.emplace_back("N", make_string(v.s));
             break;
         case Value::Type::B:
+            // Emits v.s verbatim. This matches the SDK adapter (which base64-
+            // decodes then re-encodes) ONLY for CANONICAL standard-base64 input.
+            // Load-bearing assumption: every B value in the tree is already
+            // canonical (it originates from the parser or a response re-encode),
+            // so the adapter's round-trip is a no-op and bytes agree. A future
+            // source of non-canonical base64 (e.g. the P6b parse side, or raw
+            // user-supplied B/BS) must canonicalize before this point, or the
+            // differential gate's byte-parity contract breaks silently (the
+            // current corpus uses canonical input and cannot catch it).
             o.members.emplace_back("B", make_string(v.s));
             break;
         case Value::Type::BOOL:
@@ -252,6 +261,9 @@ Json av(const Value& v) {
             Json a = make_array();
             a.elements.reserve(v.set.size());
             for (const auto& s : v.set) {
+                // Each element emitted verbatim; same canonical-base64
+                // assumption as the B arm above (adapter round-trips, no-op for
+                // canonical input).
                 a.elements.push_back(make_string(s));
             }
             o.members.emplace_back("BS", std::move(a));

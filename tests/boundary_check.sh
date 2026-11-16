@@ -4,11 +4,14 @@
 #
 # boundary_check.sh — enforce the library/CLI boundary (tenet 3, §14 item 6).
 #
-# The engine library (include/ddbsh/ + src/) must never touch a terminal,
-# process globals, or perform its own I/O: no <iostream>, cout/cerr,
-# printf/fprintf/fputs, FILE*, or exit()/abort(). All output flows out as data
-# (ExecOutcome) and is formatted by the Renderer at the edge; the CLI writes
-# bytes. This check keeps the boundary from silently rotting.
+# The engine library (include/ddbsh/ + src/) and the SDK-free wire codec
+# (include/ddbsh/wire/ + wire/) must never touch a terminal, process globals, or
+# perform their own I/O: no <iostream>, cout/cerr, printf/fprintf/fputs, FILE*,
+# or exit()/abort(). All output flows out as data (ExecOutcome) and is formatted
+# by the Renderer at the edge; the CLI writes bytes. ddbsh-wire exists precisely
+# to run SDK-free and terminal-free inside the Emscripten engine target, so its
+# implementation is held to the same no-I/O rule. This check keeps the boundary
+# from silently rotting.
 #
 # Comments and string literals are stripped before matching so that prose
 # describing the rule (e.g. "no FILE*, no exit()") does not trip it. Generated
@@ -21,7 +24,7 @@
 set -euo pipefail
 
 ROOT="${1:?usage: boundary_check.sh <repo-root>}"
-SCAN_DIRS=("$ROOT/include/ddbsh" "$ROOT/src")
+SCAN_DIRS=("$ROOT/include/ddbsh" "$ROOT/src" "$ROOT/wire")
 
 # Fail legibly if an expected scan dir is missing (e.g. a future reorg moves
 # the tree) rather than letting `find` error out opaquely under `set -e`.
@@ -118,7 +121,7 @@ if [ -d "$ENGINE_HDR_DIR" ]; then
 fi
 
 if [ "$status" -eq 0 ]; then
-    echo "engine boundary check: clean (no terminal/I/O/exit in include/ddbsh + src;"
+    echo "engine boundary check: clean (no terminal/I/O/exit in include/ddbsh + src + wire;"
     echo "  no AWS SDK include in the SDK-free include/ddbsh/*.hpp headers)"
 fi
 exit "$status"
