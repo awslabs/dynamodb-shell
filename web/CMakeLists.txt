@@ -87,6 +87,9 @@ ddbsh_add_web_edition(ddbsh-wasm ddbsh-wasm transport_fetch.cpp ON)
 #                  vendor/extenddb/PROVENANCE.md),
 #   - harness.mjs  the P6d Node end-to-end smoke (SubmitTransport, in-tab ExtendDB),
 #   - harness-fetch.mjs  the P6f-a Node smoke (FetchTransport over a stub proxy),
+#   - harness-proxy.mjs  the P6f-b Node smoke (FetchTransport over the REAL
+#                        ddbsh-web-proxy against real DynamoDB; run by
+#                        devtools/run-proxy-smoke),
 #   - package.json marks the output as ES modules for Node,
 #   - index.html / app.js / app-core.mjs / styles.css  the P6e product UI (O-5),
 #   - app-core.test.mjs  the DOM-free app-core Node unit tests (D-P6e-3).
@@ -102,6 +105,7 @@ add_custom_command(TARGET ddbsh-wasm-extenddb-wasm POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_CURRENT_SOURCE_DIR}/harness.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/harness-fetch.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/harness-proxy.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
             "${CMAKE_CURRENT_SOURCE_DIR}/index.html"
             "${CMAKE_CURRENT_SOURCE_DIR}/app.js"

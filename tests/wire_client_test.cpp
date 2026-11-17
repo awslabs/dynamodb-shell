@@ -233,14 +233,35 @@ TEST(WireClient, ControlPlaneOpsDriveTheTransport) {
     EXPECT_TRUE(transport.drained());
 }
 
-// ---- connect records state, makes no call ----------------------------------
+// ---- connect records state and forwards to the transport -------------------
 
-TEST(WireClient, ConnectIsNoOpSuccess) {
+TEST(WireClient, ConnectForwardsToTransportOnConnect) {
+    // connect() records region/endpoint and forwards them to the transport as a
+    // control request (D-P6f-4). It issues no data-plane send(); the only
+    // transport interaction is the recorded on_connect.
     CannedTransport transport;
     WireClient client(transport);
-    auto r = client.connect("eu-west-1", "");
+    auto r = client.connect("eu-west-1", "https://example.test:18443");
     EXPECT_TRUE(r.has_value());
     EXPECT_TRUE(transport.calls().empty());
+    ASSERT_EQ(transport.connects().size(), 1u);
+    EXPECT_EQ(transport.connects()[0].region, "eu-west-1");
+    EXPECT_EQ(transport.connects()[0].endpoint, "https://example.test:18443");
+}
+
+TEST(WireClient, ConnectPropagatesTransportControlError) {
+    // A failing on_connect (e.g. the proxy rejected the control request) is
+    // returned by connect(). The Session treats this as non-fatal, but the
+    // client surfaces it faithfully (D-P6f-4).
+    CannedTransport transport;
+    transport.set_connect_error(
+        Error{Errc::service_error, "proxy rejected connect", std::nullopt, std::nullopt});
+    WireClient client(transport);
+    auto r = client.connect("us-east-1", "");
+    ASSERT_FALSE(r.has_value());
+    EXPECT_EQ(r.error().code, Errc::service_error);
+    EXPECT_EQ(r.error().message, "proxy rejected connect");
+    ASSERT_EQ(transport.connects().size(), 1u);
 }
 
 TEST(WireClient, ConnectionDescriptorDelegatesToTransport) {

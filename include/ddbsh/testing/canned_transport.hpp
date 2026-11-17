@@ -44,6 +44,12 @@ public:
         std::string body;
     };
 
+    /// A recorded on_connect() invocation (phase 6f, D-P6f-4).
+    struct ConnectCall {
+        std::string region;
+        std::string endpoint;
+    };
+
     /// Enqueue a success response body (returned by a later send()).
     void push_response(std::string body) {
         replies_.push_back(Reply{std::move(body), Error{}, false});
@@ -57,6 +63,16 @@ public:
     /// The recorded calls, in order.
     [[nodiscard]] const std::vector<Call>& calls() const { return calls_; }
 
+    /// The recorded on_connect() calls, in order (phase 6f, D-P6f-4).
+    [[nodiscard]] const std::vector<ConnectCall>& connects() const { return connects_; }
+
+    /// Script the next on_connect() to fail, proving WireClient::connect
+    /// propagates the transport's control-request error (phase 6f).
+    void set_connect_error(Error error) {
+        connect_error_ = std::move(error);
+        has_connect_error_ = true;
+    }
+
     /// Whether every scripted reply has been consumed.
     [[nodiscard]] bool drained() const { return replies_.empty(); }
 
@@ -65,6 +81,14 @@ public:
     void set_descriptor(std::string descriptor) { descriptor_ = std::move(descriptor); }
 
     std::string descriptor() const override { return descriptor_; }
+
+    Result<void> on_connect(const std::string& region, const std::string& endpoint) override {
+        connects_.push_back(ConnectCall{region, endpoint});
+        if (has_connect_error_) {
+            return fail(connect_error_);
+        }
+        return {};
+    }
 
     Result<std::string> send(std::string_view operation, std::string_view body) override {
         calls_.push_back(Call{std::string(operation), std::string(body)});
@@ -89,6 +113,9 @@ private:
 
     std::deque<Reply> replies_;
     std::vector<Call> calls_;
+    std::vector<ConnectCall> connects_;
+    Error connect_error_;
+    bool has_connect_error_ = false;
     std::string descriptor_ = "wire transport";
 };
 

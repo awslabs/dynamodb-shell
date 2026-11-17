@@ -52,6 +52,15 @@ class FetchTransport : public Transport {
 public:
     Result<std::string> send(std::string_view operation, std::string_view body) override;
 
+    /// Forward a CONNECT to the proxy as a control request (phase 6f, D-P6f-4).
+    /// Bridges to the JS global `Module.connectDdb(region, endpoint) ->
+    /// Promise<string>` via Asyncify: the hook POSTs to the proxy's `/connect`
+    /// so later `/ddb` sends sign for the new target. The resolved string is
+    /// empty on success and an error message on failure; a missing hook is
+    /// treated as a no-op success (the glue may manage the connection out of
+    /// band). A thrown/rejected hook is a non-fatal transport error.
+    Result<void> on_connect(const std::string& region, const std::string& endpoint) override;
+
     /// SHOW CONNECTION descriptor (phase 6f, D-P6f-9): the proxy-forwarded
     /// backend binding. P6f-a reports the static transport kind; a later slice
     /// may enrich it with the live proxy version/endpoint once the proxy

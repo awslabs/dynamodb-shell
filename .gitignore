@@ -35,6 +35,9 @@
 # build-golden/, and CMake preset dirs under build/)
 build*
 
+# Rust proxy (ddbsh-web-proxy) build output. Cargo.lock IS tracked (binary crate).
+/proxy/target/
+
 # Test artifacts are staged here by devtools/run-tests and tracked in the
 # orchestration repo's discussions/ (named by HEAD short hash), not here.
 /discussions/

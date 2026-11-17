@@ -24,6 +24,7 @@ page a human opens in a browser and types into.
 | `styles.css` | minimal monospace styling (P6e) |
 | `harness.mjs` | the P6d end-to-end **Node** smoke, in-tab edition (not the product UI) |
 | `harness-fetch.mjs` | the P6f-a end-to-end **Node** smoke, fetch edition over a stubbed proxy |
+| `harness-proxy.mjs` | the P6f-b end-to-end **Node** smoke, fetch edition over the **real** `ddbsh-web-proxy` against **real DynamoDB** (run by `devtools/run-proxy-smoke`) |
 | `package.json` | marks the build output as ES modules for Node |
 | `vendor/extenddb/` | the pinned, vendored in-browser ExtendDB adapter (see `vendor/extenddb/PROVENANCE.md`) |
 
@@ -48,12 +49,48 @@ backend a page is driving. The in-tab edition reports
 `wire/submit -> in-tab ExtendDB`; the proxy edition reports
 `wire/fetch -> POST /ddb (proxy)`.
 
-P6f-a delivers the FetchTransport edition and proves it round-trips against a
-**stubbed** proxy (the fetch harness wires `Module.fetchDdb` to the same in-tab
-ExtendDB adapter). The native `ddbsh-web-proxy` (real SigV4 + fetch) and the
-final UI edition-selection land in P6f-b…e. The `ddbsh` vs `ddbsh-extenddb`
-output-filename convention is also settled in P6f-e; for now the in-tab edition
-keeps `ddbsh.js` so the existing P6e UI and the P6d smoke stay green unchanged.
+P6f-a delivered the FetchTransport edition and proved it round-trips against a
+**stubbed** proxy. **P6f-b delivers the native `ddbsh-web-proxy`** (real SigV4 +
+fetch) and proves the whole real path against real DynamoDB (see "Real backend
+via ddbsh-web-proxy" below). The final UI edition-selection and the `ddbsh` vs
+`ddbsh-extenddb` output-filename convention land in P6f-e; for now the in-tab
+edition keeps `ddbsh.js` so the existing P6e UI and the P6d smoke stay green
+unchanged.
+
+## Real backend via ddbsh-web-proxy (P6f-b)
+
+The fetch edition (`ddbsh-wasm`) holds **no credentials** and cannot call
+DynamoDB directly (no CORS). The native **`ddbsh-web-proxy`** (in `proxy/`, a Rust
+single binary) is the companion that makes the real path work: it serves the
+static bundle, holds per-session connection state, and on `POST /ddb` SigV4-signs
+the browser's AWS-JSON-1.0 body with credentials resolved from the host's AWS
+chain and forwards it to the session's DynamoDB / ExtendDB endpoint. The response
+(including a DynamoDB `__type` error document) is relayed back for the
+`ddbsh-wire` codec to map. Credentials never reach the browser.
+
+The JS glue the fetch edition expects:
+
+- `Module.fetchDdb(op, body) -> Promise<string>` — POST `body` to the proxy's
+  `/ddb` with headers `content-type: application/x-amz-json-1.0`,
+  `x-ddbsh-op: <op>`, `x-ddbsh-session`, `x-ddbsh-token`. Resolve with the
+  response body on 2xx or a DynamoDB `__type` error; reject on a transport
+  failure.
+- `Module.connectDdb(region, endpoint) -> Promise<string>` — POST
+  `{region, endpoint?}` to `/connect` (same session headers). Resolve `""` on
+  success, an error message otherwise. The engine's `CONNECT` statement fires
+  this through `FetchTransport::on_connect` so the proxy re-targets.
+
+Before either, the page does the one-time handshake: `POST /session` (same
+origin) mints `{session, token}`. See `harness-proxy.mjs` for the reference
+implementation (the browser UI wiring is P6f-e).
+
+**Security (builder-security, followed as policy; see `proxy/README.md`):** the
+proxy binds **loopback only** and is **not configurable** to bind wider (remote
+access is an `ssh -L` tunnel); an **origin + per-session-token** guard stops a
+malicious same-browser page from driving it; a **user-owned egress policy**
+(`~/.ddbsh_web_proxy_security`, anchored allow/block regexes, block wins; default
+= loopback + DynamoDB host families, IMDS blocked) bounds where the credentialed
+relay may be pointed.
 
 ## Architecture
 
@@ -158,6 +195,18 @@ devtools/run-web-smoke          # builds both editions + runs harness.mjs, harne
 cd build-preset/wasm-release/web && node harness.mjs && node harness-fetch.mjs && node app-core.test.mjs
 ```
 
+`run-web-smoke` is **offline** (no credentials, no network): in-tab ExtendDB and
+the stubbed-proxy fetch path. The **real-backend** gate is separate:
+
+```bash
+devtools/run-proxy-smoke        # builds the proxy + fetch wasm, launches the proxy on loopback,
+                                # runs harness-proxy.mjs against REAL DynamoDB, writes an artifact
+```
+
+`run-proxy-smoke` talks to a **real AWS account** via the host's AWS chain: it
+creates and drops one `ddbsh_web_proxy_*`-prefixed on-demand table and cleans it
+up. A missing credential is an infrastructure failure, not a skip.
+
 The smoke instantiates the module, wires `Module.submit` to the vendored
 ExtendDB adapter, and runs a full op-family sequence (CREATE/INSERT/GetItem/
 Query/EXPLAIN/UPDATE/DELETE/SHOW LIMITS/DROP) plus two error-degradation paths
@@ -196,14 +245,15 @@ nothing here weakens it.)
 | ALTER TABLE … REPLICA | UpdateTable (ReplicationGroupUpdate) | **Unsupported** (global tables) → clean `__type` error |
 | BACKUP / DROP BACKUP / DESCRIBE BACKUP / RESTORE / SHOW BACKUPS | CreateBackup/DeleteBackup/DescribeBackup/RestoreTable*/ListBackups | **Unsupported in the port** (adapter stubs backup/restore) → clean out-of-scope error |
 | transactions | TransactGetItems, TransactWriteItems | **Supported** |
-| CONNECT | (client reconfigure) | **No-op** in-browser (single fixed backend); refreshes the region label only |
+| CONNECT | (client reconfigure) | **No-op** in-browser (single fixed backend); refreshes the region label only. In the **fetch edition** `CONNECT` forwards to `ddbsh-web-proxy` (`/connect`) so the proxy re-targets the session's region/endpoint. |
 
 ## Boundaries (unchanged invariants)
 
 - The engine (`include/ddbsh/*.hpp`, `src/`) and `ddbsh-wire` stay SDK-free and
   terminal-free (`engine_boundary_check`). `<emscripten.h>` appears only in
-  `transport_browser.cpp` (the WASM target, not `ddbsh-wire`) and in the single
-  pre-ratified `#if __EMSCRIPTEN__` arm of `WireClient::poll_delay`.
+  `transport_browser.cpp` and `transport_fetch.cpp` (the WASM target, not
+  `ddbsh-wire`) and in the single pre-ratified `#if __EMSCRIPTEN__` arm of
+  `WireClient::poll_delay`.
 - The batch-execution policy is shared with the CLI via
   `ddbsh::cli::run_batch` (`cli/repl.*`) — no duplicated, drift-prone copy.
 - The CLI and the real-DDB golden suite are untouched; the golden contract

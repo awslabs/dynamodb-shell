@@ -1,0 +1,43 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-web-proxy — the native local companion for the real-backend web UI
+# (phase 6f, D-P6f-3). A small, generic SigV4 signing relay that keeps AWS
+# credentials out of the browser: it serves the static ddbsh-wasm bundle, holds
+# per-session connection state, and on POST /ddb SigV4-signs the browser's
+# AWS-JSON-1.0 body and forwards it to the session's DynamoDB / ExtendDB
+# endpoint. It contains NO ddbsh engine logic — the engine is the WASM artifact.
+#
+# Portability: a single static binary with a trivial cross-compile (Linux built
+# + tested here; Windows/macOS made to build with a CI matrix, D-P6f-11).
+
+[package]
+name = "ddbsh-web-proxy"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+description = "Local SigV4 signing relay for the ddbsh real-backend web UI"
+publish = false
+
+[[bin]]
+name = "ddbsh-web-proxy"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "io-util", "fs"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"] }
+bytes = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+aws-config = "1"
+aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
+aws-sigv4 = "1"
+aws-smithy-runtime-api = "1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

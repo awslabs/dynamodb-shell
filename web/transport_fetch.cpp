@@ -51,6 +51,34 @@ EM_ASYNC_JS(char*, ddbsh_wire_fetch, (const char* op, const char* body), {
     }
 });
 
+// Asyncify-suspending call into the JS Promise `Module.connectDdb(region,
+// endpoint)` (D-P6f-4). The hook POSTs to the proxy's `/connect` so later `/ddb`
+// sends sign for the new target. Always returns a malloc'd, NUL-terminated C
+// string the C++ side owns and frees: empty ("") on success, an error message
+// otherwise. A missing hook is a no-op success (the glue may establish the
+// proxy connection out of band at bootstrap); a thrown/rejected hook yields an
+// error message. Credentials never cross this seam — only the target names.
+EM_ASYNC_JS(char*, ddbsh_wire_connect, (const char* region, const char* endpoint), {
+    function dup(s) {
+        const str = (typeof s === "string") ? s : "";
+        const len = lengthBytesUTF8(str) + 1;
+        const buf = _malloc(len);
+        stringToUTF8(str, buf, len);
+        return buf;
+    }
+    try {
+        if (typeof Module === "undefined" || typeof Module.connectDdb !== "function") {
+            return dup("");  // no control hook wired -> no-op success
+        }
+        const r = UTF8ToString(region);
+        const e = UTF8ToString(endpoint);
+        const msg = await Module.connectDdb(r, e);
+        return dup(typeof msg === "string" ? msg : "");
+    } catch (ex) {
+        return dup("proxy connect failed: " + ((ex && ex.message) ? ex.message : String(ex)));
+    }
+});
+
 namespace ddbsh::wire {
 
 Result<std::string> FetchTransport::send(std::string_view operation, std::string_view body) {
@@ -74,6 +102,21 @@ Result<std::string> FetchTransport::send(std::string_view operation, std::string
 }
 
 std::string FetchTransport::descriptor() const { return "wire/fetch -> POST /ddb (proxy)"; }
+
+Result<void> FetchTransport::on_connect(const std::string& region, const std::string& endpoint) {
+    char* raw = ddbsh_wire_connect(region.c_str(), endpoint.c_str());
+    if (raw == nullptr) {
+        // Defensive: the bridge always returns a malloc'd string, but a null
+        // (OOM) is treated as a transport-level failure.
+        return fail(Errc::service_error, "wire transport: proxy connect failed");
+    }
+    std::string msg(raw);
+    std::free(raw);
+    if (!msg.empty()) {
+        return fail(Errc::service_error, "wire transport: " + msg);
+    }
+    return {};
+}
 
 }  // namespace ddbsh::wire
 

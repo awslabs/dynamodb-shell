@@ -48,6 +48,20 @@ public:
     /// "Query") and return the response body.
     virtual Result<std::string> send(std::string_view operation, std::string_view body) = 0;
 
+    /// Notify the transport that a CONNECT changed the target region/endpoint
+    /// (phase 6f, D-P6f-4). WireClient::connect calls this after it records the
+    /// new state, so a backend-bound transport can re-target before the next
+    /// send(). The wire/fetch path forwards it to ddbsh-web-proxy as a control
+    /// request (the proxy signs later sends for the new region/endpoint); the
+    /// in-tab submit path and the test doubles need no reconnection, so the
+    /// default is a no-op success. A returned Error is non-fatal at the Session
+    /// layer (CONNECT is best-effort, mirroring the original's reconnect()).
+    virtual Result<void> on_connect(const std::string& region, const std::string& endpoint) {
+        (void)region;
+        (void)endpoint;
+        return {};
+    }
+
     /// A short, SDK-free description of this transport for SHOW CONNECTION
     /// (phase 6f, D-P6f-9): the transport kind and, where known, its backend
     /// binding (e.g. "wire/fetch -> POST /ddb (proxy)",

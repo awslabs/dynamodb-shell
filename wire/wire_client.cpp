@@ -79,7 +79,13 @@ Result<Out> round_trip(Transport& transport, const WireRequest& req,
 Result<void> WireClient::connect(const std::string& region, const std::string& endpoint) {
     region_ = region;
     endpoint_ = endpoint;
-    return {};
+    // Forward the new target to the transport so a backend-bound transport (the
+    // wire/fetch proxy path) can re-target before the next send() (D-P6f-4). The
+    // default Transport::on_connect is a no-op success, so the in-tab submit path
+    // and the host test doubles are unaffected. CONNECT is best-effort: the
+    // Session ignores this result (the original's reconnect() was non-fatal), so
+    // a failed proxy reconnect still records the new region/endpoint locally.
+    return transport_.on_connect(region, endpoint);
 }
 
 std::string WireClient::connection_descriptor() const {
