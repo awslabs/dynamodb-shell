@@ -20,6 +20,8 @@ browser); the third runs an in-browser database with no server at all:
    edition is pre-release**: it depends on the ExtendDB WebAssembly adapter,
    which ddbsh does not ship (a drop-in; see "In-browser ExtendDB edition"
    below). It is complete when an official ExtendDB WebAssembly release exists.
+   Being the zero-install, trivially cross-platform edition, it is also the
+   **Windows baseline** the maintainer hand-verifies (design §11).
 
 P6d delivered the **target + bridge + embind surface + a Node smoke**; P6e added
 the **product UI** (`index.html`/`app.js`, history, file upload, result pane);
@@ -33,9 +35,9 @@ ExtendDB server wiring).
 | `CMakeLists.txt` | the two WASM editions (shared engine+wire+cli-core; one links `SubmitTransport`, one links `FetchTransport` — see "Two editions" below) |
 | `bindings.cpp` | the embind surface: `DdbshSession.run(text) -> RunResult{stdout,stderr,ok,status}`; picks the transport by `DDBSH_WEB_FETCH` (WASM-only) |
 | `transport_browser.cpp` | the Asyncify bridge: `SubmitTransport::send` → `EM_ASYNC_JS` → `await Module.submit(op,body)` (in-tab edition, WASM-only) |
-| `transport_fetch.cpp` | the Asyncify bridge: `FetchTransport::send` → `EM_ASYNC_JS` → `await Module.fetchDdb(op,body)` (real-backend/proxy edition, WASM-only) |
+| `transport_fetch.cpp` | the Asyncify bridge: `FetchTransport::send`/`on_connect` → `EM_ASYNC_JS` → `await Module.fetchDdb/connectDdb` (real-backend/proxy edition, WASM-only) |
 | `index.html` | the product page: connection panel, result pane, editor + toolbar (P6e) |
-| `app.js` | thin DOM wiring: instantiate the modules, wire `Module.submit`, bind events, paint via `textContent` (P6e) |
+| `app.js` | thin DOM wiring: auto-select the edition (probe the proxy `/healthz`), instantiate the module, wire `Module.submit` (in-tab) or `Module.fetchDdb`/`connectDdb` + the proxy handshake (fetch), bind events, paint via `textContent` (P6e/P6f-e) |
 | `app-core.mjs` | **DOM-free** logic: history ring, prompt string, transcript model, file→submission, run guard (P6e) |
 | `app-core.test.mjs` | Node unit tests for `app-core.mjs` (zero deps, no DOM, no WASM) (P6e) |
 | `styles.css` | minimal monospace styling (P6e) |
@@ -59,22 +61,21 @@ only by the linked wire `Transport` (D-P6f-2):
 
 | Target | Transport | JS hook | Output | Backend |
 |--------|-----------|---------|--------|---------|
-| `ddbsh-wasm-extenddb-wasm` | `SubmitTransport` | `Module.submit(op,body)` | `ddbsh.js`/`ddbsh.wasm` | in-tab ExtendDB (no server, no credentials, no network) |
-| `ddbsh-wasm` | `FetchTransport` | `Module.fetchDdb(op,body)` | `ddbsh-wasm.js`/`ddbsh-wasm.wasm` | `ddbsh-web-proxy` → real DynamoDB / real ExtendDB (proxy signs; the browser never holds credentials) |
+| `ddbsh-wasm` | `FetchTransport` | `Module.fetchDdb(op,body)` + `Module.connectDdb(region,endpoint)` | `ddbsh.js`/`ddbsh.wasm` | `ddbsh-web-proxy` → real DynamoDB / real ExtendDB (proxy signs; the browser never holds credentials) — the **primary** production edition |
+| `ddbsh-wasm-extenddb-wasm` | `SubmitTransport` | `Module.submit(op,body)` | `ddbsh-extenddb.js`/`ddbsh-extenddb.wasm` | in-tab ExtendDB (no server, no credentials, no network) — **pre-release** |
 
 `SHOW CONNECTION` reports the running composition (library version, region /
 endpoint, and the transport/backend binding) so you can tell which edition and
 backend a page is driving. The in-tab edition reports
 `wire/submit -> in-tab ExtendDB`; the proxy edition reports
-`wire/fetch -> POST /ddb (proxy)`.
+`wire/fetch -> POST /ddb (proxy)`, enriched after the handshake/CONNECT with the
+live proxy version and the connected endpoint, e.g.
+`wire/fetch -> POST /ddb (proxy 0.11.14 -> https://127.0.0.1:18443)` (D-P6f-9).
 
-P6f-a delivered the FetchTransport edition and proved it round-trips against a
-**stubbed** proxy. **P6f-b delivers the native `ddbsh-web-proxy`** (real SigV4 +
-fetch) and proves the whole real path against real DynamoDB (see "Real backend
-via ddbsh-web-proxy" below). The final UI edition-selection and the `ddbsh` vs
-`ddbsh-extenddb` output-filename convention land in P6f-e; for now the in-tab
-edition keeps `ddbsh.js` so the existing P6e UI and the P6d smoke stay green
-unchanged.
+The `ddbsh` vs `ddbsh-extenddb` output-filename convention (ratified P6f-e):
+the production proxy edition owns the clean `ddbsh` name; the in-browser ExtendDB
+edition is suffixed. The product UI (`app.js`) loads whichever edition fits how
+the page is served — see "Run the UI" — so one `index.html` bundle drives both.
 
 ## Real backend via ddbsh-web-proxy (P6f-b)
 
@@ -178,25 +179,30 @@ relay may be pointed.
 ## Architecture
 
 ```
-  Browser page (P6d: harness; P6e: product UI)
-    │  await ExtendDb.create();  Module.submit = (op,b) => db.submit(op,b);
+  Browser page (P6e/P6f-e product UI; app.js auto-selects the edition)
+    │  in-tab:  await ExtendDb.create(); Module.submit = (op,b) => db.submit(op,b);
+    │  proxy:   /session handshake; Module.fetchDdb/connectDdb POST to the proxy;
     │  const s = new Module.DdbshSession("us-east-1");  s.run(text);
     ▼
-  ddbsh.js (Emscripten ES6 glue)  +  ddbsh.wasm
+  ddbsh-extenddb.js / ddbsh.js (Emscripten ES6 glue)  +  the matching .wasm
     ├─ bindings.cpp (embind DdbshSession.run -> RunResult)
     ├─ engine (lex|parse|plan|execute|render)  — SDK-free, terminal-free
     ├─ ddbsh-wire (serialize/parse + WireClient)
-    └─ transport_browser.cpp  SubmitTransport::send
-          -> EM_ASYNC_JS ddbsh_wire_submit -> await Module.submit(op,body)  ◄─ Asyncify suspend
+    └─ transport (one per edition):
+         in-tab: transport_browser.cpp  SubmitTransport::send
+                 -> EM_ASYNC_JS -> await Module.submit(op,body)       ◄─ Asyncify suspend
+         proxy:  transport_fetch.cpp    FetchTransport::send/on_connect
+                 -> EM_ASYNC_JS -> await Module.fetchDdb/connectDdb    ◄─ Asyncify suspend
     ▼ (JS)
-  extenddb_wasm_adapter.wasm (drop-in; in-memory SQLite)
+  in-tab: extenddb_wasm_adapter.wasm (drop-in; in-memory SQLite)
+  proxy:  fetch() -> ddbsh-web-proxy (SigV4) -> real DynamoDB / real ExtendDB
 ```
 
-The engine's synchronous `IDDBClient` call path drives ExtendDB's async
-`submit(op, body) -> Promise<string>` through a single `EM_ASYNC_JS` function.
-`-sASYNCIFY` suspends and resumes the whole C++ stack on each `await`, so one
-`IDDBClient` call that fans out to many backend calls (Query/Scan paging, the
-table waiters, bulk UPDATE/DELETE) suspends per backend call transparently.
+The engine's synchronous `IDDBClient` call path drives the backend's async
+`submit`/`fetch` through a single `EM_ASYNC_JS` function. `-sASYNCIFY` suspends
+and resumes the whole C++ stack on each `await`, so one `IDDBClient` call that
+fans out to many backend calls (Query/Scan paging, the table waiters, bulk
+UPDATE/DELETE) suspends per backend call transparently.
 
 ## Prerequisite — the Emscripten SDK (emsdk)
 
@@ -232,8 +238,9 @@ emcmake cmake --preset wasm-release   # DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_WEB=ON,
 cmake --build build-preset/wasm-release
 ```
 
-Output lands in `build-preset/wasm-release/web/`: `ddbsh.js`, `ddbsh.wasm`,
-`ddbsh-wasm.js`, `ddbsh-wasm.wasm`, and (staged by a POST_BUILD step) ddbsh's own
+Output lands in `build-preset/wasm-release/web/`: `ddbsh.js`, `ddbsh.wasm` (the
+fetch/proxy edition), `ddbsh-extenddb.js`, `ddbsh-extenddb.wasm` (the in-tab
+edition), and (staged by a POST_BUILD step) ddbsh's own
 `harness.mjs`, `harness-fetch.mjs`, `package.json`, and the
 P6e UI bundle (`index.html`, `app.js`, `app-core.mjs`, `app-core.test.mjs`,
 `styles.css`). The in-browser ExtendDB adapter (`vendor/extenddb/`) is **not**
@@ -248,22 +255,55 @@ WASM + ES modules **cannot load from `file://`** (module CORS + the
 `application/wasm` MIME requirement), so the bundle must be served over HTTP. The
 app shows a one-line banner and refuses to start if opened from `file://`.
 
-```bash
-devtools/serve-web            # builds the preset if needed, then serves :8080
-# or, by hand, from the build output dir:
-cd build-preset/wasm-release/web && python3 -m http.server --bind 127.0.0.1 8080
-```
+The one `index.html` bundle drives **both** editions; `app.js` auto-selects at
+startup by probing the companion proxy's `/healthz`:
 
-Then open <http://localhost:8080/>. No cross-origin-isolation (COOP/COEP) headers
-are required: the target uses Asyncify, not threads/SharedArrayBuffer, so plain
-`http.server` is enough. (A future threaded build would need COOP/COEP.)
+- **Served by `ddbsh-web-proxy`** → the probe succeeds → the **fetch edition**
+  (`ddbsh.js`) loads, does the `/session` handshake, wires
+  `Module.fetchDdb`/`Module.connectDdb` to the proxy, and talks to the **real**
+  backend. This is the production path.
+
+  ```bash
+  ddbsh-web-proxy --serve --webroot build-preset/wasm-release/web   # then open http://localhost:8456/
+  ```
+
+- **Served by a plain static server** → the probe fails → the **in-tab edition**
+  (`ddbsh-extenddb.js`) loads against in-browser ExtendDB (pre-release; no
+  server, no credentials).
+
+  ```bash
+  devtools/serve-web            # builds the preset if needed, then serves :8080 (loopback)
+  # or, by hand, from the build output dir:
+  cd build-preset/wasm-release/web && python3 -m http.server --bind 127.0.0.1 8080
+  ```
+
+Then open the printed URL. No cross-origin-isolation (COOP/COEP) headers are
+required: the target uses Asyncify, not threads/SharedArrayBuffer, so plain
+`http.server` (or the proxy's static serving) is enough. (A future threaded build
+would need COOP/COEP.)
 
 `devtools/serve-web` binds **loopback (127.0.0.1) only** by default, so the bundle
 is reachable only from this machine. To hand-test from another machine, prefer an
 SSH local port-forward (`ssh -L 8080:localhost:8080 host`). If you knowingly want
 the server reachable on your LAN, set the bind explicitly —
 `DDBSH_SERVE_BIND=0.0.0.0 devtools/serve-web` — which exposes the (credential-free)
-bundle to every host that can route to this interface.
+in-browser bundle to every host that can route to this interface. (The proxy
+edition is never served this way: `ddbsh-web-proxy` binds loopback only and is
+not configurable.)
+
+**Pointing the proxy edition at a local ExtendDB.** A `CONNECT <region> WITH
+ENDPOINT "<url>"` to a non-AWS endpoint needs the per-endpoint credential wiring
+(a named AWS profile holding ExtendDB's issued key + a CA bundle for its
+self-signed cert — see "Local ExtendDB via the proxy"). Supply them on the page
+URL as query parameters, which `app.js` attaches to endpoint-override CONNECTs:
+
+```
+http://localhost:8456/?profile=extenddb&ca_bundle=/home/you/.extenddb/tls/cert.pem
+```
+
+Neither is a secret (a profile name + a file path); the proxy resolves the actual
+key from that `~/.aws` profile and it never reaches the browser. A plain real-AWS
+`CONNECT <region>` needs no parameters (the proxy signs with the default chain).
 
 Using the UI:
 
@@ -278,7 +318,9 @@ Using the UI:
   added to the command history.
 - **Clear** empties the transcript pane (not the history).
 - There is **no `~/.ddbsh_config`** in the browser; the session starts in
-  `us-east-1` against the in-browser ExtendDB backend.
+  `us-east-1`. In the in-tab edition that is the in-browser ExtendDB backend; in
+  the proxy edition it is real AWS DynamoDB (`us-east-1`) via the signing proxy,
+  and `CONNECT` re-targets the proxy session.
 
 ## Smoke (Node, no browser)
 
@@ -329,7 +371,8 @@ default gate; see the P6e design discussion).
 
 ## In-browser ExtendDB edition (P6f-d, pre-release)
 
-The submit edition (`ddbsh-wasm-extenddb-wasm`, output `ddbsh.js`/`ddbsh.wasm`)
+The submit edition (`ddbsh-wasm-extenddb-wasm`, output
+`ddbsh-extenddb.js`/`ddbsh-extenddb.wasm`)
 runs an **in-browser ExtendDB** engine (in-memory SQLite) with **no server, no
 network, no credentials, no TLS** — the whole shell runs in-process in the tab.
 Because it holds no credentials and makes no AWS call, this edition is safe to
