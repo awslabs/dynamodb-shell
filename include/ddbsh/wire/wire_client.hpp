@@ -58,10 +58,13 @@ public:
     Result<UpdateItemOut> update_item(const UpdateItemIn& in) override;
     Result<DeleteItemOut> delete_item(const DeleteItemIn& in) override;
 
-    // ---- SDK-free EXPLAIN for the six data-plane alternatives ---------------
-    // Returns serialize(x).body for a data-plane alternative (byte-proven == the
-    // SDK's SerializePayload by P6a's differential gate); the other alternatives
-    // return not_implemented until P6c extends the visit.
+    // ---- SDK-free EXPLAIN for every ExplainRequest alternative (P6c-a) ------
+    // Returns serialize(x).body for every alternative — byte-proven == the SDK's
+    // SerializePayload by the differential gate (P6c-a extended the P6a corpus to
+    // all serializable ops). No alternative returns not_implemented. The one
+    // fallible arm, RestoreToPitrIn, validates the restore timestamp via
+    // iso8601_to_epoch first and returns the adapter's exact
+    // "Invalid restore timestamp: …" invalid_argument Error before serializing.
     Result<std::string> explain_request(const ExplainRequest& req) override;
 
     // ---- control plane / backup-restore / transactions / waiters (P6c-b) ---
