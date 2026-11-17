@@ -82,6 +82,12 @@ Result<void> WireClient::connect(const std::string& region, const std::string& e
     return {};
 }
 
+std::string WireClient::connection_descriptor() const {
+    // The wire client is a thin shell over its Transport; the Transport knows
+    // its own kind and backend binding (D-P6f-9). Report it verbatim.
+    return transport_.descriptor();
+}
+
 Result<GetItemOut> WireClient::get_item(const GetItemIn& in) {
     return round_trip<GetItemOut>(transport_, serialize(in), &parse_get_item);
 }

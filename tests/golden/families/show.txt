@@ -40,6 +40,17 @@
 add_test(NAME ishow-version COMMAND ddbshtest -q -c "show version")
 set_property(TEST ishow-version PROPERTY PASS_REGULAR_EXPRESSION "ddbsh - version [0-9]+\\.[0-9]+(\\.[0-9]+)*")
 
+# SHOW CONNECTION (phase 6f, D-P6f-9) is an additive extension with no oracle
+# counterpart, and its output carries the running version plus the backend
+# binding, so — like SHOW VERSION and SHOW LIMITS — it is covered
+# version-agnostically with a PASS_REGULAR_EXPRESSION asserting the report
+# STRUCTURE. Driven through the CLI (ddbshtest), the client is AwsDDBClient, so
+# the Backend line reports the direct AWS SDK binding. Region/Endpoint come from
+# the standard AWS resolution chain, so they are matched loosely.
+add_test(NAME ishow-connection COMMAND ddbshtest -q -c "show connection")
+set_property(TEST ishow-connection PROPERTY PASS_REGULAR_EXPRESSION
+    "ddbsh - version [0-9]+\\.[0-9]+(\\.[0-9]+)*\nRegion: .*\nEndpoint: .*\nBackend: aws-sdk-cpp \\(direct DynamoDB\\)")
+
 add_test(NAME iconnect COMMAND ddbshtest -q -T ${RD}/iconnect.exp -c "connect \"us-east-1\";")
 
 add_test(NAME isct COMMAND ddbshtest -q -T ${RD}/isct.exp -c "create table ddbsh_sct ( pk number, rk number ) primary key (pk hash, rk range); show create table ddbsh_sct; drop table ddbsh_sct;")

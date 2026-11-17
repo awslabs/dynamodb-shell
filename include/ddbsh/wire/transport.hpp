@@ -47,6 +47,13 @@ public:
     /// Send `body` for `operation` (the X-Amz-Target suffix, e.g. "GetItem",
     /// "Query") and return the response body.
     virtual Result<std::string> send(std::string_view operation, std::string_view body) = 0;
+
+    /// A short, SDK-free description of this transport for SHOW CONNECTION
+    /// (phase 6f, D-P6f-9): the transport kind and, where known, its backend
+    /// binding (e.g. "wire/fetch -> POST /ddb (proxy)",
+    /// "wire/submit -> in-tab ExtendDB"). Default returns a generic label a
+    /// concrete transport refines. Purely informational; contacts nothing.
+    virtual std::string descriptor() const { return "wire transport"; }
 };
 
 }  // namespace ddbsh::wire

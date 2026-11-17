@@ -4,13 +4,16 @@
 // bindings.cpp — the embind surface for the browser (P6d, D-P6d-5).
 //
 // Exposes a single `DdbshSession` class to JavaScript. It owns the whole
-// SDK-free engine stack — a SubmitTransport (Asyncify bridge to
-// `Module.submit`), a WireClient over it, and a ddbsh::Session — and runs one
-// submission of `;`-separated statements through the SAME batch pipeline the
-// CLI uses (ddbsh::cli::run_batch), buffering the rendered bytes into a
-// RunResult instead of writing to file descriptors. No engine logic lives in
-// JS (tenet 3): JS owns only module instantiation and the `Module.submit`
-// wiring to the in-browser ExtendDB adapter.
+// SDK-free engine stack — the edition's Transport (FetchTransport bridging to
+// `Module.fetchDdb` for the real-backend `ddbsh-wasm` edition, or
+// SubmitTransport bridging to `Module.submit` for the in-tab
+// `ddbsh-wasm-extenddb-wasm` edition; selected at compile time via
+// DDBSH_WEB_FETCH, D-P6f-2), a WireClient over it, and a ddbsh::Session — and
+// runs one submission of `;`-separated statements through the SAME batch
+// pipeline the CLI uses (ddbsh::cli::run_batch), buffering the rendered bytes
+// into a RunResult instead of writing to file descriptors. No engine logic
+// lives in JS (tenet 3): JS owns only module instantiation and the
+// `Module.submit`/`Module.fetchDdb` wiring to the backend.
 //
 // WASM-only: this TU is compiled solely for the Emscripten web target.
 
@@ -25,9 +28,25 @@
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
-#include "ddbsh/wire/submit_transport.hpp"
 #include "ddbsh/wire/wire_client.hpp"
 #include "repl.hpp"
+
+// Transport selection (P6f, D-P6f-2). One engine/codec/UI, two leaf transports:
+// the `ddbsh-wasm` edition links FetchTransport (-> ddbsh-web-proxy -> real
+// DynamoDB/ExtendDB); the `ddbsh-wasm-extenddb-wasm` edition links
+// SubmitTransport (-> in-tab ExtendDB). The CMake target sets DDBSH_WEB_FETCH
+// for the fetch edition; everything else in this TU is shared verbatim.
+#if defined(DDBSH_WEB_FETCH)
+#include "ddbsh/wire/fetch_transport.hpp"
+namespace {
+using WebTransport = ddbsh::wire::FetchTransport;
+}  // namespace
+#else
+#include "ddbsh/wire/submit_transport.hpp"
+namespace {
+using WebTransport = ddbsh::wire::SubmitTransport;
+}  // namespace
+#endif
 
 namespace {
 
@@ -95,8 +114,9 @@ private:
     // borrows transport_, Session borrows client_. Declaring transport_ ->
     // client_ -> session_ makes construction (and reverse-order destruction)
     // respect the borrow chain (the "must outlive" contracts in
-    // wire_client.hpp / session.hpp).
-    ddbsh::wire::SubmitTransport transport_;
+    // wire_client.hpp / session.hpp). WebTransport is the edition's transport
+    // (FetchTransport or SubmitTransport — selected above, D-P6f-2).
+    WebTransport transport_;
     ddbsh::wire::WireClient client_;
     ddbsh::Session session_;
     ddbsh::render::Renderer renderer_;

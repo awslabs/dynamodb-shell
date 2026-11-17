@@ -884,6 +884,16 @@ public:
     /// raw body (P2a-03 §4.3). This is the sole EXPLAIN seam; the engine's
     /// executors wrap the body in `ApiName(...)` and pick the format.
     virtual Result<std::string> explain_request(const ExplainRequest&) = 0;
+
+    /// A short, SDK-free, human-readable description of what this client talks
+    /// to: the transport kind and, where known, its backend binding. Reported
+    /// by SHOW CONNECTION (phase 6f, D-P6f-9) so the engine can describe the
+    /// running composition without knowing which concrete client is wired.
+    /// Additive and purely informational — contacts no service. The default
+    /// describes a direct client (no transport indirection); WireClient
+    /// overrides it to report its Transport's descriptor, and the CLI's
+    /// AwsDDBClient overrides it to report the AWS SDK binding.
+    virtual std::string connection_descriptor() const { return "direct client"; }
 };
 
 }  // namespace ddbsh

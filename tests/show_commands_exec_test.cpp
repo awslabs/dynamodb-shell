@@ -397,4 +397,59 @@ TEST(ShowCreateTableExec, VectorIndexRoundTrips) {
         << "reparse failed: " << (reparsed.has_value() ? std::string{} : reparsed.error().message);
 }
 
+// ---- SHOW CONNECTION (phase 6f, D-P6f-9) -----------------------------------
+// Additive extension: reports the running composition (library version, the
+// injected client's connection_descriptor(), and the session region/endpoint).
+// Contacts no API, so it is fully offline-testable. FakeDDBClient inherits the
+// base IDDBClient::connection_descriptor() default ("direct client").
+
+TEST(ShowConnectionExec, ReportsVersionRegionEndpointAndBackend) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client, "eu-west-2");
+
+    auto out = session.run("show connection;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const std::string report = render(*out);
+    EXPECT_NE(report.find("ddbsh - version "), std::string::npos) << report;
+    EXPECT_NE(report.find("Region: eu-west-2"), std::string::npos) << report;
+    // No endpoint override in the session config -> "(default)".
+    EXPECT_NE(report.find("Endpoint: (default)"), std::string::npos) << report;
+    EXPECT_NE(report.find("Backend: direct client"), std::string::npos) << report;
+}
+
+TEST(ShowConnectionExec, ReportsEndpointOverrideWhenSet) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session =
+        ddbsh::Session(ddbsh::SessionConfig{"us-east-1", "http://localhost:8000"}, client);
+
+    auto out = session.run("show connection;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    const std::string report = render(*out);
+    EXPECT_NE(report.find("Endpoint: http://localhost:8000"), std::string::npos) << report;
+}
+
+TEST(ShowConnectionExec, ReflectsConnectLive) {
+    // CONNECT updates the session's region/endpoint, so a later SHOW CONNECTION
+    // reports the new binding (mirrors the prompt-hint liveness, B10).
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client, "us-east-1");
+
+    auto connected = session.run("connect \"ap-south-1\";");
+    ASSERT_TRUE(connected.has_value());
+
+    auto out = session.run("show connection;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_NE(render(*out).find("Region: ap-south-1"), std::string::npos) << render(*out);
+}
+
+TEST(ShowConnectionExec, NotExplainable) {
+    // Like every SHOW command, SHOW CONNECTION is not explainable (the oracle's
+    // explain_command wraps only ddl/dml/transact) — EXPLAIN SHOW CONNECTION is
+    // a syntax error.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto parsed = session.parse("explain show connection;");
+    EXPECT_FALSE(parsed.has_value());
+}
+
 }  // namespace

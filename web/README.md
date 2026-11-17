@@ -13,20 +13,47 @@ page a human opens in a browser and types into.
 
 | File | Role |
 |------|------|
-| `CMakeLists.txt` | the `ddbsh-web` target (engine + wire + cli-core → `ddbsh.wasm`/`ddbsh.js`) |
-| `bindings.cpp` | the embind surface: `DdbshSession.run(text) -> RunResult{stdout,stderr,ok,status}` (WASM-only) |
-| `transport_browser.cpp` | the Asyncify bridge: `SubmitTransport::send` → `EM_ASYNC_JS` → `await Module.submit(op,body)` (WASM-only) |
+| `CMakeLists.txt` | the two WASM editions (shared engine+wire+cli-core; one links `SubmitTransport`, one links `FetchTransport` — see "Two editions" below) |
+| `bindings.cpp` | the embind surface: `DdbshSession.run(text) -> RunResult{stdout,stderr,ok,status}`; picks the transport by `DDBSH_WEB_FETCH` (WASM-only) |
+| `transport_browser.cpp` | the Asyncify bridge: `SubmitTransport::send` → `EM_ASYNC_JS` → `await Module.submit(op,body)` (in-tab edition, WASM-only) |
+| `transport_fetch.cpp` | the Asyncify bridge: `FetchTransport::send` → `EM_ASYNC_JS` → `await Module.fetchDdb(op,body)` (real-backend/proxy edition, WASM-only) |
 | `index.html` | the product page: connection panel, result pane, editor + toolbar (P6e) |
 | `app.js` | thin DOM wiring: instantiate the modules, wire `Module.submit`, bind events, paint via `textContent` (P6e) |
 | `app-core.mjs` | **DOM-free** logic: history ring, prompt string, transcript model, file→submission, run guard (P6e) |
 | `app-core.test.mjs` | Node unit tests for `app-core.mjs` (zero deps, no DOM, no WASM) (P6e) |
 | `styles.css` | minimal monospace styling (P6e) |
-| `harness.mjs` | the P6d end-to-end **Node** smoke (not the product UI) |
+| `harness.mjs` | the P6d end-to-end **Node** smoke, in-tab edition (not the product UI) |
+| `harness-fetch.mjs` | the P6f-a end-to-end **Node** smoke, fetch edition over a stubbed proxy |
 | `package.json` | marks the build output as ES modules for Node |
 | `vendor/extenddb/` | the pinned, vendored in-browser ExtendDB adapter (see `vendor/extenddb/PROVENANCE.md`) |
 
-The engine's public header `include/ddbsh/wire/submit_transport.hpp` declares the
-portable surface; only `transport_browser.cpp` (WASM-only) defines it.
+The engine's public headers `include/ddbsh/wire/submit_transport.hpp` and
+`include/ddbsh/wire/fetch_transport.hpp` declare the portable surfaces; only
+`transport_browser.cpp` / `transport_fetch.cpp` (WASM-only) define them.
+
+## Two editions (P6f-a)
+
+One source tree, two Emscripten build targets. They share the whole engine, the
+`ddbsh-wire` codec, the WireClient, the embind surface, and the UI; they differ
+only by the linked wire `Transport` (D-P6f-2):
+
+| Target | Transport | JS hook | Output | Backend |
+|--------|-----------|---------|--------|---------|
+| `ddbsh-wasm-extenddb-wasm` | `SubmitTransport` | `Module.submit(op,body)` | `ddbsh.js`/`ddbsh.wasm` | in-tab ExtendDB (no server, no credentials, no network) |
+| `ddbsh-wasm` | `FetchTransport` | `Module.fetchDdb(op,body)` | `ddbsh-wasm.js`/`ddbsh-wasm.wasm` | `ddbsh-web-proxy` → real DynamoDB / real ExtendDB (proxy signs; the browser never holds credentials) |
+
+`SHOW CONNECTION` reports the running composition (library version, region /
+endpoint, and the transport/backend binding) so you can tell which edition and
+backend a page is driving. The in-tab edition reports
+`wire/submit -> in-tab ExtendDB`; the proxy edition reports
+`wire/fetch -> POST /ddb (proxy)`.
+
+P6f-a delivers the FetchTransport edition and proves it round-trips against a
+**stubbed** proxy (the fetch harness wires `Module.fetchDdb` to the same in-tab
+ExtendDB adapter). The native `ddbsh-web-proxy` (real SigV4 + fetch) and the
+final UI edition-selection land in P6f-b…e. The `ddbsh` vs `ddbsh-extenddb`
+output-filename convention is also settled in P6f-e; for now the in-tab edition
+keeps `ddbsh.js` so the existing P6e UI and the P6d smoke stay green unchanged.
 
 ## Architecture
 
@@ -85,8 +112,9 @@ emcmake cmake --preset wasm-release   # DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_WEB=ON,
 cmake --build build-preset/wasm-release
 ```
 
-Output lands in `build-preset/wasm-release/web/`: `ddbsh.js`, `ddbsh.wasm`, and
-(staged by a POST_BUILD step) `vendor/`, `harness.mjs`, `package.json`, and the
+Output lands in `build-preset/wasm-release/web/`: `ddbsh.js`, `ddbsh.wasm`,
+`ddbsh-wasm.js`, `ddbsh-wasm.wasm`, and (staged by a POST_BUILD step) `vendor/`,
+`harness.mjs`, `harness-fetch.mjs`, `package.json`, and the
 P6e UI bundle (`index.html`, `app.js`, `app-core.mjs`, `app-core.test.mjs`,
 `styles.css`). After `cmake --build`, that directory is a **complete,
 directly-servable static bundle** — nothing to assemble by hand.
@@ -125,9 +153,9 @@ Using the UI:
 ## Smoke (Node, no browser)
 
 ```bash
-devtools/run-web-smoke          # builds the preset + runs harness.mjs + app-core tests, writes an artifact
+devtools/run-web-smoke          # builds both editions + runs harness.mjs, harness-fetch.mjs, and app-core tests, writes an artifact
 # or, by hand:
-cd build-preset/wasm-release/web && node harness.mjs && node app-core.test.mjs
+cd build-preset/wasm-release/web && node harness.mjs && node harness-fetch.mjs && node app-core.test.mjs
 ```
 
 The smoke instantiates the module, wires `Module.submit` to the vendored

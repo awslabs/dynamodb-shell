@@ -243,4 +243,14 @@ TEST(WireClient, ConnectIsNoOpSuccess) {
     EXPECT_TRUE(transport.calls().empty());
 }
 
+TEST(WireClient, ConnectionDescriptorDelegatesToTransport) {
+    // SHOW CONNECTION (D-P6f-9): WireClient reports its Transport's descriptor
+    // verbatim. Contacts no backend.
+    CannedTransport transport;
+    transport.set_descriptor("wire/fetch -> POST /ddb (proxy)");
+    WireClient client(transport);
+    EXPECT_EQ(client.connection_descriptor(), "wire/fetch -> POST /ddb (proxy)");
+    EXPECT_TRUE(transport.calls().empty());
+}
+
 }  // namespace

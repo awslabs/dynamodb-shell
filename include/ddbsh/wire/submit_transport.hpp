@@ -39,6 +39,10 @@ namespace ddbsh::wire {
 class SubmitTransport : public Transport {
 public:
     Result<std::string> send(std::string_view operation, std::string_view body) override;
+
+    /// SHOW CONNECTION descriptor (phase 6f, D-P6f-9): the in-tab ExtendDB
+    /// binding driven through `Module.submit`.
+    std::string descriptor() const override;
 };
 
 }  // namespace ddbsh::wire

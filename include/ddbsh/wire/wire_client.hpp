@@ -94,6 +94,13 @@ public:
     Result<void> wait_for_table_active(const std::string& table_name) override;
     Result<void> wait_for_table_gone(const std::string& table_name) override;
 
+    // ---- SHOW CONNECTION descriptor (P6f, D-P6f-9) -------------------------
+    // Reports the wire composition: the Transport's descriptor (its kind +
+    // backend binding). The engine's SHOW CONNECTION arm prefixes the library
+    // version and the session region/endpoint; this contributes the transport
+    // half.
+    std::string connection_descriptor() const override;
+
 protected:
     /// The waiter poll delay (D-P6c-6). Default: emscripten_sleep under
     /// Asyncify (so the browser event loop keeps turning), std::this_thread::

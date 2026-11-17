@@ -37,6 +37,7 @@ struct ParsedStatement;  // defined in src/parser/ast.hpp (engine-internal)
 enum class StatementKind {
     empty,              ///< blank / comment-only / bare-';' input
     show_version,       ///< SHOW VERSION
+    show_connection,    ///< SHOW CONNECTION — report the running composition (phase 6f)
     quit,               ///< QUIT
     connect,            ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
     show_tables,        ///< SHOW TABLES [BRIEF] [LIKE <template>]

@@ -12,6 +12,7 @@
 #include "ddbsh/session.hpp"
 
 #include <utility>
+#include <vector>
 
 #include "ddbsh/version.hpp"
 #include "session_internal.hpp"
@@ -171,6 +172,22 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
             // line as data (ReportOutcome) so the engine never writes to a
             // stream (P2a-03); the Renderer emits the identical bytes.
             return emit_single(ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}});
+        case StatementKind::show_connection: {
+            // SHOW CONNECTION reports the running composition (phase 6f,
+            // D-P6f-9): the library version, the session's region/endpoint, and
+            // the injected client's transport/backend binding. Additive and
+            // terminal-free — the same carry-the-line-as-data pattern SHOW
+            // VERSION uses, so the engine writes to no stream. Contacts no API.
+            const std::string& region = impl_->config.region;
+            const std::string& endpoint = impl_->config.endpoint;
+            std::vector<std::string> lines;
+            lines.push_back("ddbsh - version " + version());
+            lines.push_back("Region: " + (region.empty() ? std::string("(default)") : region));
+            lines.push_back("Endpoint: " +
+                            (endpoint.empty() ? std::string("(default)") : endpoint));
+            lines.push_back("Backend: " + impl_->client.connection_descriptor());
+            return emit_single(ExecOutcome{ReportOutcome{std::move(lines)}});
+        }
         case StatementKind::quit:
             return emit_single(ExecOutcome{StatusOutcome{"QUIT"}});
         case StatementKind::help: {

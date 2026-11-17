@@ -60,6 +60,12 @@ public:
     /// Whether every scripted reply has been consumed.
     [[nodiscard]] bool drained() const { return replies_.empty(); }
 
+    /// Override the descriptor reported by SHOW CONNECTION (D-P6f-9), so a test
+    /// can prove WireClient delegates connection_descriptor() to its transport.
+    void set_descriptor(std::string descriptor) { descriptor_ = std::move(descriptor); }
+
+    std::string descriptor() const override { return descriptor_; }
+
     Result<std::string> send(std::string_view operation, std::string_view body) override {
         calls_.push_back(Call{std::string(operation), std::string(body)});
         if (replies_.empty()) {
@@ -83,6 +89,7 @@ private:
 
     std::deque<Reply> replies_;
     std::vector<Call> calls_;
+    std::string descriptor_ = "wire transport";
 };
 
 }  // namespace ddbsh::testing

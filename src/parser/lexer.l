@@ -187,6 +187,7 @@ static std::optional<Parser::symbol_type> ddbsh_keyword(const char* text) {
         {"class", [] { return Parser::make_K_CLASS(); }},
         {"commit", [] { return Parser::make_K_COMMIT(); }},
         {"connect", [] { return Parser::make_K_CONNECT(); }},
+        {"connection", [] { return Parser::make_K_CONNECTION(); }},
         {"consistent", [] { return Parser::make_K_CONSISTENT(); }},
         {"consumed", [] { return Parser::make_K_CONSUMED(); }},
         {"contains", [] { return Parser::make_K_CONTAINS(); }},

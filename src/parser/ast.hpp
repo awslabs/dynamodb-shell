@@ -117,6 +117,14 @@ struct QuitCmd {};
 /// SHOW VERSION — print the version banner.
 struct ShowVersionCmd {};
 
+/// SHOW CONNECTION — report the running composition (library version, the
+/// client's transport/backend binding, and the session's region/endpoint).
+/// Additive extension (phase 6f, D-P6f-9); contacts no API. The report text is
+/// produced at execute time from the version, the injected client's
+/// connection_descriptor(), and the session config — the same carry-the-line-
+/// as-data pattern SHOW VERSION uses, keeping the engine terminal-free.
+struct ShowConnectionCmd {};
+
 /// CONNECT <region> [WITH ENDPOINT <endpoint>] — switch region/endpoint.
 struct ConnectCmd {
     std::string region;
@@ -488,11 +496,11 @@ struct TransactCmd;  // defined below (recursive: holds std::vector<CommandNode>
 
 /// The parsed command. Grows one alternative per ported command family.
 using CommandNode =
-    std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ConnectCmd, ShowTablesCmd, DescribeCmd,
-                 DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd, AlterPitrCmd,
-                 AlterReplicaCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd, TransactCmd,
-                 CreateBackupCmd, DropBackupCmd, DescribeBackupCmd, RestoreCmd, ShowBackupsCmd,
-                 ShowLimitsCmd, ShowCreateTableCmd>;
+    std::variant<EmptyCmd, QuitCmd, ShowVersionCmd, ShowConnectionCmd, ConnectCmd, ShowTablesCmd,
+                 DescribeCmd, DropTableCmd, CreateTableCmd, AlterTableCmd, AlterTtlCmd,
+                 AlterPitrCmd, AlterReplicaCmd, InsertCmd, SelectCmd, UpdateCmd, DeleteCmd, HelpCmd,
+                 TransactCmd, CreateBackupCmd, DropBackupCmd, DescribeBackupCmd, RestoreCmd,
+                 ShowBackupsCmd, ShowLimitsCmd, ShowCreateTableCmd>;
 
 /// A transaction: BEGIN; <homogeneous inner statements> (COMMIT|ROLLBACK);
 /// (arch §7). `access` is fixed by the grammar (a get-sequence vs a
@@ -527,6 +535,8 @@ inline StatementKind kind_of(const CommandNode& command) {
                 return StatementKind::quit;
             } else if constexpr (std::is_same_v<T, ShowVersionCmd>) {
                 return StatementKind::show_version;
+            } else if constexpr (std::is_same_v<T, ShowConnectionCmd>) {
+                return StatementKind::show_connection;
             } else if constexpr (std::is_same_v<T, ConnectCmd>) {
                 return StatementKind::connect;
             } else if constexpr (std::is_same_v<T, ShowTablesCmd>) {

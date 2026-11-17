@@ -69,6 +69,8 @@ Result<std::string> SubmitTransport::send(std::string_view operation, std::strin
     return resp;
 }
 
+std::string SubmitTransport::descriptor() const { return "wire/submit -> in-tab ExtendDB"; }
+
 }  // namespace ddbsh::wire
 
 #endif  // defined(__EMSCRIPTEN__)
