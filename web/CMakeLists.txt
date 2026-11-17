@@ -8,22 +8,24 @@
 # ddbsh-wire codec, WireClient) ships as ONE portable artifact; the only thing
 # that differs between editions is the linked wire Transport (D-P6f-2):
 #
-#   ddbsh-wasm-extenddb-wasm  SubmitTransport  -> in-tab ExtendDB (Module.submit)
-#                             OUTPUT_NAME ddbsh (ddbsh.js/ddbsh.wasm) — the
-#                             zero-install, no-credential, no-network edition
-#                             (safe to host publicly). This is the P6d/P6e path.
-#
 #   ddbsh-wasm                FetchTransport   -> ddbsh-web-proxy (Module.fetchDdb)
-#                             OUTPUT_NAME ddbsh-wasm (ddbsh-wasm.js/.wasm) — the
-#                             real-backend edition (real DynamoDB / real
-#                             ExtendDB via the local signing proxy). The proxy
-#                             and the final UI wiring land in P6f-b..e; P6f-a
-#                             proves the edition builds and round-trips against
-#                             a Node stub (harness-fetch.mjs).
+#                             OUTPUT_NAME ddbsh (ddbsh.js/ddbsh.wasm) — the
+#                             PRIMARY, production real-backend edition (real
+#                             DynamoDB / real ExtendDB via the local signing
+#                             proxy). This is the default the UI loads when
+#                             served by ddbsh-web-proxy.
 #
-# (The OUTPUT_NAME split keeps the existing P6e UI + Node smoke — which import
-# ./ddbsh.js and wire Module.submit — green unchanged; the final ddbsh vs
-# ddbsh-extenddb filename convention + UI edition-selection is a P6f-e concern.)
+#   ddbsh-wasm-extenddb-wasm  SubmitTransport  -> in-tab ExtendDB (Module.submit)
+#                             OUTPUT_NAME ddbsh-extenddb
+#                             (ddbsh-extenddb.js/ddbsh-extenddb.wasm) — the
+#                             zero-install, no-credential, no-network, PRE-RELEASE
+#                             in-browser edition (safe to host publicly). The UI
+#                             loads it when served statically (no proxy present).
+#
+# (The `ddbsh` vs `ddbsh-extenddb` output-filename convention is ratified at
+# P6f-e: the production proxy edition owns the clean `ddbsh` name; the in-browser
+# ExtendDB edition is suffixed. The UI (web/app.js) auto-selects the edition by
+# probing the proxy's /healthz, so the SAME index.html bundle drives both.)
 #
 # Both editions link only the portable libraries — ddbsh::ddbsh (engine),
 # ddbsh::wire (codec + WireClient), ddbsh-cli-core (the terminal-free batch
@@ -76,10 +78,10 @@ function(ddbsh_add_web_edition target output_name transport_src fetch_edition)
     endif()
 endfunction()
 
-# The in-tab ExtendDB edition (OUTPUT_NAME ddbsh -> ddbsh.js/ddbsh.wasm).
-ddbsh_add_web_edition(ddbsh-wasm-extenddb-wasm ddbsh transport_browser.cpp OFF)
-# The real-backend proxy edition (OUTPUT_NAME ddbsh-wasm -> ddbsh-wasm.js/.wasm).
-ddbsh_add_web_edition(ddbsh-wasm ddbsh-wasm transport_fetch.cpp ON)
+# The real-backend proxy edition (PRIMARY; OUTPUT_NAME ddbsh -> ddbsh.js/ddbsh.wasm).
+ddbsh_add_web_edition(ddbsh-wasm ddbsh transport_fetch.cpp ON)
+# The in-tab ExtendDB edition (OUTPUT_NAME ddbsh-extenddb -> ddbsh-extenddb.js/.wasm).
+ddbsh_add_web_edition(ddbsh-wasm-extenddb-wasm ddbsh-extenddb transport_browser.cpp OFF)
 
 # Stage ddbsh's OWN files beside the emitted modules so the output dir is BOTH
 # (a) a Node-smoke environment and (b) a directly-servable static web bundle.

@@ -3,14 +3,17 @@
   Copyright 2026 ddbsh reimplementation contributors.
   SPDX-License-Identifier: Apache-2.0
 
-  index.html — the P6e browser UI for ddbsh.
+  index.html — the browser UI for ddbsh (P6e UI; P6f-e two-edition wiring).
 
   A single page with three stacked regions: a connection panel, an append-only
   transcript result pane, and a command editor + toolbar. All logic is in
   app.js (DOM wiring) + app-core.mjs (DOM-free logic). The engine runs as
-  WebAssembly (ddbsh.js/ddbsh.wasm) against in-browser ExtendDB; no network, no
-  credentials. Serve over HTTP (see README.md) — WASM + ES modules do not load
-  from file://.
+  WebAssembly; app.js auto-selects the edition at startup: served by
+  ddbsh-web-proxy it loads the fetch edition (ddbsh.js) and drives REAL
+  DynamoDB / ExtendDB through the proxy (credentials stay on the host); served
+  statically it loads the in-tab edition (ddbsh-extenddb.js) against in-browser
+  ExtendDB (no server, no network, no credentials). Serve over HTTP (see
+  README.md) — WASM + ES modules do not load from file://.
 -->
 <html lang="en">
 <head>

@@ -15,7 +15,7 @@
 # What it does:
 #   1. locate + activate the pinned emsdk (web/README.md documents the install),
 #   2. configure + build the `wasm-release` preset (engine + wire + cli-core ->
-#      ddbsh.wasm/ddbsh.js + ddbsh-wasm.js, with ddbsh's own harnesses + UI
+#      ddbsh.js/ddbsh.wasm (fetch) + ddbsh-extenddb.js (in-tab), with harnesses + UI
 #      staged; the in-browser ExtendDB adapter is a drop-in, NOT shipped by
 #      ddbsh — this script stages it from DDBSH_EXTENDDB_WEBASM_PKG, D-P6f-8),
 #   3. run `node web/harness.mjs` from the build output dir,
@@ -97,7 +97,7 @@ cmake --build "$WASM_BUILD" 2>&1 | tee -a "$LOG_FILE"
 
 # --- Run the Node smoke from the build output dir ---------------------------
 WEB_OUT="$WASM_BUILD/web"
-if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/ddbsh-wasm.js" ] \
+if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/ddbsh-extenddb.js" ] \
    || [ ! -f "$WEB_OUT/harness.mjs" ] || [ ! -f "$WEB_OUT/harness-fetch.mjs" ]; then
     echo "error: web build output not found at $WEB_OUT" >&2 | tee -a "$LOG_FILE"
     exit 1
@@ -119,7 +119,8 @@ set -e
 # --- Run the FETCH-edition Node smoke (P6f-a) -------------------------------
 # The real-backend `ddbsh-wasm` edition (FetchTransport) over a stubbed proxy
 # (in-browser ExtendDB), proving the Module.fetchDdb bridge carries a real op
-# round-trip. Separate module (ddbsh-wasm.js) from the in-tab edition above.
+# round-trip. Separate module (ddbsh.js, the fetch edition) from the in-tab
+# edition (ddbsh-extenddb.js) above.
 echo "=== Running Node WASM FETCH smoke ($HASH) ===" | tee -a "$LOG_FILE"
 set +e
 ( cd "$WEB_OUT" && "$NODE_BIN" harness-fetch.mjs ) 2>&1 | tee -a "$LOG_FILE"

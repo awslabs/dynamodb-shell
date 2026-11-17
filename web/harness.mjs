@@ -9,10 +9,11 @@
 // dropped-in in-browser ExtendDB adapter, and runs a scripted sequence through
 // the DdbshSession embind surface, asserting the rendered output.
 //
-// Run from the build output directory (where ddbsh.js, ddbsh.wasm, and
-// vendor/extenddb/ are present — ddbsh's own files are staged by the web/
-// POST_BUILD step; the ExtendDB adapter is dropped into vendor/extenddb/ by
-// devtools/stage-extenddb-webasm, which devtools/run-web-smoke runs for you):
+// Run from the build output directory (where ddbsh-extenddb.js,
+// ddbsh-extenddb.wasm, and vendor/extenddb/ are present — ddbsh's own files are
+// staged by the web/ POST_BUILD step; the ExtendDB adapter is dropped into
+// vendor/extenddb/ by devtools/stage-extenddb-webasm, which
+// devtools/run-web-smoke runs for you):
 //     node harness.mjs
 // Exits 0 on success, nonzero (with a diagnostic) on the first failed
 // assertion. The web/ CMake target stages this file beside the module so the
@@ -22,10 +23,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { webcrypto } from "node:crypto";
 
-import createDdbsh from "./ddbsh.js";
+import createDdbsh from "./ddbsh-extenddb.js";
 import initExtendDb, { ExtendDb } from "./vendor/extenddb/extenddb_wasm_adapter.js";
 
-// Browser-global shim (D-P6d-2): the vendored ExtendDB adapter uses the Web
+// Browser-global shim (D-P6d-2): the dropped-in ExtendDB adapter uses the Web
 // Crypto API (`crypto.getRandomValues`, for UUIDs). A browser exposes `crypto`
 // natively; Node 18 does not expose it as a global by default, so provide it
 // before the adapter runs. This is a Node-harness concern only — it is NOT

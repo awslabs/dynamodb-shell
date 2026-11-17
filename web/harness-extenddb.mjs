@@ -36,7 +36,7 @@
 
 import { randomBytes } from "node:crypto";
 
-import createDdbsh from "./ddbsh-wasm.js";
+import createDdbsh from "./ddbsh.js";
 import { runCorpus } from "./harness-proxy-lib.mjs";
 
 const PROXY_URL = process.env.DDBSH_PROXY_URL || "http://127.0.0.1:8460";

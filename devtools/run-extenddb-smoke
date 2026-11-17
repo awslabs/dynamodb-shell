@@ -97,7 +97,7 @@ if [ ! -f "$WASM_BUILD/CMakeCache.txt" ]; then
     ( cd "$REPO_DIR" && emcmake cmake --preset wasm-release ) 2>&1 | tee -a "$LOG_FILE"
 fi
 cmake --build "$WASM_BUILD" 2>&1 | tee -a "$LOG_FILE"
-if [ ! -f "$WEB_OUT/ddbsh-wasm.js" ] || [ ! -f "$WEB_OUT/harness-extenddb.mjs" ]; then
+if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/harness-extenddb.mjs" ]; then
     echo "error: fetch wasm edition / harness not staged at $WEB_OUT" | tee -a "$LOG_FILE" >&2
     exit 1
 fi

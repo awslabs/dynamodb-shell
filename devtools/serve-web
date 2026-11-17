@@ -38,7 +38,7 @@ WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
 WEB_OUT="$WASM_BUILD/web"
 
 # --- Build the bundle if the output is missing ------------------------------
-if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/index.html" ]; then
+if [ ! -f "$WEB_OUT/ddbsh-extenddb.js" ] || [ ! -f "$WEB_OUT/index.html" ]; then
     echo "web bundle not found at $WEB_OUT — building via emcmake ..."
     EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
     if [ ! -f "$EMSDK_ROOT/emsdk_env.sh" ]; then

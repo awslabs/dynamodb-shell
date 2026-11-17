@@ -22,7 +22,7 @@
 // — so a green run is specific to the fetch edition, not an accident of the
 // submit path.
 //
-// Run from the build output directory (where ddbsh-wasm.js, ddbsh-wasm.wasm,
+// Run from the build output directory (where ddbsh.js, ddbsh.wasm,
 // and vendor/extenddb/ are present — ddbsh's own files are staged by the web/
 // POST_BUILD step; the ExtendDB adapter (this harness's stub proxy) is dropped
 // into vendor/extenddb/ by devtools/stage-extenddb-webasm, run by
@@ -35,10 +35,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { webcrypto } from "node:crypto";
 
-import createDdbsh from "./ddbsh-wasm.js";
+import createDdbsh from "./ddbsh.js";
 import initExtendDb, { ExtendDb } from "./vendor/extenddb/extenddb_wasm_adapter.js";
 
-// Browser-global shim (as in harness.mjs): the vendored ExtendDB adapter uses
+// Browser-global shim (as in harness.mjs): the dropped-in ExtendDB adapter uses
 // the Web Crypto API; Node 18 does not expose `crypto` as a global by default.
 if (!globalThis.crypto) {
     globalThis.crypto = webcrypto;

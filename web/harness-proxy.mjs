@@ -21,13 +21,13 @@
 // failure). Run only against a dedicated test account/region.
 //
 // Env: DDBSH_PROXY_URL (default http://127.0.0.1:8459), DDBSH_REGION
-// (default us-east-1). Run from the wasm build output dir (where ddbsh-wasm.js
+// (default us-east-1). Run from the wasm build output dir (where ddbsh.js
 // is staged):  node harness-proxy.mjs
 // Exits 0 on success, nonzero on the first failed assertion.
 
 import { randomBytes } from "node:crypto";
 
-import createDdbsh from "./ddbsh-wasm.js";
+import createDdbsh from "./ddbsh.js";
 import { runCorpus } from "./harness-proxy-lib.mjs";
 
 const PROXY_URL = process.env.DDBSH_PROXY_URL || "http://127.0.0.1:8459";

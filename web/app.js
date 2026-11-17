@@ -1,20 +1,33 @@
 // Copyright 2026 ddbsh reimplementation contributors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// app.js — the thin DOM wiring for the P6e ddbsh web UI.
+// app.js — the thin DOM wiring for the ddbsh web UI (P6e UI; P6f-e two-edition
+// wiring).
 //
-// This file owns ONLY the browser side: instantiate the WASM modules, wire the
-// Module.submit bridge to the dropped-in in-browser ExtendDB adapter, bind DOM
-// events, call into the DOM-free app-core.mjs for all real logic, and paint the
-// result with textContent (never innerHTML — D-P6e-6). No lexing, parsing,
-// planning, execution, or rendering happens here: the faithful shell text comes
-// out of the engine's Renderer in RunResult.stdout/stderr (tenet 3, O-2).
+// This file owns ONLY the browser side: pick the edition, instantiate the WASM
+// module, wire the transport bridge to the backend, bind DOM events, call into
+// the DOM-free app-core.mjs for all real logic, and paint the result with
+// textContent (never innerHTML — D-P6e-6). No lexing, parsing, planning,
+// execution, or rendering happens here: the faithful shell text comes out of the
+// engine's Renderer in RunResult.stdout/stderr (tenet 3, O-2).
+//
+// Two editions, one UI (D-P6f-2), auto-selected at startup by probing the
+// companion proxy's /healthz:
+//
+//   * PROXY edition (served by `ddbsh-web-proxy`): loads ddbsh.js
+//     (FetchTransport) and wires `Module.fetchDdb` / `Module.connectDdb` to POST
+//     to the proxy, which SigV4-signs and forwards to REAL DynamoDB / ExtendDB.
+//     Credentials never reach the browser — the proxy holds them. Per-endpoint
+//     credential wiring (a named AWS profile + a CA bundle for a non-AWS backend
+//     such as a local ExtendDB) is read from the page's `?profile=` / `?ca_bundle=`
+//     query parameters and attached to endpoint-override CONNECTs.
+//
+//   * IN-TAB edition (served statically, no proxy): loads ddbsh-extenddb.js
+//     (SubmitTransport) and wires `Module.submit` to the dropped-in in-browser
+//     ExtendDB adapter. No server, no network, no credentials (pre-release).
 //
 // Startup, the Asyncify await pattern, the serve-over-HTTP requirement, and the
 // supported/unsupported op map are described in web/README.md.
-
-import createDdbsh from "./ddbsh.js";
-import initExtendDb, { ExtendDb } from "./vendor/extenddb/extenddb_wasm_adapter.js";
 
 import {
     buildPrompt,
@@ -43,10 +56,20 @@ const HISTORY_KEY = "ddbsh.history";
 const HISTORY_LIMIT = 500;
 const REGION = "us-east-1";
 
+// Per-endpoint credential wiring for the proxy edition (read from the page URL).
+// Neither is a secret: a profile NAME and a CA file PATH. The proxy resolves the
+// actual key from that named ~/.aws profile; it never reaches the browser.
+const params = new URLSearchParams(window.location.search);
+const endpointConfig = {
+    profile: params.get("profile") || "",
+    caBundle: params.get("ca_bundle") || "",
+};
+
 const guard = createRunGuard();
 const history = createHistory({ limit: HISTORY_LIMIT, entries: loadHistory() });
 const recall = createHistoryRecall(history);
-let session = null;       // the embind DdbshSession, once the modules are up.
+let session = null;         // the embind DdbshSession, once the module is up.
+let backendName = "loading…"; // the connection-panel backend label for this edition.
 
 // ---- history persistence (localStorage; app-core stays storage-free) -------
 function loadHistory() {
@@ -139,7 +162,7 @@ function setReady() {
     els.runBtn.disabled = false;
     els.fileInput.disabled = false;
     els.fileLabel.setAttribute("aria-disabled", "false");
-    els.backendLabel.textContent = "ExtendDB";
+    els.backendLabel.textContent = backendName;
     els.backendDot.className = "dot dot-ready";
     refreshRegion();
     els.editor.focus();
@@ -228,6 +251,141 @@ function onClear() {
     els.editor.focus();
 }
 
+// ---- proxy edition wiring (fetch transport -> ddbsh-web-proxy) -------------
+// A same-origin POST to the proxy. The browser sets Origin and Host, which the
+// proxy's driver guard requires; the session headers authenticate the request.
+async function proxyPost(path, { headers = {}, body = null } = {}) {
+    const res = await fetch(path, { method: "POST", headers, body, cache: "no-store" });
+    const text = await res.text();
+    return { status: res.status, text };
+}
+
+// Probe the companion proxy. Served by ddbsh-web-proxy -> /healthz returns
+// {ok:true}; served statically -> 404 or a network error. Either non-ok result
+// selects the in-tab edition.
+async function proxyPresent() {
+    try {
+        const res = await fetch("healthz", { method: "GET", cache: "no-store" });
+        if (!res.ok) {
+            return false;
+        }
+        const j = await res.json().catch(() => null);
+        return !!(j && j.ok === true);
+    } catch {
+        return false;
+    }
+}
+
+// Bring up the proxy (real-backend) edition. Mirrors harness-proxy-lib.mjs's
+// browser handshake + bridge wiring, using the browser `fetch` (which sets the
+// Origin/Host the proxy guard needs) instead of node:http.
+async function startProxyEdition() {
+    const createDdbsh = (await import("./ddbsh.js")).default;
+
+    // One-time handshake: mint a session + per-session token (and learn the
+    // proxy version for SHOW CONNECTION, D-P6f-9).
+    const sess = await proxyPost("session", { headers: { "content-type": "application/json" } });
+    if (sess.status !== 200) {
+        throw new Error(`proxy /session HTTP ${sess.status}: ${sess.text}`);
+    }
+    const { session: sessionId, token, version } = JSON.parse(sess.text);
+    if (!sessionId || !token) {
+        throw new Error("proxy /session returned no session/token");
+    }
+    const authHeaders = { "x-ddbsh-session": sessionId, "x-ddbsh-token": token };
+
+    const Module = await createDdbsh();
+    if (version) {
+        Module.ddbshProxyVersion = version; // surfaced by SHOW CONNECTION.
+    }
+
+    // CONNECT control request: the engine's CONNECT statement fires this through
+    // FetchTransport::on_connect. For an endpoint override (e.g. a local
+    // ExtendDB) attach the per-endpoint profile + CA bundle from the page URL.
+    Module.connectDdb = async (region, endpoint) => {
+        const payload = { region };
+        if (endpoint) {
+            payload.endpoint = endpoint;
+            if (endpointConfig.profile) {
+                payload.profile = endpointConfig.profile;
+            }
+            if (endpointConfig.caBundle) {
+                payload.ca_bundle = endpointConfig.caBundle;
+            }
+        }
+        const r = await proxyPost("connect", {
+            headers: { "content-type": "application/json", ...authHeaders },
+            body: JSON.stringify(payload),
+        });
+        if (r.status === 200) {
+            return ""; // success: empty string per the on_connect contract.
+        }
+        try {
+            return JSON.parse(r.text).message || `connect HTTP ${r.status}`;
+        } catch {
+            return `connect HTTP ${r.status}`;
+        }
+    };
+
+    // Data-plane forward. A 2xx returns the body verbatim; a service error
+    // (a `__type` document) is returned to the codec to map; a proxy/transport
+    // error throws (FetchTransport renders it as a transport failure).
+    Module.fetchDdb = async (op, body) => {
+        const r = await proxyPost("ddb", {
+            headers: {
+                "content-type": "application/x-amz-json-1.0",
+                "x-ddbsh-op": op,
+                ...authHeaders,
+            },
+            body,
+        });
+        if (r.status >= 200 && r.status < 300) {
+            return r.text;
+        }
+        try {
+            if (JSON.parse(r.text).__type) {
+                return r.text; // service error -> codec maps it.
+            }
+        } catch {
+            // fall through to a transport-level failure.
+        }
+        throw new Error(`proxy /ddb HTTP ${r.status}: ${r.text.slice(0, 200)}`);
+    };
+
+    // Bootstrap the default-region AWS target so the first data-plane call works
+    // without an explicit CONNECT (the glue "establishes the proxy connection
+    // out of band at bootstrap", per FetchTransport::on_connect). Non-fatal: a
+    // failure (e.g. unresolved credentials) is reported, and the user can fix
+    // credentials and CONNECT.
+    const connectMsg = await Module.connectDdb(REGION, "");
+    if (connectMsg) {
+        appendEntries([{ text: `proxy connect: ${connectMsg}\n`, kind: "stderr" }]);
+    }
+
+    session = new Module.DdbshSession(REGION);
+    backendName = "proxy → real backend";
+    setReady();
+}
+
+// Bring up the in-tab (in-browser ExtendDB) edition — no server, no network, no
+// credentials. The adapter is a drop-in (D-P6f-8), imported dynamically so the
+// proxy edition never depends on it.
+async function startInTabEdition() {
+    const createDdbsh = (await import("./ddbsh-extenddb.js")).default;
+    const extenddb = await import("./vendor/extenddb/extenddb_wasm_adapter.js");
+    const initExtendDb = extenddb.default;
+    const { ExtendDb } = extenddb;
+
+    await initExtendDb();                 // browser: fetch sibling _bg.wasm over HTTP.
+    const db = await ExtendDb.create();   // async migrations (in-memory SQLite).
+    const Module = await createDdbsh();   // ddbsh-extenddb.wasm up; embind registered.
+    Module.submit = (op, body) => db.submit(op, body); // wire the Asyncify bridge.
+
+    session = new Module.DdbshSession(REGION);
+    backendName = "ExtendDB (in-browser)";
+    setReady();
+}
+
 // ---- startup ---------------------------------------------------------------
 async function start() {
     // WASM + ES modules cannot load from file:// — show the guard banner and
@@ -238,7 +396,7 @@ async function start() {
         return;
     }
 
-    // Bind events now; controls stay disabled until the modules are ready.
+    // Bind events now; controls stay disabled until the module is ready.
     els.runBtn.addEventListener("click", runFromEditor);
     els.clearBtn.addEventListener("click", onClear);
     els.editor.addEventListener("keydown", onEditorKeydown);
@@ -246,12 +404,11 @@ async function start() {
     els.fileInput.addEventListener("change", onFileChosen);
 
     try {
-        await initExtendDb();               // browser: fetch sibling _bg.wasm over HTTP.
-        const db = await ExtendDb.create();  // async migrations (in-memory SQLite).
-        const Module = await createDdbsh();  // ddbsh.wasm up; embind registered.
-        Module.submit = (op, body) => db.submit(op, body); // wire the Asyncify bridge.
-        session = new Module.DdbshSession(REGION);
-        setReady();
+        if (await proxyPresent()) {
+            await startProxyEdition();
+        } else {
+            await startInTabEdition();
+        }
     } catch (e) {
         els.backendLabel.textContent = "failed to load";
         els.backendDot.className = "dot";
