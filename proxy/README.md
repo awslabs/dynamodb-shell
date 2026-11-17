@@ -14,7 +14,8 @@ and is bumped in lockstep. The proxy reports this version on `/session` and
 
 ## What it does
 
-1. **Serves** the static ddbsh-wasm bundle (`--serve --webroot <dir>`).2. Holds **per-session connection state** keyed by the `X-Ddbsh-Session` header a
+1. **Serves** the static ddbsh-wasm bundle (`--serve --webroot <dir>`).
+2. Holds **per-session connection state** keyed by the `X-Ddbsh-Session` header a
    browser tab mints at load (a tab ≈ a ddbsh process).
 3. On `POST /ddb`, **SigV4-signs** the browser's AWS-JSON-1.0 body with
    credentials resolved from the host's AWS chain and **forwards** it to the
