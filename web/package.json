@@ -1,0 +1,7 @@
+{
+  "name": "ddbsh-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Marks the ddbsh web build output as ES modules so Node (and bundlers) load the Emscripten `ddbsh.js` glue and the vendored ExtendDB adapter as ESM. Staged beside the build output by web/CMakeLists.txt; not published."
+}

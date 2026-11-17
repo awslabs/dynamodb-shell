@@ -1,0 +1,22 @@
+{
+  "name": "extenddb-wasm-adapter",
+  "type": "module",
+  "description": "WebAssembly binding layer that runs the ExtendDB engine (with an in-memory storage stub) in the browser, replacing the network edge with a direct in-process call. Internal crate of the ExtendDB WebASM port, with no API stability promise.",
+  "version": "0.1.26",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ExtendDB/extenddb"
+  },
+  "files": [
+    "extenddb_wasm_adapter_bg.wasm",
+    "extenddb_wasm_adapter.js",
+    "extenddb_wasm_adapter.d.ts"
+  ],
+  "main": "extenddb_wasm_adapter.js",
+  "homepage": "https://extenddb.org/",
+  "types": "extenddb_wasm_adapter.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

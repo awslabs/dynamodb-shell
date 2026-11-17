@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.11.6
+        VERSION 0.11.7
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -57,6 +57,14 @@ option(DDBSH_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 # that needs no AWS SDK at all (minimal/portability scenarios, the offline
 # embed_demo path); the CLI is skipped because it requires the client.
 option(DDBSH_BUILD_AWS "Build the optional AWS-backed client component and the CLI" ON)
+
+# The Emscripten/WASM web target (P6d). OFF by default so the normal Linux CI
+# matrix needs no Emscripten; turned ON only by the `wasm-release` preset (which
+# also sets DDBSH_BUILD_AWS=OFF and DDBSH_BUILD_TESTS=OFF). When ON, it requires
+# the Emscripten toolchain (configure via `emcmake cmake --preset wasm-release`);
+# web/CMakeLists.txt FATAL_ERRORs on a non-Emscripten configure so a
+# misinvocation fails fast. See web/README.md.
+option(DDBSH_BUILD_WEB "Build the Emscripten/WASM web target" OFF)
 
 # Warnings-as-errors, narrowly scoped to our own targets (not third-party).
 add_library(ddbsh_warnings INTERFACE)
@@ -275,6 +283,16 @@ if(DDBSH_BUILD_AWS)
     target_include_directories(ddbsh-cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cli")
     target_link_libraries(ddbsh-cli
         PRIVATE ddbsh::ddbsh ddbsh::aws ddbsh-cli-core ddbsh_warnings readline)
+endif()
+
+# --- Emscripten/WASM web target (P6d) ----------------------------------------
+# The browser build: engine + wire + cli-core linked into a WASM module with an
+# embind surface and the Asyncify transport. Opt-in (DDBSH_BUILD_WEB, default
+# OFF) and Emscripten-only. It needs the SDK-free libraries only — never
+# ddbsh-aws, never the CLI — so it coexists with DDBSH_BUILD_AWS=OFF (the
+# wasm-release preset sets exactly that). See web/CMakeLists.txt.
+if(DDBSH_BUILD_WEB)
+    add_subdirectory(web)
 endif()
 
 # --- tests -------------------------------------------------------------------

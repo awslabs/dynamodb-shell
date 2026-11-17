@@ -31,8 +31,11 @@
 
 #include <charconv>
 #include <cstddef>
+#include <locale>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -48,6 +51,40 @@ using json::JsonValue;
 
 std::unexpected<Error> malformed(const std::string& detail) {
     return fail(Errc::service_error, "malformed response: " + detail);
+}
+
+// Locale-independent, strict parse of a JSON number token into a double.
+// AWS-JSON number tokens always use '.' as the decimal point, so the parse must
+// NOT follow the global C++ locale. FLOATING-POINT std::from_chars is the ideal
+// parser, but it is not universally available: libstdc++ (gcc >= 11) ships it,
+// while libc++ — the Emscripten/WASM toolchain's standard library — does not
+// implement the FP overloads yet. Use from_chars where the library's
+// feature-test macro reports the FP overloads (__cpp_lib_to_chars is defined
+// only once BOTH integer and FP to/from_chars exist), and otherwise fall back
+// to a classic-locale istringstream (also locale-independent). Both require the
+// entire token to be consumed (strict), so they are behaviorally identical
+// (tenet 4 / portable). Returns nullopt on a malformed/trailing/out-of-range
+// token.
+std::optional<double> parse_double_token(std::string_view tok) {
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    double value = 0.0;
+    const char* first = tok.data();
+    const char* last = first + tok.size();
+    const auto [ptr, ec] = std::from_chars(first, last, value);
+    if (ec != std::errc{} || ptr != last) {
+        return std::nullopt;
+    }
+    return value;
+#else
+    std::istringstream iss{std::string(tok)};
+    iss.imbue(std::locale::classic());
+    double value = 0.0;
+    iss >> value;
+    if (iss.fail() || iss.peek() != std::char_traits<char>::eof()) {
+        return std::nullopt;
+    }
+    return value;
+#endif
 }
 
 // One AttributeValue object -> ddbsh::Value (inverse of codec.cpp av()). The
@@ -194,14 +231,11 @@ Result<double> parse_capacity_double(const JsonValue& node, const char* which) {
     if (!node.is_number()) {
         return malformed(std::string(which) + " must be a number");
     }
-    double value = 0.0;
-    const char* first = node.text.data();
-    const char* last = first + node.text.size();
-    const auto [ptr, ec] = std::from_chars(first, last, value);
-    if (ec != std::errc{} || ptr != last) {
+    std::optional<double> value = parse_double_token(node.text);
+    if (!value) {
         return malformed(std::string("invalid ") + which + " number");
     }
-    return value;
+    return *value;
 }
 
 // Mirror from_sdk_consumed_capacity: nullopt unless at least one sub-field is
@@ -508,11 +542,7 @@ double double_field(const JsonValue& obj, const char* key, double dflt = 0.0) {
     if (m == nullptr || !m->is_number()) {
         return dflt;
     }
-    double v = dflt;
-    const char* first = m->text.data();
-    const char* last = first + m->text.size();
-    const auto [ptr, ec] = std::from_chars(first, last, v);
-    return (ec == std::errc{} && ptr == last) ? v : dflt;
+    return parse_double_token(m->text).value_or(dflt);
 }
 
 // An epoch-seconds JSON number formatted to the exact string the adapter's

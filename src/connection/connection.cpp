@@ -14,6 +14,9 @@
 #include <charconv>
 #include <cstddef>
 #include <limits>
+#include <locale>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <variant>
 
@@ -40,6 +43,42 @@ WriteVerb to_write_verb(BulkWriteOutcome::Verb v) {
             return WriteVerb::del;
     }
     return WriteVerb::update;
+}
+
+// Locale-independent, strict parse of a DynamoDB N value into a double.
+// DynamoDB N values always use '.' as the decimal point, so the parse must NOT
+// follow the global C++ locale (std::stod can misparse under a comma-decimal
+// locale).
+//
+// std::from_chars is the ideal locale-independent parser, but the FLOATING-
+// POINT overloads are not universally available: libstdc++ (gcc >= 11) ships
+// them, while libc++ — the Emscripten/WASM toolchain's standard library — does
+// not implement them yet and =delete-s the otherwise-ambiguous overload. Use
+// from_chars where the library's feature-test macro reports the FP overloads
+// (__cpp_lib_to_chars is defined only once BOTH integer and FP to/from_chars
+// exist), and otherwise fall back to a classic-locale istringstream, which is
+// also locale-independent. Both branches reject trailing characters and
+// out-of-range values, so they are behaviorally identical (tenet 4 / portable).
+std::optional<double> parse_double_strict(const std::string& s) {
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    double result = 0.0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+    if (ec != std::errc{} || ptr != s.data() + s.size()) {
+        return std::nullopt;  // not a number / trailing chars / out of range
+    }
+    return result;
+#else
+    std::istringstream iss(s);
+    iss.imbue(std::locale::classic());
+    double result = 0.0;
+    iss >> result;
+    // Reject a failed parse, an out-of-range value (>> sets failbit), or any
+    // trailing character (the strict contract from_chars enforces via `ptr`).
+    if (iss.fail() || iss.peek() != std::char_traits<char>::eof()) {
+        return std::nullopt;
+    }
+    return result;
+#endif
 }
 
 }  // namespace
@@ -75,15 +114,10 @@ std::optional<double> Cell::as_double() const {
     }
     // Locale-independent parse: DynamoDB N values always use '.' as the decimal
     // point, so std::stod (which follows the global C++ locale and can misparse
-    // under a comma-decimal locale) must not be used. std::from_chars is
-    // locale-independent by contract.
-    const std::string& s = value_->s;
-    double result = 0.0;
-    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
-    if (ec != std::errc{} || ptr != s.data() + s.size()) {
-        return std::nullopt;  // not a number / trailing chars / out of range
-    }
-    return result;
+    // under a comma-decimal locale) must not be used. parse_double_strict is
+    // locale-independent and portable across the libstdc++/libc++ toolchains
+    // (see its definition — FP std::from_chars is not available under libc++).
+    return parse_double_strict(value_->s);
 }
 
 std::optional<bool> Cell::as_bool() const {
