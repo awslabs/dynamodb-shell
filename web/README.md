@@ -25,6 +25,8 @@ page a human opens in a browser and types into.
 | `harness.mjs` | the P6d end-to-end **Node** smoke, in-tab edition (not the product UI) |
 | `harness-fetch.mjs` | the P6f-a end-to-end **Node** smoke, fetch edition over a stubbed proxy |
 | `harness-proxy.mjs` | the P6f-b end-to-end **Node** smoke, fetch edition over the **real** `ddbsh-web-proxy` against **real DynamoDB** (run by `devtools/run-proxy-smoke`) |
+| `harness-extenddb.mjs` | the P6f-c end-to-end **Node** smoke, fetch edition over the **real** `ddbsh-web-proxy` against a **real local ExtendDB** server, HTTPS (run by `devtools/run-extenddb-smoke`) |
+| `harness-proxy-lib.mjs` | the shared browser-handshake + op-family corpus both proxy smokes drive (one corpus, two backends) |
 | `package.json` | marks the build output as ES modules for Node |
 | `vendor/extenddb/` | the pinned, vendored in-browser ExtendDB adapter (see `vendor/extenddb/PROVENANCE.md`) |
 
@@ -83,6 +85,70 @@ The JS glue the fetch edition expects:
 Before either, the page does the one-time handshake: `POST /session` (same
 origin) mints `{session, token}`. See `harness-proxy.mjs` for the reference
 implementation (the browser UI wiring is P6f-e).
+
+## Local ExtendDB via the proxy (P6f-c)
+
+The same fetch edition + the same proxy also drive a **real local ExtendDB**
+server (a DynamoDB-wire-compatible server you run yourself), selected by the
+`CONNECT` endpoint:
+
+```
+connect us-east-1 with endpoint "https://127.0.0.1:18443";
+```
+
+ExtendDB differs from AWS in two ways the proxy handles **per endpoint**
+(D-P6f-7), both supplied on the `/connect` body — neither is a secret:
+
+- **Credentials.** ExtendDB issues its **own** SigV4 access key (it does not
+  accept real AWS keys). You store that key in a named AWS profile and the glue
+  sends the proxy a `profile` field naming it; the proxy resolves the key from
+  that profile. The actual key stays in the credentials file the proxy reads —
+  it never reaches the browser.
+- **TLS trust.** ExtendDB is **HTTPS-only** with a **self-signed cert**
+  (`~/.extenddb/tls/cert.pem`); the glue sends a `ca_bundle` field with that
+  cert's path so the proxy trusts it. Plain HTTP is never used.
+
+So the fetch edition's `connectDdb` glue, for an ExtendDB endpoint, POSTs
+`{region, endpoint, profile, ca_bundle}` to `/connect` (vs `{region}` for AWS).
+`harness-extenddb.mjs` is the reference; the product UI's per-endpoint wiring is
+P6f-e.
+
+Human setup (one-time), mirroring ExtendDB's own getting-started:
+
+```bash
+# 1. Build + init a local ExtendDB (SQLite backend; HTTPS + self-signed cert).
+cargo build --release                     # in your ExtendDB checkout
+./target/release/extenddb init --backend sqlite    # prints the admin password once
+
+# 2. Issue a DynamoDB key for ddbsh's proxy to use.
+read -rs EXTENDDB_PASSWORD && export EXTENDDB_PASSWORD      # the admin password
+ACCT=$(./target/release/extenddb manage --user admin list-accounts \
+        | sed -n 's/.*"account_id":[[:space:]]*"\([0-9]*\)".*/\1/p' | head -1)
+./target/release/extenddb manage --user admin create-user --account-id "$ACCT" --user-name ddbsh
+./target/release/extenddb manage --user admin put-user-policy --account-id "$ACCT" \
+    --user-name ddbsh --policy-name FullAccess \
+    --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:*","Resource":"*"}]}'
+./target/release/extenddb manage --user admin create-access-key --account-id "$ACCT" --user-name ddbsh
+unset EXTENDDB_PASSWORD
+
+# 3. Put the issued key in a dedicated ~/.aws profile (NOT your AWS keys).
+cat >> ~/.aws/credentials <<'EOF'
+[extenddb]
+aws_access_key_id = AKIAEXTENDDB...
+aws_secret_access_key = extenddb...
+EOF
+
+# 4. Start the server and the proxy; CONNECT with the endpoint in the UI.
+./target/release/extenddb serve --config extenddb.toml
+ddbsh-web-proxy --serve --webroot build-preset/wasm-release/web
+```
+
+The automated gate (`devtools/run-extenddb-smoke`) does all of this
+hermetically — it inits a throwaway SQLite deployment, issues a key into a
+**temporary** credentials file (your real `~/.aws` is never touched), launches
+ExtendDB + the proxy on loopback, runs `harness-extenddb.mjs`, and tears
+everything down.
+
 
 **Security (builder-security, followed as policy; see `proxy/README.md`):** the
 proxy binds **loopback only** and is **not configurable** to bind wider (remote
@@ -213,6 +279,19 @@ devtools/run-proxy-smoke        # builds the proxy + fetch wasm, launches the pr
 `run-proxy-smoke` talks to a **real AWS account** via the host's AWS chain: it
 creates and drops one `ddbsh_web_proxy_*`-prefixed on-demand table and cleans it
 up. A missing credential is an infrastructure failure, not a skip.
+
+The **local-ExtendDB** real path has its own gate (P6f-c):
+
+```bash
+devtools/run-extenddb-smoke     # builds the proxy + fetch wasm, inits + launches a throwaway
+                                # local ExtendDB (SQLite, HTTPS), issues a key into a TEMP creds
+                                # file, launches the proxy, runs harness-extenddb.mjs, writes an artifact
+```
+
+`run-extenddb-smoke` is fully **local and loopback** — no real AWS account, no
+network beyond localhost. It needs an ExtendDB SQLite binary (set
+`DDBSH_EXTENDDB_BIN`, default `~/source/extenddb-READ-ONLY/target/release/extenddb`);
+a missing binary is an infrastructure failure, not a skip.
 
 The smoke instantiates the module, wires `Module.submit` to the vendored
 ExtendDB adapter, and runs a full op-family sequence (CREATE/INSERT/GetItem/

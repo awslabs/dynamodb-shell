@@ -19,7 +19,12 @@ cannot call DynamoDB directly (DynamoDB returns no CORS headers).
 Credentials never reach the browser. We accept no key, store no key, and mint no
 key: AWS credentials come from the standard provider chain (env, `~/.aws`, SSO,
 assume-role, IMDS); a non-AWS backend (ExtendDB) uses its own issued key in a
-dedicated `~/.aws` profile selected with `--profile` on the `/connect` request.
+dedicated `~/.aws` profile selected with the `profile` field on the `/connect`
+request. ExtendDB is **HTTPS-only** with a self-signed cert, so `/connect` also
+carries a `ca_bundle` field (the cert's path) and the proxy builds a
+**per-endpoint-trust** outbound client for it; plain HTTP is never used for
+ExtendDB. Both `profile` and `ca_bundle` are non-secret (a profile name and a
+file path) — the key itself stays in the credentials file the proxy reads.
 
 ## Endpoints
 
@@ -95,8 +100,10 @@ cargo fmt --check
 ```
 
 The signing + forwarding path is covered end-to-end against **real DynamoDB** by
-`../devtools/run-proxy-smoke` (which drives the `ddbsh-wasm` edition through a
-running proxy).
+`../devtools/run-proxy-smoke` and against a **real local ExtendDB** server
+(HTTPS, self-signed cert, per-endpoint `profile` + `ca_bundle`) by
+`../devtools/run-extenddb-smoke` — both drive the `ddbsh-wasm` edition through a
+running proxy.
 
 ## Portability
 
