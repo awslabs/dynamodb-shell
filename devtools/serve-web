@@ -17,10 +17,20 @@
 #   devtools/serve-web [PORT]      # default port 8080
 # Env overrides (shared with run-web-smoke): EMSDK, EMSDK_PYTHON,
 # DDBSH_WASM_BUILD_DIR. Ctrl-C to stop the server.
+#
+# Binding: the server defaults to loopback (127.0.0.1) so the bundle is only
+# reachable from this machine. This edition serves the credential-free in-browser
+# build, but loopback-by-default is the baseline for any dev server (and the
+# proxy editions must stay loopback regardless). To hand-test from another
+# machine, prefer an SSH local port-forward (`ssh -L $PORT:localhost:$PORT host`).
+# If you knowingly want the server reachable on your LAN, set the bind explicitly:
+#   DDBSH_SERVE_BIND=0.0.0.0 devtools/serve-web [PORT]
+# which exposes the bundle to every host that can route to this interface.
 
 set -euo pipefail
 
 PORT="${1:-8080}"
+BIND="${DDBSH_SERVE_BIND:-127.0.0.1}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
 WEB_OUT="$WASM_BUILD/web"
@@ -56,7 +66,13 @@ fi
 
 # --- Serve ------------------------------------------------------------------
 # Use any available python3 for the static server (3.9 is fine here; only the
-# emsdk scripts need 3.10+).
-echo "Serving $WEB_OUT at http://localhost:$PORT/ (Ctrl-C to stop)"
+# emsdk scripts need 3.10+). Bind loopback-only by default (DDBSH_SERVE_BIND to
+# override knowingly — see the header).
+if [ "$BIND" = "127.0.0.1" ] || [ "$BIND" = "::1" ] || [ "$BIND" = "localhost" ]; then
+    echo "Serving $WEB_OUT at http://localhost:$PORT/ (bind $BIND, loopback-only; Ctrl-C to stop)"
+else
+    echo "WARNING: binding $BIND — the bundle is reachable by other machines on this network." >&2
+    echo "Serving $WEB_OUT at http://$BIND:$PORT/ (Ctrl-C to stop)"
+fi
 cd "$WEB_OUT"
-exec python3 -m http.server "$PORT"
+exec python3 -m http.server --bind "$BIND" "$PORT"

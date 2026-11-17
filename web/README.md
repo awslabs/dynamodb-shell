@@ -165,12 +165,19 @@ app shows a one-line banner and refuses to start if opened from `file://`.
 ```bash
 devtools/serve-web            # builds the preset if needed, then serves :8080
 # or, by hand, from the build output dir:
-cd build-preset/wasm-release/web && python3 -m http.server 8080
+cd build-preset/wasm-release/web && python3 -m http.server --bind 127.0.0.1 8080
 ```
 
 Then open <http://localhost:8080/>. No cross-origin-isolation (COOP/COEP) headers
 are required: the target uses Asyncify, not threads/SharedArrayBuffer, so plain
 `http.server` is enough. (A future threaded build would need COOP/COEP.)
+
+`devtools/serve-web` binds **loopback (127.0.0.1) only** by default, so the bundle
+is reachable only from this machine. To hand-test from another machine, prefer an
+SSH local port-forward (`ssh -L 8080:localhost:8080 host`). If you knowingly want
+the server reachable on your LAN, set the bind explicitly —
+`DDBSH_SERVE_BIND=0.0.0.0 devtools/serve-web` — which exposes the (credential-free)
+bundle to every host that can route to this interface.
 
 Using the UI:
 
