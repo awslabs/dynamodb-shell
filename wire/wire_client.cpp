@@ -17,6 +17,7 @@
 #include <variant>
 
 #include "ddbsh/wire/codec.hpp"
+#include "wire/datetime.hpp"
 
 namespace ddbsh::wire {
 namespace {
@@ -90,19 +91,29 @@ Result<DeleteItemOut> WireClient::delete_item(const DeleteItemIn& in) {
 }
 
 Result<std::string> WireClient::explain_request(const ExplainRequest& req) {
-    // The six data-plane alternatives serialize SDK-free (P6a); the EXPLAIN body
-    // is exactly the serialized request body (P6-02 §3.2), byte-proven == the
-    // SDK's SerializePayload() by the P6a differential gate. Every other
-    // alternative awaits the P6c serializers.
+    // Every ExplainRequest alternative serializes SDK-free (P6a data-plane +
+    // P6c control-plane/transaction/vector); the EXPLAIN body is exactly the
+    // serialized request body (P6-02 §3.2), byte-proven == the SDK's
+    // SerializePayload() by the differential gate. The engine's executors wrap
+    // it in ApiName(...) and apply the EXPLAIN label (including the two
+    // *Request-suffixed labels), so no quirk lives here.
     return std::visit(
         [](const auto& in) -> Result<std::string> {
             using T = std::decay_t<decltype(in)>;
-            if constexpr (std::is_same_v<T, GetItemIn> || std::is_same_v<T, QueryIn> ||
-                          std::is_same_v<T, ScanIn> || std::is_same_v<T, PutItemIn> ||
-                          std::is_same_v<T, UpdateItemIn> || std::is_same_v<T, DeleteItemIn>) {
+            if constexpr (std::is_same_v<T, RestoreToPitrIn>) {
+                // The one EXPLAIN alternative that can fail to serialize: the
+                // restore timestamp must parse (the SDK's WasParseSuccessful()
+                // gate). Validate first and return the SDK adapter's exact
+                // invalid_argument Error on failure (D-P6c-2 / §2.2), so the
+                // wire path matches the SDK path byte-for-byte on both the
+                // success body and the error.
+                if (!iso8601_to_epoch(in.restore_datetime).has_value()) {
+                    return fail(Errc::invalid_argument,
+                                "Invalid restore timestamp: " + in.restore_datetime);
+                }
                 return serialize(in).body;
             } else {
-                return not_yet("EXPLAIN for this request");
+                return serialize(in).body;
             }
         },
         req);

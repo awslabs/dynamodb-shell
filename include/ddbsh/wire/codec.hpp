@@ -52,8 +52,8 @@ struct WireRequest {
 // ---- Data-plane serializers (P6a) ------------------------------------------
 // One overload per in-scope request struct. Each builds the AWS-JSON-1.0 body
 // in the SDK's Jsonize member order and sets `operation` to the op's
-// X-Amz-Target suffix. The control-plane, transaction, and vector ops land in
-// later P6 sub-phases (P6c).
+// X-Amz-Target suffix. The control-plane, transaction, and vector ops follow
+// below (P6c).
 
 WireRequest serialize(const GetItemIn& in);
 WireRequest serialize(const QueryIn& in);
@@ -61,6 +61,38 @@ WireRequest serialize(const ScanIn& in);
 WireRequest serialize(const PutItemIn& in);
 WireRequest serialize(const UpdateItemIn& in);
 WireRequest serialize(const DeleteItemIn& in);
+
+// ---- Control-plane, backup/restore, transaction, vector serializers (P6c) --
+// The remaining in-scope request structs. Each builds the AWS-JSON-1.0 body in
+// the SDK's Jsonize member order and sets `operation` to the op's X-Amz-Target
+// suffix. Byte-identical to the SDK adapter's SerializePayload() for the
+// translated request (the P6-02 §9.1 contract), pinned by the extended
+// differential gate (tests/wire_serialize_diff_test.cpp). The three ops not in
+// the ExplainRequest variant (DescribeLimits, ListTables, ListBackups — the
+// SHOW commands have no EXPLAIN) are reached only by the WireClient execution
+// path (P6c-b); the differential gate pins them against a directly-built SDK
+// request.
+
+WireRequest serialize(const CreateTableIn& in);
+WireRequest serialize(const UpdateTableIn& in);
+WireRequest serialize(const DeleteTableIn& in);
+WireRequest serialize(const UpdateTimeToLiveIn& in);
+WireRequest serialize(const UpdateContinuousBackupsIn& in);
+WireRequest serialize(const DescribeTableIn& in);
+WireRequest serialize(const DescribeTimeToLiveIn& in);
+WireRequest serialize(const DescribeContinuousBackupsIn& in);
+WireRequest serialize(const DescribeTableReplicaAutoScalingIn& in);
+WireRequest serialize(const DescribeLimitsIn& in);
+WireRequest serialize(const ListTablesIn& in);
+WireRequest serialize(const ListBackupsIn& in);
+WireRequest serialize(const CreateBackupIn& in);
+WireRequest serialize(const DeleteBackupIn& in);
+WireRequest serialize(const DescribeBackupIn& in);
+WireRequest serialize(const RestoreFromBackupIn& in);
+WireRequest serialize(const RestoreToPitrIn& in);
+WireRequest serialize(const TransactGetItemsIn& in);
+WireRequest serialize(const TransactWriteItemsIn& in);
+WireRequest serialize(const SearchVectorsIn& in);
 
 // ---- Data-plane response parsers (P6b) -------------------------------------
 // The inverse of the serializers above: turn an AWS-JSON-1.0 response `body`

@@ -181,16 +181,38 @@ TEST(WireClient, ExplainDataPlaneReturnsSerializedBody) {
     EXPECT_TRUE(transport.calls().empty());  // EXPLAIN makes no transport call
 }
 
-TEST(WireClient, ExplainNonDataPlaneIsNotImplemented) {
+TEST(WireClient, ExplainControlPlaneReturnsSerializedBody) {
     CannedTransport transport;
     WireClient client(transport);
 
+    // P6c: every ExplainRequest alternative now serializes SDK-free. A
+    // control-plane op (DescribeTable) returns its serialized body and makes no
+    // transport call.
     ddbsh::DescribeTableIn dt;
     dt.table_name = "t";
     ExplainRequest req = dt;
     auto body = client.explain_request(req);
+    ASSERT_TRUE(body.has_value());
+    EXPECT_EQ(*body, ddbsh::wire::serialize(dt).body);
+    EXPECT_TRUE(transport.calls().empty());
+}
+
+TEST(WireClient, ExplainRestoreToPitrRejectsBadTimestamp) {
+    CannedTransport transport;
+    WireClient client(transport);
+
+    // The one EXPLAIN alternative that validates: a malformed restore
+    // timestamp yields the SDK adapter's invalid_argument Error (D-P6c-2).
+    ddbsh::RestoreToPitrIn bad;
+    bad.source_table_name = "t";
+    bad.target_table_name = "t2";
+    bad.restore_datetime = "not-a-timestamp";
+    ExplainRequest req = bad;
+    auto body = client.explain_request(req);
     ASSERT_FALSE(body.has_value());
-    EXPECT_EQ(body.error().code, Errc::not_implemented);
+    EXPECT_EQ(body.error().code, Errc::invalid_argument);
+    EXPECT_EQ(body.error().message, "Invalid restore timestamp: not-a-timestamp");
+    EXPECT_TRUE(transport.calls().empty());
 }
 
 // ---- P6c stubs -------------------------------------------------------------

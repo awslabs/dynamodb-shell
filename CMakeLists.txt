@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.11.2
+        VERSION 0.11.3
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -186,7 +186,7 @@ set_source_files_properties(
 # public headers (the request structs); it uses no engine runtime symbols, and
 # it never pulls the AWS SDK (an engine_boundary_check-style invariant: nothing
 # under include/ddbsh/wire/ includes <aws/...>).
-add_library(ddbsh-wire wire/codec.cpp wire/parse.cpp wire/json_reader.cpp wire/wire_client.cpp)
+add_library(ddbsh-wire wire/codec.cpp wire/parse.cpp wire/json_reader.cpp wire/datetime.cpp wire/wire_client.cpp)
 add_library(ddbsh::wire ALIAS ddbsh-wire)
 # EXPORT_NAME `wire` so the INSTALLED imported target is `ddbsh::wire`, matching
 # the in-tree alias (the NAMESPACE `ddbsh::` prefixes the EXPORT_NAME).
@@ -317,6 +317,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/cli_exit_code_test.cpp
                    tests/wire_json_reader_test.cpp
                    tests/wire_parse_roundtrip_test.cpp
+                   tests/wire_datetime_test.cpp
                    tests/wire_client_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
