@@ -31,10 +31,11 @@
 #ifndef DDBSH_WIRE_CODEC_HPP
 #define DDBSH_WIRE_CODEC_HPP
 
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "ddbsh/iddbclient.hpp"
-
 namespace ddbsh::wire {
 
 /// A serialized DynamoDB request ready for the wire transport.
@@ -94,6 +95,19 @@ WireRequest serialize(const TransactGetItemsIn& in);
 WireRequest serialize(const TransactWriteItemsIn& in);
 WireRequest serialize(const SearchVectorsIn& in);
 
+// ---- ListTables cursor-aware serializer (P6c-b paging) ---------------------
+// ListTablesIn carries no cursor field, but the SHOW TABLES executor expects
+// the full table list and the AWS adapter pages internally on
+// LastEvaluatedTableName. The WireClient reproduces that paging loop (it is the
+// one op whose request struct cannot express the cursor), so it needs a
+// serializer that can thread ExclusiveStartTableName for the second and later
+// pages. serialize(const ListTablesIn&) is exactly serialize_list_tables with
+// no cursor (the empty first-page body, pinned by the differential gate);
+// passing a cursor emits the SDK's ListTablesRequest body with
+// ExclusiveStartTableName set (Jsonize order). The adapter never sets Limit for
+// ListTables, so neither does this.
+WireRequest serialize_list_tables(const std::optional<std::string>& exclusive_start_table_name);
+
 // ---- Data-plane response parsers (P6b) -------------------------------------
 // The inverse of the serializers above: turn an AWS-JSON-1.0 response `body`
 // into the engine's SDK-free *Out struct, field-identical to what the AWS
@@ -116,6 +130,54 @@ Result<ScanOut> parse_scan(const std::string& body);
 Result<PutItemOut> parse_put_item(const std::string& body);
 Result<UpdateItemOut> parse_update_item(const std::string& body);
 Result<DeleteItemOut> parse_delete_item(const std::string& body);
+
+// ---- Control-plane / backup-restore / transaction / vector response parsers (P6c-b) -------
+// The inverse of the P6c-a serializers, each field-identical to the AWS
+// adapter's response assembly (aws/aws_ddb_client.cpp, the fidelity oracle).
+// Every parser first checks the top-level `__type` (error document -> mapped
+// Error) before reading success members; a malformed body or AttributeValue
+// yields Errc::service_error (tenet 6). Enum-valued fields are read as the raw
+// response NAME string the SDK mapper would have produced ("ACTIVE",
+// "PAY_PER_REQUEST", "HASH", ...), so no enum<->name table is needed (§11).
+// Response timestamps are epoch-seconds JSON numbers formatted to ISO-8601 via
+// wire/datetime.hpp, matching the adapter's ToGmtString(ISO_8601).
+
+// Data-returning parsers.
+Result<DescribeTableOut> parse_describe_table(const std::string& body);
+Result<TimeToLiveOut> parse_describe_time_to_live(const std::string& body);
+Result<ContinuousBackupsOut> parse_describe_continuous_backups(const std::string& body);
+Result<TableReplicaAutoScalingOut> parse_describe_table_replica_auto_scaling(
+    const std::string& body);
+Result<DescribeLimitsOut> parse_describe_limits(const std::string& body);
+Result<DescribeBackupOut> parse_describe_backup(const std::string& body);
+Result<ListBackupsOut> parse_list_backups(const std::string& body);
+Result<SearchVectorsOut> parse_search_vectors(const std::string& body);
+Result<TransactGetItemsOut> parse_transact_get_items(const std::string& body);
+
+/// One page of a ListTables response. ListTablesOut carries no cursor field (the
+/// AWS adapter pages internally), so the wire parser surfaces one page and the
+/// WireClient drives the paging loop (§4.2): it appends `table_names` and, while
+/// `last_evaluated_table_name` is set, re-issues ListTables with that cursor.
+struct ListTablesPage {
+    std::vector<std::string> table_names;
+    std::optional<std::string> last_evaluated_table_name;  ///< empty/absent => last page
+};
+Result<ListTablesPage> parse_list_tables(const std::string& body);
+
+// Token-only acknowledgements. The mutating control-plane ops and
+// TransactWriteItems ignore their success response body entirely (the adapter
+// only checks IsSuccess()); the wire parser likewise returns the empty *Out on
+// success and the mapped Error on a `__type` document.
+Result<CreateTableOut> parse_create_table(const std::string& body);
+Result<UpdateTableOut> parse_update_table(const std::string& body);
+Result<DeleteTableOut> parse_delete_table(const std::string& body);
+Result<UpdateTimeToLiveOut> parse_update_time_to_live(const std::string& body);
+Result<UpdateContinuousBackupsOut> parse_update_continuous_backups(const std::string& body);
+Result<CreateBackupOut> parse_create_backup(const std::string& body);
+Result<DeleteBackupOut> parse_delete_backup(const std::string& body);
+Result<RestoreFromBackupOut> parse_restore_from_backup(const std::string& body);
+Result<RestoreToPitrOut> parse_restore_to_pitr(const std::string& body);
+Result<TransactWriteItemsOut> parse_transact_write_items(const std::string& body);
 
 }  // namespace ddbsh::wire
 

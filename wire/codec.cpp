@@ -1195,14 +1195,25 @@ WireRequest serialize(const DescribeLimitsIn&) {
 }
 
 // ---- ListTables ------------------------------------------------------------
-// The engine's ListTablesIn carries no fields (the paging cursor is threaded by
-// the WireClient in P6c-b, which splices ExclusiveStartTableName/Limit as the
-// SDK's ListTablesRequest serializes them). ListTablesRequest::SerializePayload
-// builds an all-optional JsonValue; with nothing set it is a NULL cJSON, and
+// The engine's ListTablesIn carries no fields; the paging cursor is threaded by
+// the WireClient in P6c-b (§4.2) through serialize_list_tables. With no cursor
+// (the first page), ListTablesRequest::SerializePayload builds an all-optional
+// JsonValue; with nothing set it is a NULL cJSON, and
 // JsonView::WriteReadable(treatAsObject=true) returns the hardcoded "{\n}\n"
-// (NOT the printer's "{\n}"). Match that empty-body byte string verbatim.
+// (NOT the printer's "{\n}"). Match that empty-body byte string verbatim. With
+// a cursor set, exactly one member (ExclusiveStartTableName) is present and the
+// normal cJSON readable printer applies (render); the adapter never sets Limit.
+WireRequest serialize_list_tables(const std::optional<std::string>& exclusive_start_table_name) {
+    if (!exclusive_start_table_name.has_value()) {
+        return WireRequest{"ListTables", "{\n}\n"};
+    }
+    Json root = make_object();
+    root.members.emplace_back("ExclusiveStartTableName", make_string(*exclusive_start_table_name));
+    return WireRequest{"ListTables", render(root)};
+}
+
 WireRequest serialize(const ListTablesIn&) {
-    return WireRequest{"ListTables", "{\n}\n"};
+    return serialize_list_tables(std::nullopt);
 }
 
 // ---- ListBackups -----------------------------------------------------------

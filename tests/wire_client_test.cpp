@@ -215,18 +215,22 @@ TEST(WireClient, ExplainRestoreToPitrRejectsBadTimestamp) {
     EXPECT_TRUE(transport.calls().empty());
 }
 
-// ---- P6c stubs -------------------------------------------------------------
+// ---- P6c-b: the former stubs now drive the transport ----------------------
+// (full control-plane / transaction / waiter coverage lives in
+// wire_client_control_test.cpp). This asserts the ops are no longer
+// not_implemented: each now serializes and calls the transport.
 
-TEST(WireClient, ControlPlaneStubsReportNotImplemented) {
+TEST(WireClient, ControlPlaneOpsDriveTheTransport) {
     CannedTransport transport;
+    transport.push_response(R"({"Table":{"TableName":"t","TableStatus":"ACTIVE"}})");
     WireClient client(transport);
 
-    EXPECT_EQ(client.describe_table(ddbsh::DescribeTableIn{"t"}).error().code,
-              Errc::not_implemented);
-    EXPECT_EQ(client.list_tables(ddbsh::ListTablesIn{}).error().code, Errc::not_implemented);
-    EXPECT_EQ(client.delete_table(ddbsh::DeleteTableIn{"t"}).error().code, Errc::not_implemented);
-    EXPECT_EQ(client.wait_for_table_active("t").error().code, Errc::not_implemented);
-    EXPECT_TRUE(transport.calls().empty());
+    auto out = client.describe_table(ddbsh::DescribeTableIn{"t"});
+    ASSERT_TRUE(out.has_value());
+    EXPECT_EQ(out->table_name, "t");
+    ASSERT_EQ(transport.calls().size(), 1u);
+    EXPECT_EQ(transport.calls()[0].operation, "DescribeTable");
+    EXPECT_TRUE(transport.drained());
 }
 
 // ---- connect records state, makes no call ----------------------------------

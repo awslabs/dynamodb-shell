@@ -830,6 +830,19 @@ TEST_F(WireDiff, ListTablesEmptyBody) {
     expect_sdk_parity(ListTablesIn{}, "ListTables", Aws::DynamoDB::Model::ListTablesRequest{});
 }
 
+// The paged (cursor) ListTables body the WireClient threads for the second and
+// later pages (P6c-b). serialize_list_tables is not a serialize() overload (it
+// is reached only by the internal paging loop), so pin it directly against an
+// SDK ListTablesRequest with ExclusiveStartTableName set.
+TEST_F(WireDiff, ListTablesWithCursor) {
+    Aws::DynamoDB::Model::ListTablesRequest sdk;
+    sdk.SetExclusiveStartTableName("tbl-7");
+    ddbsh::wire::WireRequest wire =
+        ddbsh::wire::serialize_list_tables(std::optional<std::string>("tbl-7"));
+    EXPECT_EQ(wire.operation, "ListTables");
+    EXPECT_EQ(wire.body, std::string(sdk.SerializePayload().c_str()));
+}
+
 TEST_F(WireDiff, ListBackupsMinimal) {
     ListBackupsIn in;  // limit defaults to 100
     Aws::DynamoDB::Model::ListBackupsRequest sdk;

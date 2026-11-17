@@ -11,14 +11,16 @@
 // (Emscripten) engine target constructs a WireClient over an in-WASM/fetch
 // Transport and drives a ddbsh::Session with it — no AWS SDK, no terminal.
 //
-// SCOPE (P6b). The six DATA-PLANE ops (GetItem/Query/Scan/PutItem/UpdateItem/
-// DeleteItem) are fully implemented, and explain_request is SDK-free for those
-// six alternatives (a free by-product of P6a's byte-proven serializer). Every
-// remaining IDDBClient virtual — the control plane (create/drop/alter table,
-// describe family, show-limits/tables, backup/restore), transactions, and the
-// table waiters — returns a clearly-labelled Errc::not_implemented stub, filled
-// in P6c. These stubs are deliberate, labelled scaffolding (each message names
-// the op and "(P6c)"), not dead code; P6c removes them as each op lands.
+// SCOPE (P6c-b). The full IDDBClient surface is implemented SDK-free: the six
+// data-plane ops (P6b), the control plane (create/drop/alter table, the
+// describe family, show-limits/tables, backup/restore), transactions, vector
+// search, the two table waiters, and explain_request for every ExplainRequest
+// alternative. ListTables/ListBackups page internally (the AWS adapter's paging
+// loops reproduced over the transport); five ops (the two transactions,
+// UpdateTable, UpdateTimeToLive, UpdateContinuousBackups) re-wrap a mapped Error
+// in the adapter's composed failure message (§4.3). The browser (Emscripten)
+// engine target constructs a WireClient over an in-WASM/fetch Transport and
+// drives a ddbsh::Session with it — no AWS SDK, no terminal.
 //
 // Ownership: WireClient borrows the Transport&, exactly as Session borrows
 // IDDBClient& — the embedder guarantees the transport outlives the client. No
@@ -27,6 +29,7 @@
 #ifndef DDBSH_WIRE_WIRE_CLIENT_HPP
 #define DDBSH_WIRE_WIRE_CLIENT_HPP
 
+#include <chrono>
 #include <string>
 
 #include "ddbsh/iddbclient.hpp"
@@ -61,7 +64,7 @@ public:
     // return not_implemented until P6c extends the visit.
     Result<std::string> explain_request(const ExplainRequest& req) override;
 
-    // ---- P6c stubs (labelled not_implemented) -------------------------------
+    // ---- control plane / backup-restore / transactions / waiters (P6c-b) ---
     Result<CreateTableOut> create_table(const CreateTableIn&) override;
     Result<UpdateTableOut> update_table(const UpdateTableIn&) override;
     Result<UpdateTimeToLiveOut> update_time_to_live(const UpdateTimeToLiveIn&) override;
@@ -77,6 +80,7 @@ public:
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
+    Result<SearchVectorsOut> search_vectors(const SearchVectorsIn&) override;
     Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn&) override;
     Result<TransactWriteItemsOut> transact_write_items(const TransactWriteItemsIn&) override;
     Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) override;
@@ -86,6 +90,14 @@ public:
         const DescribeTableReplicaAutoScalingIn&) override;
     Result<void> wait_for_table_active(const std::string& table_name) override;
     Result<void> wait_for_table_gone(const std::string& table_name) override;
+
+protected:
+    /// The waiter poll delay (D-P6c-6). Default: emscripten_sleep under
+    /// Asyncify (so the browser event loop keeps turning), std::this_thread::
+    /// sleep_for on the host. The single platform `#if` lives in this one
+    /// method; nothing else in WireClient is platform-coupled. A test overrides
+    /// it to a no-op so the waiter loops run instantly (no real sleep in CI).
+    virtual void poll_delay(std::chrono::milliseconds interval);
 
 private:
     Transport& transport_;
