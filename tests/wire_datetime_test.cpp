@@ -91,9 +91,14 @@ TEST(WireDatetime, RejectsDateOnly) {
 }
 
 TEST(WireDatetime, RejectsNonUtcOffset) {
-    // A non-UTC offset is local-time per the SDK and cannot be lexed by
-    // T_TIMESTAMP; rejected.
+    // Deliberate divergence (D-P6c-10): the SDK's ISO_8601DateParser ACCEPTS a
+    // trailing +/-HH:MM offset (WasParseSuccessful() is true; "+00:00" is even
+    // treated as UTC), but the wire codec accepts only the 'Z' form. Safe
+    // because T_TIMESTAMP can never lex an offset, so this is unreachable via
+    // the SQL grammar.
     EXPECT_FALSE(iso8601_to_epoch("2023-11-14T22:13:20+01:00").has_value());
+    // The one clean UTC form the SDK accepts and the wire deliberately rejects.
+    EXPECT_FALSE(iso8601_to_epoch("2023-11-14T22:13:20+00:00").has_value());
 }
 
 TEST(WireDatetime, RejectsLenientNoSeparators) {

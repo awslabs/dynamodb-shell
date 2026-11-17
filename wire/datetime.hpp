@@ -16,11 +16,13 @@
 //     the SDK's STRICT Aws::Utils::DateTime ISO_8601DateParser
 //     (aws-cpp-sdk-core DateTimeCommon.cpp), which accepts only
 //     "YYYY-MM-DDTHH:MM:SS" followed by 'Z' (UTC) or ".<3..9 digits>Z" (UTC
-//     with milliseconds). A non-UTC offset is treated by the SDK as local time
-//     and cannot be produced by ddbsh's T_TIMESTAMP lexer ("YYYY-MM-DDThh:mm:ssZ"
-//     only), so it is rejected. Returns nullopt on an unparseable string (the
-//     SDK's WasParseSuccessful() == false path), which the WireClient surfaces
-//     as the same invalid_argument Error the adapter returns.
+//     with milliseconds). It returns nullopt on a string the SDK itself rejects
+//     (its WasParseSuccessful() == false path: a bare date, lenient separators,
+//     a lowercase 't'), which the WireClient surfaces as the same
+//     invalid_argument Error the adapter returns. It ALSO returns nullopt for a
+//     trailing numeric offset (+/-HH:MM) form, which the SDK would ACCEPT — a
+//     deliberate divergence (D-P6c-10), safe because ddbsh's T_TIMESTAMP lexer
+//     ("YYYY-MM-DDThh:mm:ssZ" only) can never produce an offset.
 //
 //   * epoch_to_iso8601 — the inverse the response parsers need: a DynamoDB
 //     response timestamp (epoch-seconds JSON number) -> the exact string
@@ -57,9 +59,13 @@ std::string epoch_to_iso8601(double epoch_seconds);
 /// Aws::Utils::DateTime(str, ISO_8601).SecondsWithMSPrecision(). Accepts the
 /// SDK's strict ISO_8601DateParser grammar: "YYYY-MM-DDTHH:MM:SS" followed by
 /// 'Z' (UTC), or ".<3..9 digits>Z" (UTC, the first three digits are
-/// milliseconds). Returns nullopt for anything else — including a date without
-/// a time, lenient separators, or a non-UTC +/-HH:MM offset — matching the
-/// SDK's WasParseSuccessful() == false path for the forms ddbsh can produce.
+/// milliseconds). Returns nullopt for anything else. A bare date, lenient
+/// separators, or a lowercase 't' are rejected because the SDK rejects them too
+/// (its WasParseSuccessful() == false path). A trailing non-UTC +/-HH:MM offset
+/// is ALSO rejected, but as a deliberate divergence (D-P6c-10): the SDK would
+/// accept that form ("+00:00" even succeeds as UTC), yet ddbsh's T_TIMESTAMP
+/// lexer can only produce the 'Z' form, so the offset grammar is unreachable
+/// via SQL and accepted only through a hand-built RestoreToPitrIn.
 std::optional<double> iso8601_to_epoch(std::string_view iso);
 
 }  // namespace ddbsh::wire

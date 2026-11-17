@@ -452,6 +452,18 @@ TEST_F(WireDiff, CreateTableBareOnDemandEmptyThroughput) {
     expect_parity(in, "CreateTable");
 }
 
+TEST_F(WireDiff, CreateTableOnDemandLargeMaxUnits) {
+    // Pin the integer number path at a realistic on-demand maximum (above the
+    // small 3/4/5/7 values the rest of the corpus uses), exercising cJSON's
+    // integer formatting for a multi-digit value.
+    CreateTableIn in;
+    in.table_name = "t";
+    in.attribute_definitions = {{"id", ScalarType::s}};
+    in.key_schema = hash_key("id");
+    in.billing = on_demand(40000, 80000);
+    expect_parity(in, "CreateTable");
+}
+
 TEST_F(WireDiff, CreateTableFullFeatured) {
     CreateTableIn in;
     in.table_name = "t";

@@ -96,7 +96,11 @@ Json make_number(std::string token) {
 // compare_double, a relative-epsilon test) fall back to "%1.17g". The decimal
 // point is '.' (the SDK builds cJSON with locale support off). An
 // integer-valued double (e.g. a whole-second RestoreDateTime) prints without a
-// fraction, exactly as cJSON does.
+// fraction, exactly as cJSON does. cJSON's integer fast path (d ==
+// (double)valueint -> "%d") is intentionally omitted: within int range an
+// integer-valued double formats identically under "%d" and "%1.15g", and beyond
+// INT_MAX cJSON clamps valueint and itself falls to "%1.15g", so the fast path
+// never produces a different byte here.
 std::string cjson_number_double(double d) {
     if (std::isnan(d) || std::isinf(d)) {
         return "null";

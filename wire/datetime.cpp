@@ -8,9 +8,17 @@
 // proleptic-Gregorian (year, month, day) to a day count relative to
 // 1970-01-01 and back, exactly as the SDK's underlying timegm does for the
 // ranges DynamoDB produces. The ISO-8601 grammar accepted here mirrors the
-// AWS-C-common parser (s_parse_iso_8601 in aws-c-common/source/date_time.c):
-// lenient separators, optional time, fractional seconds discarded, trailing Z
-// or +/-HH[:]MM offset.
+// SDK's STRICT aws-cpp-sdk-core parser, Aws::Utils::DateTime's
+// ISO_8601DateParser (aws-cpp-sdk-core/source/utils/DateTimeCommon.cpp) — the
+// oracle the adapter's RestoreTableToPointInTime path uses — NOT the lenient
+// aws-c-common s_parse_iso_8601. That parser requires the full date-time with
+// strict '-'/'T'/':' separators and an uppercase 'T', then either 'Z' (UTC,
+// no fraction) or '.' followed by 3..9 fractional digits and 'Z' (UTC, the
+// first three digits are milliseconds). It does NOT accept a bare date, lenient
+// separators, or a lowercase 't'. A trailing numeric offset (+/-HH:MM) is a
+// deliberate divergence here (see iso8601_to_epoch below and D-P6c-10): the SDK
+// would accept it, but the wire codec rejects it because ddbsh's T_TIMESTAMP
+// lexer can only produce the 'Z' form.
 
 #include "wire/datetime.hpp"
 
@@ -48,8 +56,8 @@ void civil_from_days(long long z, long long& y, unsigned& m, unsigned& d) {
     y += (m <= 2);
 }
 
-// A tiny forward cursor over the ISO string, mirroring the AWS-C-common
-// parser's primitives (read N digits, optional separator, read one char).
+// A tiny forward cursor over the ISO string (read N digits, optional
+// separator, read one char).
 struct Cursor {
     const char* p;
     const char* end;
@@ -91,10 +99,15 @@ std::optional<double> iso8601_to_epoch(std::string_view iso) {
     //   YYYY '-' MM '-' DD 'T' HH ':' MM ':' SS  then one of
     //     'Z'                         (UTC, no fraction), or
     //     '.' <3..9 digits> 'Z'       (UTC, first 3 digits are milliseconds).
-    // A non-UTC offset is treated by the SDK as local time (machine-TZ
-    // dependent) and cannot be produced by ddbsh's T_TIMESTAMP lexer
-    // ("YYYY-MM-DDThh:mm:ssZ" only), so it is rejected here. SecondsWithMSPrecision
-    // returns whole-second + milliseconds/1000.
+    // DELIBERATE DIVERGENCE (D-P6c-10): the SDK parser also ACCEPTS a trailing
+    // numeric offset form "YYYY-MM-DDTHH:MM:SS+HH:MM" / "-HH:MM" (its state
+    // machine reaches a final accepting state and WasParseSuccessful() returns
+    // true; "+00:00" even sets m_utcAssumed). The wire codec rejects every
+    // offset form, accepting only the UTC 'Z' spelling, because ddbsh's
+    // T_TIMESTAMP lexer ("YYYY-MM-DDThh:mm:ssZ" only) can never produce an
+    // offset — so the divergence is unreachable via the SQL grammar and only
+    // observable by handing a hand-built RestoreToPitrIn straight to a
+    // WireClient. SecondsWithMSPrecision returns whole-second + ms/1000.
     Cursor cur{iso.data(), iso.data() + iso.size()};
 
     int year = 0, month = 0, mday = 0, hour = 0, minute = 0, second = 0;
