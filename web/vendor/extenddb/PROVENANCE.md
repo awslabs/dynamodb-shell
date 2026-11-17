@@ -1,37 +1,49 @@
-# Vendored third-party artifact — ExtendDB WASM adapter
+# Third-party drop-in — ExtendDB WASM adapter (NOT committed)
 
-This directory holds a **pinned, vendored** copy of the in-browser ExtendDB
-WebAssembly adapter. The ddbsh build never builds ExtendDB from source; it links
-nothing from it at C++ link time. The adapter is a runtime JS/WASM dependency of
-the browser web target only: the page wires `Module.submit(op, body)` to the
-adapter's `submit`, and the engine's `SubmitTransport` bridges to it (P6d).
+This directory is the **drop-in location** for the in-browser ExtendDB
+WebAssembly adapter that the browser *in-tab* edition (`ddbsh-wasm-extenddb-wasm`,
+`SubmitTransport`) runs against. Per **D-P6f-8** ddbsh **never ships or commits**
+the adapter blob: the ddbsh build stages only ddbsh's own files, and the adapter
+is dropped in here (or into the served webroot's `vendor/extenddb/`) by the dev
+tooling or the user/deploy. Only this `PROVENANCE.md` and the sibling
+`.gitignore` are tracked; the adapter files themselves are git-ignored.
+
+Consequence (the point of the drop-in model): a new extenddb-webasm release is
+**swap-the-dir-and-relaunch** — no ddbsh rebuild — as long as the adapter's
+`create()` / `submit()` JS contract and filenames hold.
+
+## Pinned version & source
 
 | Field | Value |
 |-------|-------|
 | Package | `extenddb-wasm-adapter` |
 | Version | **0.1.26** (pinned exactly; never floated) |
-| License | Apache-2.0 (see `LICENSE`) |
+| License | Apache-2.0 (upstream `LICENSE`; https://github.com/ExtendDB/extenddb) |
 | Source  | `~/source/extenddb-webasm/samples/webasm-storefront/pkg` (read-only) |
 | Upstream | https://github.com/ExtendDB/extenddb — https://extenddb.org/ |
-| Vendored | 2026-11-17 (P6d, `dev/p6d-wasm-target`) |
+| Pre-release | the in-browser edition is **pre-release** (README §"Three setups") |
 
-## Version note — why 0.1.26, not the architect's 0.1.21 (D-P6d-6 deviation)
+Version note (carried from P6d): the `0.1.26` build in
+`samples/webasm-storefront/pkg` is the version the upstream headless demo ships
+and this project's smoke passes against. An earlier `0.1.21` (from
+`crates/wasm-adapter/pkg`) had a wasm32 `std::time` runtime bug (`"time not
+implemented on this platform"`) fixed by `0.1.26`; the `create()`/`submit()`
+`.d.ts` contract is byte-identical between the two, so the P6f transport/bridge
+design is unaffected by the pin. The package self-describes as an internal crate
+"with no API stability promise", so the pin is exact; bumping it is a deliberate,
+reviewed change (re-verify the contract and re-run the web smoke).
 
-The P6d design (D-P6d-6) pinned `0.1.21`, read from
-`crates/wasm-adapter/pkg` — a **compile-only** verification of the
-`create()`/`submit()` contract. Running that `0.1.21` artifact under the P6d
-Node smoke revealed a genuine **runtime** defect: the engine panics on the
-first table-creating op with `std::time ... "time not implemented on this
-platform"` (a wasm32 `SystemTime`/`Instant` bug). The upstream repo's own
-working headless demo (`samples/webasm-storefront/headless/run.mjs`) runs
-against the newer **`0.1.26`** build in `samples/webasm-storefront/pkg`, whose
-runner comment records that this exact `std::time` bug was fixed. The `create()`
-/ `submit()` TypeScript contract is **byte-identical** between 0.1.21 and 0.1.26
-(verified with `diff` on the `.d.ts`), so the P6d transport/bridge design is
-unchanged — only the artifact that actually runs is newer. Vendoring 0.1.26
-(the version the upstream demo ships and this project's smoke passes against) is
-a deliberate, correctness-driven deviation from D-P6d-6, recorded for the
-reviewer/principal. The pin is still exact and never floated.
+## How the adapter gets here
+
+- **Dev / test loop (automatic):** `devtools/stage-extenddb-webasm <target-dir>`
+  copies the adapter from `DDBSH_EXTENDDB_WEBASM_PKG` (default the Source path
+  above) into `<target-dir>/vendor/extenddb/`, validating the pinned version.
+  `devtools/run-web-smoke` stages into the build output dir before the Node
+  smoke; `devtools/serve-web` stages into the served webroot before serving.
+- **Deploy / by hand:** copy the five adapter files below from an
+  `extenddb-wasm-adapter@0.1.26` build into the served webroot's
+  `vendor/extenddb/` directory (same-origin with `index.html` is mandatory for
+  the ES-module import and the glue's relative `_bg.wasm` fetch).
 
 ## Contract (from `extenddb_wasm_adapter.d.ts`)
 
@@ -46,14 +58,7 @@ reviewer/principal. The pin is still exact and never floated.
   exactly why `ddbsh::wire::Transport` is `(op, body) -> body`: the codec
   inspects the body to decide success vs. error (D-P6d-1).
 
-## Stability note
-
-The package self-describes as an internal crate "with no API stability
-promise." It is therefore pinned to the exact `0.1.26` artifact set; bumping it
-is a deliberate, reviewed change (re-verify the `create()` / `submit()` contract
-and re-run the P6d Node smoke).
-
-## Files
+## Adapter files (dropped in; git-ignored)
 
 | File | Role |
 |------|------|
@@ -62,4 +67,3 @@ and re-run the P6d Node smoke).
 | `extenddb_wasm_adapter.d.ts` | TypeScript surface |
 | `extenddb_wasm_adapter_bg.wasm.d.ts` | low-level wasm export types |
 | `package.json` | upstream manifest (records name/version/license) |
-| `LICENSE` | upstream Apache-2.0 license text |

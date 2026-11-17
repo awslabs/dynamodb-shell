@@ -1,13 +1,30 @@
-# ddbsh web target (Emscripten/WASM) — P6d/P6e
+# ddbsh web target (Emscripten/WASM) — P6d/P6e/P6f
 
 This directory builds the browser/WASM target: the SDK-free ddbsh engine
-compiled to WebAssembly, driven from JavaScript, talking to an in-browser
-ExtendDB instance. No AWS SDK, no terminal, no network, no credentials — the
-whole shell runs in-process against in-memory ExtendDB (in-memory SQLite).
+compiled to WebAssembly, driven from JavaScript. The whole hard-to-port stack
+(lexer, parser, planner, executor, renderer, `ddbsh-wire` codec, `WireClient`)
+ships as **one portable WASM artifact**; only the linked wire `Transport` and the
+backend wiring change between editions. No AWS SDK, no terminal, and no
+credentials are ever in the browser.
 
-P6d delivered the **target + bridge + embind surface + a Node smoke**. **P6e adds
-the product UI** (`index.html`/`app.js`, history, file upload, result pane) — the
-page a human opens in a browser and types into.
+There are **three setups** (design §7). Two use the native **`ddbsh-web-proxy`**
+(it signs with SigV4 and forwards; credentials stay on the host, never in the
+browser); the third runs an in-browser database with no server at all:
+
+1. **Real Amazon DynamoDB**, via the fetch edition + `ddbsh-web-proxy`. See
+   "Real backend via ddbsh-web-proxy" below. **Production-ready.**
+2. **Real local ExtendDB server** (SQLite, HTTPS), via the fetch edition + the
+   same proxy. See "Local ExtendDB via the proxy" below. **Production-ready.**
+3. **In-browser ExtendDB** (in-memory SQLite), via the submit edition — no
+   server, no network, no credentials, no TLS; safe to host publicly. **This
+   edition is pre-release**: it depends on the ExtendDB WebAssembly adapter,
+   which ddbsh does not ship (a drop-in; see "In-browser ExtendDB edition"
+   below). It is complete when an official ExtendDB WebAssembly release exists.
+
+P6d delivered the **target + bridge + embind surface + a Node smoke**; P6e added
+the **product UI** (`index.html`/`app.js`, history, file upload, result pane);
+P6f added the **real-backend** path (the fetch edition, the proxy, and the local
+ExtendDB server wiring).
 
 ## What's here
 
@@ -28,7 +45,7 @@ page a human opens in a browser and types into.
 | `harness-extenddb.mjs` | the P6f-c end-to-end **Node** smoke, fetch edition over the **real** `ddbsh-web-proxy` against a **real local ExtendDB** server, HTTPS (run by `devtools/run-extenddb-smoke`) |
 | `harness-proxy-lib.mjs` | the shared browser-handshake + op-family corpus both proxy smokes drive (one corpus, two backends) |
 | `package.json` | marks the build output as ES modules for Node |
-| `vendor/extenddb/` | the pinned, vendored in-browser ExtendDB adapter (see `vendor/extenddb/PROVENANCE.md`) |
+| `vendor/extenddb/` | **drop-in location** for the in-browser ExtendDB adapter — ddbsh does **not** ship/commit the adapter blob (D-P6f-8); only `PROVENANCE.md` + `.gitignore` are tracked (see `vendor/extenddb/PROVENANCE.md`) |
 
 The engine's public headers `include/ddbsh/wire/submit_transport.hpp` and
 `include/ddbsh/wire/fetch_transport.hpp` declare the portable surfaces; only
@@ -172,7 +189,7 @@ relay may be pointed.
     └─ transport_browser.cpp  SubmitTransport::send
           -> EM_ASYNC_JS ddbsh_wire_submit -> await Module.submit(op,body)  ◄─ Asyncify suspend
     ▼ (JS)
-  extenddb_wasm_adapter.wasm (vendored; in-memory SQLite)
+  extenddb_wasm_adapter.wasm (drop-in; in-memory SQLite)
 ```
 
 The engine's synchronous `IDDBClient` call path drives ExtendDB's async
@@ -216,11 +233,14 @@ cmake --build build-preset/wasm-release
 ```
 
 Output lands in `build-preset/wasm-release/web/`: `ddbsh.js`, `ddbsh.wasm`,
-`ddbsh-wasm.js`, `ddbsh-wasm.wasm`, and (staged by a POST_BUILD step) `vendor/`,
+`ddbsh-wasm.js`, `ddbsh-wasm.wasm`, and (staged by a POST_BUILD step) ddbsh's own
 `harness.mjs`, `harness-fetch.mjs`, `package.json`, and the
 P6e UI bundle (`index.html`, `app.js`, `app-core.mjs`, `app-core.test.mjs`,
-`styles.css`). After `cmake --build`, that directory is a **complete,
-directly-servable static bundle** — nothing to assemble by hand.
+`styles.css`). The in-browser ExtendDB adapter (`vendor/extenddb/`) is **not**
+staged by the build (D-P6f-8) — it is a drop-in (see "In-browser ExtendDB
+edition"); `devtools/run-web-smoke` and `devtools/serve-web` stage it
+automatically. After `cmake --build` plus that drop-in, the directory is a
+**complete, directly-servable static bundle**.
 
 ## Run the UI (serve over HTTP)
 
@@ -293,7 +313,7 @@ network beyond localhost. It needs an ExtendDB SQLite binary (set
 `DDBSH_EXTENDDB_BIN`, default `~/source/extenddb-READ-ONLY/target/release/extenddb`);
 a missing binary is an infrastructure failure, not a skip.
 
-The smoke instantiates the module, wires `Module.submit` to the vendored
+The smoke instantiates the module, wires `Module.submit` to the dropped-in
 ExtendDB adapter, and runs a full op-family sequence (CREATE/INSERT/GetItem/
 Query/EXPLAIN/UPDATE/DELETE/SHOW LIMITS/DROP) plus two error-degradation paths
 (a conditional-check failure and an absent table), asserting the rendered
@@ -306,6 +326,42 @@ default gate; see the P6e design discussion).
 > Node note: a browser defines `globalThis.crypto` natively; Node 18 does not in
 > the ESM scope, so `harness.mjs` installs Node's Web Crypto before the adapter
 > runs. That is the only node-vs-browser shim.
+
+## In-browser ExtendDB edition (P6f-d, pre-release)
+
+The submit edition (`ddbsh-wasm-extenddb-wasm`, output `ddbsh.js`/`ddbsh.wasm`)
+runs an **in-browser ExtendDB** engine (in-memory SQLite) with **no server, no
+network, no credentials, no TLS** — the whole shell runs in-process in the tab.
+Because it holds no credentials and makes no AWS call, this edition is safe to
+host on any static server (including a public one).
+
+It depends on one third-party runtime artifact: the **ExtendDB WebAssembly
+adapter** (`extenddb-wasm-adapter`). **ddbsh does not ship or commit that
+adapter** (D-P6f-8); it is a **drop-in**. `web/vendor/extenddb/` holds only the
+`PROVENANCE.md` (the pinned version, source, and contract) and a `.gitignore`;
+the adapter files themselves are git-ignored and dropped in at build/serve time:
+
+```bash
+# Drop the pinned adapter into a bundle's vendor/extenddb/ (dev/test loop):
+devtools/stage-extenddb-webasm build-preset/wasm-release/web
+# Source: DDBSH_EXTENDDB_WEBASM_PKG
+#   (default ~/source/extenddb-webasm/samples/webasm-storefront/pkg).
+```
+
+`devtools/run-web-smoke` stages it into the build output automatically before the
+Node smoke, and `devtools/serve-web` stages it into the served webroot before
+serving, so the usual dev loop needs no manual step. A **deploy** drops an
+`extenddb-wasm-adapter@0.1.26` build into the served webroot's `vendor/extenddb/`
+by hand (same-origin with `index.html` is mandatory). Because the adapter lives
+in the webroot independent of ddbsh's build, a new adapter release is a
+**swap-the-dir-and-relaunch** — no ddbsh rebuild — as long as its
+`create()`/`submit()` contract and filenames hold.
+
+**Pre-release status:** the adapter self-describes as an internal crate "with no
+API stability promise", so it is pinned exactly to `0.1.26`. This edition is
+marked pre-release until an official, stable ExtendDB WebAssembly release exists;
+setups 1 and 2 (the real-DynamoDB and real-ExtendDB-server proxy paths) are the
+production paths.
 
 ## Supported / unsupported ops in the browser (degradation map)
 

@@ -23,7 +23,10 @@
 // submit path.
 //
 // Run from the build output directory (where ddbsh-wasm.js, ddbsh-wasm.wasm,
-// and vendor/ are staged by the web/ POST_BUILD step):
+// and vendor/extenddb/ are present — ddbsh's own files are staged by the web/
+// POST_BUILD step; the ExtendDB adapter (this harness's stub proxy) is dropped
+// into vendor/extenddb/ by devtools/stage-extenddb-webasm, run by
+// devtools/run-web-smoke):
 //     node harness-fetch.mjs
 // Exits 0 on success, nonzero (with a diagnostic) on the first failed
 // assertion.

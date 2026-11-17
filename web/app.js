@@ -4,7 +4,7 @@
 // app.js — the thin DOM wiring for the P6e ddbsh web UI.
 //
 // This file owns ONLY the browser side: instantiate the WASM modules, wire the
-// Module.submit bridge to the vendored in-browser ExtendDB adapter, bind DOM
+// Module.submit bridge to the dropped-in in-browser ExtendDB adapter, bind DOM
 // events, call into the DOM-free app-core.mjs for all real logic, and paint the
 // result with textContent (never innerHTML — D-P6e-6). No lexing, parsing,
 // planning, execution, or rendering happens here: the faithful shell text comes

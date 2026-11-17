@@ -1,0 +1,10 @@
+# The in-browser ExtendDB WebAssembly adapter is a third-party, drop-in
+# dependency of the browser edition only (D-P6f-8). ddbsh NEVER ships or commits
+# the adapter blob: the build stages only ddbsh's own files, and the dev tooling
+# (devtools/stage-extenddb-webasm) or the user/deploy drops the adapter files
+# into this directory (or the served webroot's vendor/extenddb/). Keep those
+# dropped-in files out of git so a local dev stage is never committed by
+# accident. Only this .gitignore and PROVENANCE.md are tracked.
+*
+!.gitignore
+!PROVENANCE.md

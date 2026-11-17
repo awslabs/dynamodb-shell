@@ -16,7 +16,9 @@
 # Usage:
 #   devtools/serve-web [PORT]      # default port 8080
 # Env overrides (shared with run-web-smoke): EMSDK, EMSDK_PYTHON,
-# DDBSH_WASM_BUILD_DIR. Ctrl-C to stop the server.
+# DDBSH_WASM_BUILD_DIR, DDBSH_EXTENDDB_WEBASM_PKG (the in-browser ExtendDB
+# adapter drop-in source; see web/vendor/extenddb/PROVENANCE.md). Ctrl-C stops
+# the server.
 #
 # Binding: the server defaults to loopback (127.0.0.1) so the bundle is only
 # reachable from this machine. This edition serves the credential-free in-browser
@@ -62,6 +64,18 @@ if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/index.html" ]; then
         ( cd "$REPO_DIR" && emcmake cmake --preset wasm-release )
     fi
     cmake --build "$WASM_BUILD"
+fi
+
+# --- Drop in the in-browser ExtendDB adapter --------------------------------
+# ddbsh does not ship the adapter (D-P6f-8); the in-tab browser UI needs it in
+# vendor/extenddb/ to load. Stage it from the upstream package as a dev
+# convenience. Non-fatal: if the upstream package is absent, print the manual
+# drop-in instructions and serve anyway (the UI shows a clear load-failure until
+# the adapter is dropped in). See web/vendor/extenddb/PROVENANCE.md.
+if ! "$REPO_DIR/devtools/stage-extenddb-webasm" "$WEB_OUT"; then
+    echo "note: the in-browser ExtendDB adapter was not staged automatically." >&2
+    echo "      Drop an extenddb-wasm-adapter@0.1.26 build into $WEB_OUT/vendor/extenddb/" >&2
+    echo "      (or set DDBSH_EXTENDDB_WEBASM_PKG); see web/vendor/extenddb/PROVENANCE.md." >&2
 fi
 
 # --- Serve ------------------------------------------------------------------

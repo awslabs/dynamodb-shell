@@ -6,11 +6,13 @@
 // NOT the product UI (that is P6e's index.html/app.js). This is a throwaway
 // Node driver that proves the Asyncify bridge carries a real op round-trip:
 // it instantiates the Emscripten ddbsh module, wires Module.submit to the
-// vendored in-browser ExtendDB adapter, and runs a scripted sequence through
+// dropped-in in-browser ExtendDB adapter, and runs a scripted sequence through
 // the DdbshSession embind surface, asserting the rendered output.
 //
 // Run from the build output directory (where ddbsh.js, ddbsh.wasm, and
-// vendor/ are staged by the web/ POST_BUILD step):
+// vendor/extenddb/ are present — ddbsh's own files are staged by the web/
+// POST_BUILD step; the ExtendDB adapter is dropped into vendor/extenddb/ by
+// devtools/stage-extenddb-webasm, which devtools/run-web-smoke runs for you):
 //     node harness.mjs
 // Exits 0 on success, nonzero (with a diagnostic) on the first failed
 // assertion. The web/ CMake target stages this file beside the module so the

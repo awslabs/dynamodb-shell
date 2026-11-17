@@ -15,7 +15,9 @@
 # What it does:
 #   1. locate + activate the pinned emsdk (web/README.md documents the install),
 #   2. configure + build the `wasm-release` preset (engine + wire + cli-core ->
-#      ddbsh.wasm/ddbsh.js, with the vendored ExtendDB adapter + harness staged),
+#      ddbsh.wasm/ddbsh.js + ddbsh-wasm.js, with ddbsh's own harnesses + UI
+#      staged; the in-browser ExtendDB adapter is a drop-in, NOT shipped by
+#      ddbsh — this script stages it from DDBSH_EXTENDDB_WEBASM_PKG, D-P6f-8),
 #   3. run `node web/harness.mjs` from the build output dir,
 #   4. run `node web/app-core.test.mjs` (the DOM-free P6e UI unit tests),
 #   5. capture the output into discussions/test-websmoke-<HEAD-short>.log.
@@ -101,6 +103,14 @@ if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/ddbsh-wasm.js" ] \
     exit 1
 fi
 echo "=== Running Node WASM smoke ($HASH) ===" | tee -a "$LOG_FILE"
+
+# Drop the in-browser ExtendDB adapter into the bundle's vendor/extenddb/
+# (D-P6f-8): ddbsh does not ship it, so the in-tab smokes (harness.mjs,
+# harness-fetch.mjs) stage it here from the upstream package. A missing/incomplete
+# upstream package is an INFRASTRUCTURE FAILURE, not a skip.
+echo "=== Staging in-browser ExtendDB adapter (drop-in) ===" | tee -a "$LOG_FILE"
+"$REPO_DIR/devtools/stage-extenddb-webasm" "$WEB_OUT" 2>&1 | tee -a "$LOG_FILE"
+
 set +e
 ( cd "$WEB_OUT" && "$NODE_BIN" harness.mjs ) 2>&1 | tee -a "$LOG_FILE"
 RC=${PIPESTATUS[0]}

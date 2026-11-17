@@ -81,10 +81,18 @@ ddbsh_add_web_edition(ddbsh-wasm-extenddb-wasm ddbsh transport_browser.cpp OFF)
 # The real-backend proxy edition (OUTPUT_NAME ddbsh-wasm -> ddbsh-wasm.js/.wasm).
 ddbsh_add_web_edition(ddbsh-wasm ddbsh-wasm transport_fetch.cpp ON)
 
-# Stage everything the output dir needs to be BOTH (a) a Node-smoke environment
-# and (b) a directly-servable static web bundle, beside the emitted modules:
-#   - vendor/      the pinned in-browser ExtendDB adapter (@0.1.26; see
-#                  vendor/extenddb/PROVENANCE.md),
+# Stage ddbsh's OWN files beside the emitted modules so the output dir is BOTH
+# (a) a Node-smoke environment and (b) a directly-servable static web bundle.
+#
+# The in-browser ExtendDB adapter (vendor/extenddb/) is DELIBERATELY NOT staged
+# here (D-P6f-8): ddbsh never ships/commits the adapter blob, and the build
+# stages only ddbsh's own files. The adapter is a third-party drop-in for the
+# in-tab edition only — dropped into <bundle>/vendor/extenddb/ by
+# devtools/stage-extenddb-webasm (run-web-smoke / serve-web) or by the
+# user/deploy (see web/vendor/extenddb/PROVENANCE.md). This makes an adapter
+# upgrade a swap-the-dir-and-relaunch, with no ddbsh rebuild.
+#
+# Staged files:
 #   - harness.mjs  the P6d Node end-to-end smoke (SubmitTransport, in-tab ExtendDB),
 #   - harness-fetch.mjs  the P6f-a Node smoke (FetchTransport over a stub proxy),
 #   - harness-proxy.mjs  the P6f-b Node smoke (FetchTransport over the REAL
@@ -99,13 +107,11 @@ ddbsh_add_web_edition(ddbsh-wasm ddbsh-wasm transport_fetch.cpp ON)
 #   - app-core.test.mjs  the DOM-free app-core Node unit tests (D-P6e-3).
 # Staging is attached to the in-tab edition and ordered AFTER the fetch edition
 # (add_dependencies) so both modules exist in the dir before the bundle is
-# considered complete. After `cmake --build`, this one dir is a complete static
-# bundle: `python3 -m http.server` it and open index.html (README.md).
+# considered complete. After `cmake --build`, this dir holds ddbsh's complete
+# static bundle; dropping the ExtendDB adapter into vendor/extenddb/
+# (devtools/stage-extenddb-webasm) completes the in-tab edition (README).
 add_dependencies(ddbsh-wasm-extenddb-wasm ddbsh-wasm)
 add_custom_command(TARGET ddbsh-wasm-extenddb-wasm POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/vendor"
-            "$<TARGET_FILE_DIR:ddbsh-wasm-extenddb-wasm>/vendor"
     COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_CURRENT_SOURCE_DIR}/harness.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/harness-fetch.mjs"
@@ -119,4 +125,4 @@ add_custom_command(TARGET ddbsh-wasm-extenddb-wasm POST_BUILD
             "${CMAKE_CURRENT_SOURCE_DIR}/app-core.test.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/styles.css"
             "$<TARGET_FILE_DIR:ddbsh-wasm-extenddb-wasm>/"
-    COMMENT "Staging ExtendDB adapter + Node smokes + P6e web UI bundle beside the wasm modules")
+    COMMENT "Staging ddbsh's own Node smokes + P6e web UI bundle beside the wasm modules (the ExtendDB adapter is a drop-in; see web/vendor/extenddb/PROVENANCE.md)")
