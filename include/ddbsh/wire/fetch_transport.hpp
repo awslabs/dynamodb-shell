@@ -62,10 +62,22 @@ public:
     Result<void> on_connect(const std::string& region, const std::string& endpoint) override;
 
     /// SHOW CONNECTION descriptor (phase 6f, D-P6f-9): the proxy-forwarded
-    /// backend binding. P6f-a reports the static transport kind; a later slice
-    /// may enrich it with the live proxy version/endpoint once the proxy
-    /// exposes them (TODO(phase-6f)).
+    /// backend binding. Reports the static transport kind and, once known,
+    /// enriches it with the live proxy version (the JS glue records it from the
+    /// proxy's /session handshake as `Module.ddbshProxyVersion`) and the
+    /// connected endpoint (captured by on_connect). With neither known yet it
+    /// returns the bare `wire/fetch -> POST /ddb (proxy)`; after a CONNECT to an
+    /// explicit endpoint it reads e.g.
+    /// `wire/fetch -> POST /ddb (proxy 0.11.14 -> https://127.0.0.1:18443)`.
+    /// Purely informational; contacts nothing (reads only local JS/engine state).
     std::string descriptor() const override;
+
+private:
+    /// The endpoint most recently CONNECTed through this transport (from
+    /// on_connect), surfaced in descriptor(). Empty until the first CONNECT with
+    /// an explicit endpoint override (a bare `CONNECT <region>` carries no
+    /// endpoint, so the proxy's default-resolved AWS endpoint is not known here).
+    std::string endpoint_;
 };
 
 }  // namespace ddbsh::wire

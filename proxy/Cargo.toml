@@ -10,10 +10,14 @@
 #
 # Portability: a single static binary with a trivial cross-compile (Linux built
 # + tested here; Windows/macOS made to build with a CI matrix, D-P6f-11).
+#
+# Versioning: the proxy tracks the single project version (D-P6f-12). It is part
+# of the reimplementation deliverable, not an independently-released crate, so
+# its version is bumped in lockstep with the top-level CMake project version.
 
 [package]
 name = "ddbsh-web-proxy"
-version = "0.1.0"
+version = "0.11.14"
 edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"

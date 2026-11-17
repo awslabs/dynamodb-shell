@@ -79,6 +79,21 @@ EM_ASYNC_JS(char*, ddbsh_wire_connect, (const char* region, const char* endpoint
     }
 });
 
+// Synchronous read of the optional JS global `Module.ddbshProxyVersion` (the JS
+// glue records it from the proxy's /session handshake, D-P6f-9). Returns a
+// malloc'd, NUL-terminated C string the C++ side owns and frees — the version
+// string, or "" when the glue has not recorded one (e.g. the P6f-a stub, or
+// before the handshake). No Asyncify: this only reads a string the glue already
+// holds, so descriptor() stays synchronous and contacts no backend.
+EM_JS(char*, ddbsh_wire_proxy_version, (), {
+    const v = (typeof Module !== "undefined" && typeof Module.ddbshProxyVersion === "string")
+        ? Module.ddbshProxyVersion : "";
+    const len = lengthBytesUTF8(v) + 1;
+    const buf = _malloc(len);
+    stringToUTF8(v, buf, len);
+    return buf;
+});
+
 namespace ddbsh::wire {
 
 Result<std::string> FetchTransport::send(std::string_view operation, std::string_view body) {
@@ -101,9 +116,32 @@ Result<std::string> FetchTransport::send(std::string_view operation, std::string
     return resp;
 }
 
-std::string FetchTransport::descriptor() const { return "wire/fetch -> POST /ddb (proxy)"; }
+std::string FetchTransport::descriptor() const {
+    // Base binding, enriched where known (D-P6f-9). The bare form
+    // "wire/fetch -> POST /ddb (proxy)" is preserved exactly for the pre-connect
+    // / no-info case; a known proxy version and/or connected endpoint extend the
+    // parenthesized detail.
+    std::string d = "wire/fetch -> POST /ddb (proxy";
+    char* raw = ddbsh_wire_proxy_version();
+    const std::string version(raw ? raw : "");
+    std::free(raw);
+    if (!version.empty()) {
+        d += " " + version;
+    }
+    if (!endpoint_.empty()) {
+        d += " -> " + endpoint_;
+    }
+    d += ")";
+    return d;
+}
 
 Result<void> FetchTransport::on_connect(const std::string& region, const std::string& endpoint) {
+    // Record the connected endpoint for descriptor() (SHOW CONNECTION, D-P6f-9).
+    // A bare `CONNECT <region>` carries no endpoint override; keep whatever was
+    // last set rather than clobbering it with an empty string.
+    if (!endpoint.empty()) {
+        endpoint_ = endpoint;
+    }
     char* raw = ddbsh_wire_connect(region.c_str(), endpoint.c_str());
     if (raw == nullptr) {
         // Defensive: the bridge always returns a malloc'd string, but a null

@@ -65,7 +65,10 @@ struct Config {
 
 fn default_policy_path() -> PathBuf {
     // ~/.ddbsh_web_proxy_security, matching the ddbsh config/history convention.
-    if let Some(home) = std::env::var_os("HOME") {
+    // Resolve the home directory portably: HOME on Unix, USERPROFILE on Windows
+    // (D-P6f-11 portability). Fall back to the current directory if neither is
+    // set (the built-in default policy still applies when the file is absent).
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         PathBuf::from(home).join(".ddbsh_web_proxy_security")
     } else {
         PathBuf::from(".ddbsh_web_proxy_security")
@@ -241,7 +244,14 @@ async fn handle_session(State(state): State<Arc<AppState>>, headers: HeaderMap) 
     if !ok {
         return json_error(StatusCode::SERVICE_UNAVAILABLE, "session capacity reached");
     }
-    let body = serde_json::json!({ "session": id, "token": token }).to_string();
+    // Report the proxy version so the browser glue can surface it in the engine's
+    // SHOW CONNECTION report (D-P6f-9, descriptor enrichment). No secret.
+    let body = serde_json::json!({
+        "session": id,
+        "token": token,
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+    .to_string();
     (StatusCode::OK, [("content-type", "application/json")], body).into_response()
 }
 
@@ -350,7 +360,12 @@ async fn handle_connect(
             Err(e) => return auth_error_response(e),
         }
     }
-    let body = serde_json::json!({ "ok": true, "endpoint": endpoint_url }).to_string();
+    let body = serde_json::json!({
+        "ok": true,
+        "endpoint": endpoint_url,
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+    .to_string();
     (StatusCode::OK, [("content-type", "application/json")], body).into_response()
 }
 

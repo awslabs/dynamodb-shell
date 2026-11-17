@@ -90,7 +90,9 @@ async function run(session, text) {
     return r;
 }
 
-/// Mint a proxy session + token (the browser handshake at page load).
+/// Mint a proxy session + token (the browser handshake at page load). Also
+/// returns the proxy version the handshake reports (surfaced by SHOW CONNECTION
+/// via Module.ddbshProxyVersion, D-P6f-9).
 async function mintSession(proxyUrl) {
     const sess = await proxyRequest(proxyUrl, "/session", {
         headers: { "content-type": "application/json" },
@@ -98,11 +100,11 @@ async function mintSession(proxyUrl) {
     if (sess.status !== 200) {
         throw new Error(`/session failed: HTTP ${sess.status}: ${sess.text}`);
     }
-    const { session: sessionId, token } = JSON.parse(sess.text);
+    const { session: sessionId, token, version } = JSON.parse(sess.text);
     if (!sessionId || !token) {
         throw new Error(`/session returned no session/token: ${sess.text}`);
     }
-    return { sessionId, token };
+    return { sessionId, token, version: version || "" };
 }
 
 /// Wire `Module.connectDdb` / `Module.fetchDdb` on the loaded wasm module so the
@@ -190,11 +192,16 @@ export async function runCorpus({
     const checks = new Checks();
 
     // --- browser handshake: mint a session + token ------------------------
-    const { sessionId, token } = await mintSession(url);
+    const { sessionId, token, version: proxyVersion } = await mintSession(url);
     const authHeaders = { "x-ddbsh-session": sessionId, "x-ddbsh-token": token };
 
     // --- bring up the FETCH-edition ddbsh module + wire the bridges -------
     const Module = await moduleFactory();
+    // Record the proxy version so the engine's SHOW CONNECTION descriptor can
+    // surface it (D-P6f-9); the glue sets this exactly as the browser UI does.
+    if (proxyVersion) {
+        Module.ddbshProxyVersion = proxyVersion;
+    }
     const counter = wireBridges(Module, url, authHeaders, connectExtra);
 
     const session = new Module.DdbshSession(region);
@@ -215,17 +222,32 @@ export async function runCorpus({
 
     let ok = true;
     try {
-        // 0) SHOW CONNECTION — descriptor seam, no backend call.
+        // 0) SHOW CONNECTION — descriptor seam, no backend call. Before CONNECT
+        //    the descriptor names the FetchTransport binding and (D-P6f-9) the
+        //    live proxy version recorded from the /session handshake.
         let r = await run(session, "show connection");
         checks.check(r.ok, "show connection ok");
-        checks.contains(r.stdout, "wire/fetch -> POST /ddb (proxy)",
+        checks.contains(r.stdout, "wire/fetch",
             "show connection reports the FetchTransport backend binding");
+        if (proxyVersion) {
+            checks.contains(r.stdout, proxyVersion,
+                "show connection reports the live proxy version");
+        }
 
         // 1) CONNECT — drives FetchTransport::on_connect -> Module.connectDdb ->
         //    the proxy's /connect, establishing this session's signing target.
         r = await run(session, connectStmt);
         checks.check(r.ok, "connect ok");
         checks.contains(r.stdout, "CONNECT", "connect status token");
+
+        // 1b) SHOW CONNECTION after CONNECT — with an explicit endpoint override
+        //     the descriptor is enriched with the connected endpoint (D-P6f-9).
+        if (endpoint) {
+            r = await run(session, "show connection");
+            checks.check(r.ok, "show connection (post-connect) ok");
+            checks.contains(r.stdout, endpoint,
+                "show connection reports the connected endpoint after CONNECT");
+        }
 
         // 2) CREATE TABLE (waits for ACTIVE via DescribeTable through the proxy).
         r = await run(session,

@@ -6,10 +6,15 @@ logic. The engine ships as the `ddbsh-wasm` WebAssembly artifact (see `../web/`)
 this binary exists only because a browser cannot read `~/.aws/credentials` and
 cannot call DynamoDB directly (DynamoDB returns no CORS headers).
 
+**Versioning (D-P6f-12).** The proxy is part of the ddbsh reimplementation
+deliverable, not an independently-released crate, so its `Cargo.toml` version
+tracks the single project version (the top-level CMake `project(... VERSION ...)`)
+and is bumped in lockstep. The proxy reports this version on `/session` and
+`/connect`, and the web UI surfaces it in `SHOW CONNECTION`.
+
 ## What it does
 
-1. **Serves** the static ddbsh-wasm bundle (`--serve --webroot <dir>`).
-2. Holds **per-session connection state** keyed by the `X-Ddbsh-Session` header a
+1. **Serves** the static ddbsh-wasm bundle (`--serve --webroot <dir>`).2. Holds **per-session connection state** keyed by the `X-Ddbsh-Session` header a
    browser tab mints at load (a tab ≈ a ddbsh process).
 3. On `POST /ddb`, **SigV4-signs** the browser's AWS-JSON-1.0 body with
    credentials resolved from the host's AWS chain and **forwards** it to the
