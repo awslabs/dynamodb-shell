@@ -17,7 +17,8 @@
 #   2. configure + build the `wasm-release` preset (engine + wire + cli-core ->
 #      ddbsh.wasm/ddbsh.js, with the vendored ExtendDB adapter + harness staged),
 #   3. run `node web/harness.mjs` from the build output dir,
-#   4. capture the output into discussions/test-websmoke-<HEAD-short>.log.
+#   4. run `node web/app-core.test.mjs` (the DOM-free P6e UI unit tests),
+#   5. capture the output into discussions/test-websmoke-<HEAD-short>.log.
 #
 # No AWS account, no credentials, no network: the smoke runs entirely in-process
 # (in-browser ExtendDB, in-memory SQLite). Safe to run anywhere emsdk + Node are
@@ -103,6 +104,19 @@ set +e
 ( cd "$WEB_OUT" && "$NODE_BIN" harness.mjs ) 2>&1 | tee -a "$LOG_FILE"
 RC=${PIPESTATUS[0]}
 set -e
+
+# --- Run the DOM-free app-core unit tests (P6e, D-P6e-3) --------------------
+# Pure JavaScript: no WASM, no DOM, no backend. Covers the new P6e UI logic
+# (history ring, prompt builder, transcript model, file->submission, run guard).
+# Run from the staged bundle so it imports the same app-core.mjs that ships.
+echo "=== Running app-core unit tests ($HASH) ===" | tee -a "$LOG_FILE"
+set +e
+( cd "$WEB_OUT" && "$NODE_BIN" app-core.test.mjs ) 2>&1 | tee -a "$LOG_FILE"
+RC_CORE=${PIPESTATUS[0]}
+set -e
+if [ "$RC" -eq 0 ]; then
+    RC=$RC_CORE
+fi
 
 echo "=== Web smoke exit: $RC ===" | tee -a "$LOG_FILE"
 echo "  artifact: $LOG_FILE"

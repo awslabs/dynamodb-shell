@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/serve-web — build the Emscripten/WASM web bundle (if needed) and
+# serve it over HTTP so the P6e browser UI can be hand-tested (D-P6e-4, D-P6e-5).
+#
+# WASM + ES modules cannot load from file:// (module CORS + the application/wasm
+# MIME requirement), so the servable static bundle in the build output dir must
+# be served over HTTP. This wraps the exact serve command documented in
+# web/README.md in one place, symmetric with devtools/run-web-smoke.
+#
+# No cross-origin-isolation headers are needed: the web target uses Asyncify,
+# not threads/SharedArrayBuffer (D-P6-12), so plain http.server is enough.
+#
+# Usage:
+#   devtools/serve-web [PORT]      # default port 8080
+# Env overrides (shared with run-web-smoke): EMSDK, EMSDK_PYTHON,
+# DDBSH_WASM_BUILD_DIR. Ctrl-C to stop the server.
+
+set -euo pipefail
+
+PORT="${1:-8080}"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
+WEB_OUT="$WASM_BUILD/web"
+
+# --- Build the bundle if the output is missing ------------------------------
+if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/index.html" ]; then
+    echo "web bundle not found at $WEB_OUT — building via emcmake ..."
+    EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
+    if [ ! -f "$EMSDK_ROOT/emsdk_env.sh" ]; then
+        echo "error: emsdk not found at '$EMSDK_ROOT' (set EMSDK or install per web/README.md)." >&2
+        exit 1
+    fi
+    if [ -z "${EMSDK_PYTHON:-}" ]; then
+        if python3 -c 'import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
+            EMSDK_PYTHON="$(command -v python3)"
+        else
+            for cand in python3.13 python3.12 python3.11 python3.10; do
+                if command -v "$cand" >/dev/null 2>&1; then
+                    EMSDK_PYTHON="$(command -v "$cand")"
+                    break
+                fi
+            done
+        fi
+    fi
+    export EMSDK_PYTHON EMSDK="$EMSDK_ROOT"
+    EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | head -1)" 2>/dev/null || true)"
+    export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten${EMSDK_NODE_BIN:+:$EMSDK_NODE_BIN}:$PATH"
+    if [ ! -f "$WASM_BUILD/CMakeCache.txt" ]; then
+        ( cd "$REPO_DIR" && emcmake cmake --preset wasm-release )
+    fi
+    cmake --build "$WASM_BUILD"
+fi
+
+# --- Serve ------------------------------------------------------------------
+# Use any available python3 for the static server (3.9 is fine here; only the
+# emsdk scripts need 3.10+).
+echo "Serving $WEB_OUT at http://localhost:$PORT/ (Ctrl-C to stop)"
+cd "$WEB_OUT"
+exec python3 -m http.server "$PORT"

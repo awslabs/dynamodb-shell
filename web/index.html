@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 ddbsh reimplementation contributors.
+  SPDX-License-Identifier: Apache-2.0
+
+  index.html — the P6e browser UI for ddbsh.
+
+  A single page with three stacked regions: a connection panel, an append-only
+  transcript result pane, and a command editor + toolbar. All logic is in
+  app.js (DOM wiring) + app-core.mjs (DOM-free logic). The engine runs as
+  WebAssembly (ddbsh.js/ddbsh.wasm) against in-browser ExtendDB; no network, no
+  credentials. Serve over HTTP (see README.md) — WASM + ES modules do not load
+  from file://.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ddbsh (web)</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <!-- Shown only when the page is opened from file:// (WASM/module load
+         fails there). app.js reveals it; it is hidden by default. -->
+    <div id="file-protocol-banner" class="banner" hidden>
+        This page must be served over HTTP, not opened from a file. See
+        <code>web/README.md</code> — e.g. <code>python3 -m http.server 8080</code>.
+    </div>
+
+    <header id="connection-panel" class="panel">
+        <span class="title">ddbsh <span class="muted">(web)</span></span>
+        <span class="conn-field">region: <span id="region-label">…</span></span>
+        <span class="conn-field">backend:
+            <span id="backend-label">loading…</span>
+            <span id="backend-dot" class="dot dot-loading" aria-hidden="true"></span>
+        </span>
+    </header>
+
+    <main id="result-pane" class="result-pane" aria-live="polite" aria-label="transcript">
+        <!-- app.js appends <pre> blocks here. -->
+    </main>
+
+    <footer class="editor-bar">
+        <textarea id="editor" class="editor" spellcheck="false" autocomplete="off"
+                  autocapitalize="off" autocorrect="off"
+                  placeholder="type a statement; Ctrl/⌘-Enter runs"
+                  aria-label="command editor" disabled></textarea>
+        <div class="toolbar">
+            <button id="run-btn" type="button" disabled>Run</button>
+            <label id="file-label" class="file-label" aria-disabled="true">
+                ⇪ file
+                <input id="file-input" type="file" hidden disabled>
+            </label>
+            <button id="clear-btn" type="button">Clear</button>
+        </div>
+    </footer>
+
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

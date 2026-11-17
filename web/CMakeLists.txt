@@ -53,14 +53,27 @@ target_link_options(ddbsh-web PRIVATE
     "-sALLOW_MEMORY_GROWTH=1"
     "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8','lengthBytesUTF8']")
 
-# Copy the vendored in-browser ExtendDB adapter (pinned @0.1.26; see
-# vendor/extenddb/PROVENANCE.md) and the Node smoke harness next to the build output so `node web/harness.mjs`
-# (run from the build dir) finds ddbsh.js, ddbsh.wasm, and the adapter together.
+# Stage everything the output dir needs to be BOTH (a) a Node-smoke environment
+# and (b) a directly-servable static web bundle, beside ddbsh.js/ddbsh.wasm:
+#   - vendor/      the pinned in-browser ExtendDB adapter (@0.1.26; see
+#                  vendor/extenddb/PROVENANCE.md),
+#   - harness.mjs  the P6d Node end-to-end smoke (not the product UI),
+#   - package.json marks the output as ES modules for Node,
+#   - index.html / app.js / app-core.mjs / styles.css  the P6e product UI (O-5),
+#   - app-core.test.mjs  the DOM-free app-core Node unit tests (D-P6e-3),
+#     so `node web/harness.mjs` and the servable bundle both resolve their
+#     siblings from one directory. After `cmake --build`, this dir is a complete
+#     static bundle: `python3 -m http.server` it and open index.html (README.md).
 add_custom_command(TARGET ddbsh-web POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/vendor" "$<TARGET_FILE_DIR:ddbsh-web>/vendor"
     COMMAND ${CMAKE_COMMAND} -E copy
-            "${CMAKE_CURRENT_SOURCE_DIR}/harness.mjs" "$<TARGET_FILE_DIR:ddbsh-web>/harness.mjs"
-    COMMAND ${CMAKE_COMMAND} -E copy
-            "${CMAKE_CURRENT_SOURCE_DIR}/package.json" "$<TARGET_FILE_DIR:ddbsh-web>/package.json"
-    COMMENT "Staging vendored ExtendDB adapter + Node smoke harness beside ddbsh.wasm")
+            "${CMAKE_CURRENT_SOURCE_DIR}/harness.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/index.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/app.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/app-core.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/app-core.test.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/styles.css"
+            "$<TARGET_FILE_DIR:ddbsh-web>/"
+    COMMENT "Staging ExtendDB adapter + Node smoke + P6e web UI bundle beside ddbsh.wasm")
