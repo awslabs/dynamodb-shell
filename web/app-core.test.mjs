@@ -14,6 +14,7 @@ import {
     buildTranscriptEntries,
     fileToSubmission,
     createHistory,
+    createHistoryRecall,
     createRunGuard,
 } from "./app-core.mjs";
 
@@ -130,6 +131,58 @@ console.log("createHistory");
     h.push("c");  // push resets the cursor to the live draft
     check(h.next() === null, "push resets recall cursor to draft");
     eq(h.previous(), "c", "after reset, previous() recalls the newest");
+}
+
+// ---- createHistoryRecall ---------------------------------------------------
+console.log("createHistoryRecall");
+{
+    // Must-fix #1 regression: ArrowDown while NOT recalling must be a no-op and
+    // must never wipe the live buffer.
+    const r = createHistoryRecall(createHistory({ entries: ["a", "b"] }));
+    check(r.recalling === false, "recall starts idle");
+    check(r.down() === null, "down() when not recalling is a no-op (null)");
+    check(r.recalling === false, "down() did not start a recall");
+}
+{
+    // Nit regression: ArrowUp on empty history must not stash a draft (nothing
+    // older to recall), so a later ArrowDown stays a no-op and cannot wipe input.
+    const r = createHistoryRecall(createHistory());
+    check(r.up("typed") === null, "up() on empty history is a no-op (null)");
+    check(r.recalling === false, "up() on empty history did not stash a draft");
+    check(r.down() === null, "down() after no-op up() stays a no-op");
+}
+{
+    // Full recall cycle: up stashes the live draft, walks older; down walks
+    // newer and restores the exact draft (even when empty) at the live line.
+    const r = createHistoryRecall(createHistory({ entries: ["a", "b", "c"] }));
+    eq(r.up("draft"), "c", "up() recalls newest and stashes the draft");
+    check(r.recalling === true, "recalling after first up()");
+    eq(r.up("ignored"), "b", "second up() does not re-stash the draft");
+    eq(r.up("ignored"), "a", "third up() -> oldest");
+    eq(r.up("ignored"), "a", "up() clamps at the oldest (repeats, does not go null)");
+    check(r.recalling === true, "still recalling at the oldest entry");
+    eq(r.down(), "b", "down() walks newer");
+    eq(r.down(), "c", "down() -> newest");
+    eq(r.down(), "draft", "down() past newest restores the stashed draft");
+    check(r.recalling === false, "recall ended after the draft was restored");
+    check(r.down() === null, "down() after recall ended is a no-op");
+}
+{
+    // The stashed draft may be the empty string: restoring it yields "" (a real
+    // value to set), distinct from null (leave the buffer alone).
+    const r = createHistoryRecall(createHistory({ entries: ["only"] }));
+    eq(r.up(""), "only", "up() with an empty live buffer recalls the entry");
+    eq(r.down(), "", "down() restores the empty draft as \"\", not null");
+    check(r.recalling === false, "recall ended");
+}
+{
+    // reset() abandons an in-progress recall (manual edit / after submit).
+    const r = createHistoryRecall(createHistory({ entries: ["a", "b"] }));
+    r.up("draft");
+    check(r.recalling === true, "recalling before reset");
+    r.reset();
+    check(r.recalling === false, "reset() ends the recall");
+    eq(r.up("new-draft"), "b", "after reset, up() recalls the newest again");
 }
 
 // ---- createRunGuard --------------------------------------------------------

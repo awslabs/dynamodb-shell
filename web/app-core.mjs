@@ -185,6 +185,78 @@ export function createHistory({ limit = 500, entries = [] } = {}) {
 }
 
 /**
+ * Create the history-recall state machine that ArrowUp/ArrowDown drive.
+ *
+ * This owns the one piece of recall logic that is easy to get wrong (and did go
+ * wrong before it was centralized here): the interaction between the live draft
+ * the user was typing and the history cursor. It is DOM-free so the exact edges
+ * are unit-testable; app.js only maps key events and the editor value onto it.
+ *
+ * Both `up()` and `down()` return either a string the caller MUST write into the
+ * editor (and should `preventDefault`), or `null` meaning "leave the buffer
+ * alone, let the arrow key behave normally". The rules:
+ *   - up(current): recall an older entry; the first recall stashes `current` as
+ *     the draft to restore later. Returns null (no-op) when there is nothing
+ *     older (empty history / already at the oldest-but-unchanged position).
+ *   - down(): while recalling, walk toward newer entries; past the newest,
+ *     restore the stashed draft and end the recall. Returns null (no-op) when
+ *     not recalling, so a plain Down at the live line never destroys typed
+ *     input.
+ *   - reset(): abandon any recall (call on a manual edit or after a submit).
+ *
+ * @param {ReturnType<typeof createHistory>} history  the history ring.
+ */
+export function createHistoryRecall(history) {
+    let draft = null; // the live buffer stashed while recalling; null = not recalling.
+
+    return {
+        /** True while a recall is in progress (a draft is stashed). */
+        get recalling() {
+            return draft !== null;
+        },
+
+        /**
+         * ArrowUp: recall an older entry.
+         * @param {string} current  the current editor value (stashed on first recall).
+         * @returns {string|null} the value to set, or null for "leave alone".
+         */
+        up(current) {
+            const entry = history.previous();
+            if (entry === null) {
+                return null; // nothing older: no-op, let the key behave normally.
+            }
+            if (draft === null) {
+                draft = typeof current === "string" ? current : "";
+            }
+            return entry;
+        },
+
+        /**
+         * ArrowDown: walk toward newer entries, restoring the draft past the newest.
+         * @returns {string|null} the value to set, or null for "leave alone".
+         */
+        down() {
+            if (draft === null) {
+                return null; // not recalling: no-op, don't wipe live input.
+            }
+            const entry = history.next();
+            if (entry !== null) {
+                return entry;
+            }
+            const restored = draft;
+            draft = null; // back at the live draft: recall ends.
+            return restored;
+        },
+
+        /** Abandon any in-progress recall (manual edit, or after a submit). */
+        reset() {
+            draft = null;
+            history.resetCursor();
+        },
+    };
+}
+
+/**
  * Create a single-flight guard so only one submission runs at a time (Asyncify
  * re-entrancy safety, D-P6e-2). `begin()` returns false when a submission is
  * already in flight; the caller must pair a successful `begin()` with `end()`.

@@ -21,6 +21,7 @@ import {
     buildTranscriptEntries,
     fileToSubmission,
     createHistory,
+    createHistoryRecall,
     createRunGuard,
 } from "./app-core.mjs";
 
@@ -44,8 +45,8 @@ const REGION = "us-east-1";
 
 const guard = createRunGuard();
 const history = createHistory({ limit: HISTORY_LIMIT, entries: loadHistory() });
+const recall = createHistoryRecall(history);
 let session = null;       // the embind DdbshSession, once the modules are up.
-let historyDraft = null;  // the in-progress buffer saved while recalling history.
 
 // ---- history persistence (localStorage; app-core stays storage-free) -------
 function loadHistory() {
@@ -153,13 +154,20 @@ function caretOnLastLine(ta) {
 }
 
 function runFromEditor() {
+    // Don't consume the buffer while a submission is in flight: run() is
+    // Asyncify-suspending, so the event loop is live during a submission and a
+    // second Ctrl/Cmd-Enter would otherwise clear the editor before submit()'s
+    // guard refuses the re-entrant call, silently losing the just-typed text
+    // (D-P6e-2).
+    if (guard.busy) {
+        return;
+    }
     const text = els.editor.value;
     if (text.trim() === "") {
         return;
     }
     els.editor.value = "";
-    historyDraft = null;
-    history.resetCursor();
+    recall.reset();
     submit(text, { addToHistory: true });
 }
 
@@ -171,38 +179,36 @@ function onEditorKeydown(ev) {
         return;
     }
     // ArrowUp/ArrowDown traverse history only at the buffer edges, so arrows
-    // still move within a multi-line statement.
+    // still move within a multi-line statement. The recall state machine
+    // (app-core) decides whether to rewrite the buffer or let the key pass
+    // through; a null result means "leave the buffer alone".
     if (ev.key === "ArrowUp" && caretOnFirstLine(els.editor)) {
-        if (historyDraft === null) {
-            historyDraft = els.editor.value;
-        }
-        const entry = history.previous();
-        if (entry !== null) {
+        const value = recall.up(els.editor.value);
+        if (value !== null) {
             ev.preventDefault();
-            els.editor.value = entry;
-            els.editor.selectionStart = els.editor.selectionEnd = entry.length;
+            setEditorValue(value);
         }
         return;
     }
     if (ev.key === "ArrowDown" && caretOnLastLine(els.editor)) {
-        const entry = history.next();
-        ev.preventDefault();
-        if (entry !== null) {
-            els.editor.value = entry;
-        } else {
-            els.editor.value = historyDraft !== null ? historyDraft : "";
-            historyDraft = null;
+        const value = recall.down();
+        if (value !== null) {
+            ev.preventDefault();
+            setEditorValue(value);
         }
-        const len = els.editor.value.length;
-        els.editor.selectionStart = els.editor.selectionEnd = len;
         return;
     }
 }
 
+function setEditorValue(value) {
+    els.editor.value = value;
+    const len = value.length;
+    els.editor.selectionStart = els.editor.selectionEnd = len;
+}
+
 function onEditorInput() {
     // Any edit abandons an in-progress history recall.
-    historyDraft = null;
-    history.resetCursor();
+    recall.reset();
 }
 
 async function onFileChosen(ev) {
