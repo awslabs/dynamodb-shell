@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.11.1
+        VERSION 0.11.2
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -186,7 +186,7 @@ set_source_files_properties(
 # public headers (the request structs); it uses no engine runtime symbols, and
 # it never pulls the AWS SDK (an engine_boundary_check-style invariant: nothing
 # under include/ddbsh/wire/ includes <aws/...>).
-add_library(ddbsh-wire wire/codec.cpp)
+add_library(ddbsh-wire wire/codec.cpp wire/parse.cpp wire/json_reader.cpp wire/wire_client.cpp)
 add_library(ddbsh::wire ALIAS ddbsh-wire)
 # EXPORT_NAME `wire` so the INSTALLED imported target is `ddbsh::wire`, matching
 # the in-tree alias (the NAMESPACE `ddbsh::` prefixes the EXPORT_NAME).
@@ -194,7 +194,12 @@ set_target_properties(ddbsh-wire PROPERTIES OUTPUT_NAME ddbsh-wire EXPORT_NAME w
                       POSITION_INDEPENDENT_CODE ON)
 target_include_directories(ddbsh-wire
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-            $<INSTALL_INTERFACE:include>)
+            $<INSTALL_INTERFACE:include>
+    # The repo root carries the component's INTERNAL headers (wire/json_reader.hpp,
+    # the SDK-free JSON reader the parser uses). It is PRIVATE + BUILD_INTERFACE
+    # only — not part of the installed/exported surface, exactly like the engine's
+    # private src/ include — so json_reader.hpp never reaches a consumer.
+    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 # ddbsh_warnings wrapped in $<BUILD_INTERFACE:> so it is not recorded in the
 # installed/exported link interface (it is not itself an exported target).
 target_link_libraries(ddbsh-wire
@@ -309,13 +314,20 @@ if(DDBSH_BUILD_TESTS)
                    tests/describe_exec_test.cpp
                    tests/explain_exec_test.cpp
                    tests/connect_reconnect_test.cpp
-                   tests/cli_exit_code_test.cpp)
+                   tests/cli_exit_code_test.cpp
+                   tests/wire_json_reader_test.cpp
+                   tests/wire_parse_roundtrip_test.cpp
+                   tests/wire_client_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cli")
+                "${CMAKE_CURRENT_SOURCE_DIR}/cli"
+                # Repo root for the wire component's internal header
+                # (wire/json_reader.hpp), which wire_json_reader_test drives
+                # directly. PRIVATE to the test binary only.
+                "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(ddbsh-tests
-        PRIVATE ddbsh::ddbsh ddbsh-cli-core ddbsh_warnings GTest::gtest_main)
+        PRIVATE ddbsh::ddbsh ddbsh::wire ddbsh-cli-core ddbsh_warnings GTest::gtest_main)
 
     include(GoogleTest)
     # PRE_TEST discovery enumerates tests at ctest time (not build time), so the

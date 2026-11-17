@@ -62,6 +62,29 @@ WireRequest serialize(const PutItemIn& in);
 WireRequest serialize(const UpdateItemIn& in);
 WireRequest serialize(const DeleteItemIn& in);
 
+// ---- Data-plane response parsers (P6b) -------------------------------------
+// The inverse of the serializers above: turn an AWS-JSON-1.0 response `body`
+// into the engine's SDK-free *Out struct, field-identical to what the AWS
+// adapter's from_sdk_* helpers produce (aws/aws_ddb_client.cpp, the fidelity
+// oracle). Each parse_*:
+//   1. reads the body to a JSON tree (wire/json_reader.hpp);
+//   2. if the top-level object carries a `__type` member, returns the mapped
+//      ddbsh::Error (the body is an error document — a DynamoDB/ExtendDB
+//      success response never carries a top-level `__type`);
+//   3. otherwise fills the *Out, setting item/attributes/last_evaluated_key
+//      ONLY when the member is present and non-empty, and consumed_capacity via
+//      the same `any`-flag logic as from_sdk_consumed_capacity.
+// AttributeValue mapping is the exact inverse of from_sdk_value; binary (B/BS)
+// is carried verbatim (canonical standard-base64, as the serializer emits it).
+// A malformed body or a malformed AttributeValue yields Errc::service_error.
+
+Result<GetItemOut> parse_get_item(const std::string& body);
+Result<QueryOut> parse_query(const std::string& body);
+Result<ScanOut> parse_scan(const std::string& body);
+Result<PutItemOut> parse_put_item(const std::string& body);
+Result<UpdateItemOut> parse_update_item(const std::string& body);
+Result<DeleteItemOut> parse_delete_item(const std::string& body);
+
 }  // namespace ddbsh::wire
 
 #endif  // DDBSH_WIRE_CODEC_HPP
