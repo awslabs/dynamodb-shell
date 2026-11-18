@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/run-proxy-smoke — the P6f-b REAL-BACKEND web gate (D-P6f-3, §13 P6f-b).
+#
+# The companion to devtools/run-web-smoke. Where run-web-smoke proves the WASM
+# bridge offline (in-tab ExtendDB, no credentials/network), THIS script proves
+# the whole real path: the fetch edition (`ddbsh-wasm`) drives the native
+# ddbsh-web-proxy, which SigV4-signs and forwards to REAL Amazon DynamoDB.
+#
+# What it does:
+#   1. build the proxy  (cargo build --release in proxy/),
+#   2. build the fetch wasm edition  (emcmake wasm-release, like run-web-smoke),
+#   3. verify AWS credentials resolve + ECHO the target (account + region +
+#      endpoint) — a missing credential is an INFRASTRUCTURE FAILURE, not a skip,
+#   4. launch the proxy on a loopback test port (teardown on exit),
+#   5. run  node web/harness-proxy.mjs  against it (real DynamoDB, a
+#      `ddbsh_web_proxy_*`-prefixed table created + dropped),
+#   6. capture everything into discussions/test-proxysmoke-<HEAD-short>.log.
+#
+# WARNING: this talks to a REAL AWS account via the host's AWS chain. It creates
+# and drops one on-demand test table. Point it at a dedicated test account.
+#
+# Env: EMSDK, EMSDK_PYTHON, DDBSH_WASM_BUILD_DIR (shared with run-web-smoke);
+#      DDBSH_PROXY_PORT (default 8459), AWS_REGION / DDBSH_REGION (default
+#      us-east-1), AWS_PROFILE (passed through to the proxy's credential chain).
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DISCUSSIONS_DIR="$REPO_DIR/discussions"
+mkdir -p "$DISCUSSIONS_DIR"
+LOG_FILE="$DISCUSSIONS_DIR/test-proxysmoke-${HASH}.log"
+
+PROXY_PORT="${DDBSH_PROXY_PORT:-8459}"
+REGION="${DDBSH_REGION:-${AWS_REGION:-us-east-1}}"
+
+echo "=== Proxy smoke: build the ddbsh-web-proxy ===" | tee "$LOG_FILE"
+( cd "$REPO_DIR/proxy" && cargo build --release ) 2>&1 | tee -a "$LOG_FILE"
+PROXY_BIN="$REPO_DIR/proxy/target/release/ddbsh-web-proxy"
+if [ ! -x "$PROXY_BIN" ]; then
+    echo "error: proxy binary not built at $PROXY_BIN" | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+
+# --- Locate the emsdk toolchain + build the fetch wasm edition --------------
+EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
+if [ ! -f "$EMSDK_ROOT/emsdk_env.sh" ]; then
+    echo "error: emsdk not found at '$EMSDK_ROOT' (set EMSDK or install per web/README.md)." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+if [ -z "${EMSDK_PYTHON:-}" ]; then
+    if python3 -c 'import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
+        EMSDK_PYTHON="$(command -v python3)"
+    else
+        for cand in python3.13 python3.12 python3.11 python3.10; do
+            if command -v "$cand" >/dev/null 2>&1; then
+                EMSDK_PYTHON="$(command -v "$cand")"
+                break
+            fi
+        done
+    fi
+fi
+if [ -z "${EMSDK_PYTHON:-}" ]; then
+    echo "error: no python >= 3.10 found for the emsdk scripts (set EMSDK_PYTHON)." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+export EMSDK_PYTHON EMSDK="$EMSDK_ROOT"
+EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | head -1)" 2>/dev/null || true)"
+export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten${EMSDK_NODE_BIN:+:$EMSDK_NODE_BIN}:$PATH"
+if ! command -v emcmake >/dev/null 2>&1; then
+    echo "error: emcmake not on PATH after emsdk setup (EMSDK=$EMSDK_ROOT)." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+NODE_BIN="$(command -v node)"
+
+WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
+WEB_OUT="$WASM_BUILD/web"
+echo "=== Proxy smoke: build the fetch wasm edition ===" | tee -a "$LOG_FILE"
+if [ ! -f "$WASM_BUILD/CMakeCache.txt" ]; then
+    ( cd "$REPO_DIR" && emcmake cmake --preset wasm-release ) 2>&1 | tee -a "$LOG_FILE"
+fi
+cmake --build "$WASM_BUILD" 2>&1 | tee -a "$LOG_FILE"
+if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/harness-proxy.mjs" ]; then
+    echo "error: fetch wasm edition / harness not staged at $WEB_OUT" | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+
+# --- Verify AWS credentials + echo the target (no skip on missing) ----------
+echo "=== Proxy smoke: AWS target ===" | tee -a "$LOG_FILE"
+if ! command -v aws >/dev/null 2>&1; then
+    echo "error: aws CLI not found; cannot verify the test target (infrastructure failure)." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+if ! CALLER="$(aws sts get-caller-identity --output json 2>>"$LOG_FILE")"; then
+    echo "error: AWS credentials do not resolve (infrastructure failure, not a skip)." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+{
+    echo "  region:   $REGION"
+    echo "  endpoint: https://dynamodb.${REGION}.amazonaws.com"
+    echo "  account:  $(echo "$CALLER" | sed -n 's/.*"Account":[[:space:]]*"\([^"]*\)".*/\1/p')"
+    echo "  arn:      $(echo "$CALLER" | sed -n 's/.*"Arn":[[:space:]]*"\([^"]*\)".*/\1/p')"
+} | tee -a "$LOG_FILE"
+
+# --- Launch the proxy (loopback), teardown on exit --------------------------
+PROXY_PID=""
+cleanup() {
+    if [ -n "$PROXY_PID" ] && kill -0 "$PROXY_PID" 2>/dev/null; then
+        kill "$PROXY_PID" 2>/dev/null || true
+        wait "$PROXY_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+echo "=== Proxy smoke: launch ddbsh-web-proxy on 127.0.0.1:$PROXY_PORT ===" | tee -a "$LOG_FILE"
+AWS_REGION="$REGION" "$PROXY_BIN" --port "$PROXY_PORT" >>"$LOG_FILE" 2>&1 &
+PROXY_PID=$!
+
+# Wait for the loopback listener to answer /healthz.
+READY=""
+for _ in $(seq 1 50); do
+    if curl -fsS "http://127.0.0.1:$PROXY_PORT/healthz" >/dev/null 2>&1; then
+        READY=1
+        break
+    fi
+    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+        echo "error: proxy exited during startup (see log)." | tee -a "$LOG_FILE" >&2
+        exit 1
+    fi
+    sleep 0.2
+done
+if [ -z "$READY" ]; then
+    echo "error: proxy did not become ready on 127.0.0.1:$PROXY_PORT" | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+echo "  proxy ready (pid $PROXY_PID)" | tee -a "$LOG_FILE"
+
+# --- Run the harness against the real proxy + real DynamoDB -----------------
+echo "=== Proxy smoke: run harness-proxy.mjs ($HASH) ===" | tee -a "$LOG_FILE"
+set +e
+( cd "$WEB_OUT" && DDBSH_PROXY_URL="http://127.0.0.1:$PROXY_PORT" DDBSH_REGION="$REGION" \
+    "$NODE_BIN" harness-proxy.mjs ) 2>&1 | tee -a "$LOG_FILE"
+RC=${PIPESTATUS[0]}
+set -e
+
+echo "=== Proxy smoke exit: $RC ===" | tee -a "$LOG_FILE"
+echo "  artifact: $LOG_FILE"
+exit "$RC"

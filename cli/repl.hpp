@@ -18,11 +18,13 @@
 #ifndef DDBSH_CLI_REPL_HPP
 #define DDBSH_CLI_REPL_HPP
 
+#include <functional>
 #include <istream>
 #include <optional>
 #include <string>
 #include <string_view>
 
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
 
@@ -77,10 +79,28 @@ struct BatchStatus {
 };
 
 // Execute a BATCH of ';'-separated statements through the engine, in order,
-// rendering each result. A trailing PARSE error is reported to stderr but does
-// NOT contribute to the exit code (it never sets `last_error`), matching the
-// original run loop. When `abort_on_error` is set, execution stops at the first
-// failing statement (that failure is then the last executed → nonzero exit).
+// emitting each result FRAGMENT to the caller-supplied `sink` and each rendered
+// ERROR string (a failing statement's render_error, and a trailing parse
+// error) to the caller-supplied `report_error`. This is the terminal-free,
+// output-channel-agnostic core of the batch policy: the FD-vs-string choice is
+// the caller's (the CLI's sink writes to stdout/stderr; the web embedder's
+// appends to strings). A trailing PARSE error is reported via `report_error`
+// but does NOT contribute to the exit status (it never sets `last_error`),
+// matching the original run loop. When `abort_on_error` is set, execution stops
+// at the first failing statement (that failure is then the last executed →
+// nonzero exit). The same batch policy drives both the CLI and the browser
+// embedding surface, so it lives in exactly one place (D-P6d-5).
+BatchStatus run_batch(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
+                      std::string_view text, bool abort_on_error, ddbsh::OutcomeSink& sink,
+                      const std::function<void(const std::string&)>& report_error);
+
+// Execute a BATCH of ';'-separated statements through the engine, in order,
+// rendering each result to stdout and each error to stderr. A trailing PARSE
+// error is reported to stderr but does NOT contribute to the exit code (it
+// never sets `last_error`), matching the original run loop. When
+// `abort_on_error` is set, execution stops at the first failing statement (that
+// failure is then the last executed → nonzero exit). This is the CLI's thin
+// stdout/stderr adapter over run_batch (above).
 BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
                            std::string_view text, bool abort_on_error);
 

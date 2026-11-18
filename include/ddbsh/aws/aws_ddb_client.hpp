@@ -107,6 +107,11 @@ public:
     Result<void> wait_for_table_active(const std::string& table_name) override;
     Result<std::string> explain_request(const ExplainRequest&) override;
 
+    /// SHOW CONNECTION descriptor (phase 6f, D-P6f-9): the AWS SDK binding.
+    /// The transport is the AWS SDK for C++ calling DynamoDB directly (no wire
+    /// proxy); the session reports the region/endpoint separately.
+    std::string connection_descriptor() const override;
+
 private:
     // Construct (or replace) the underlying SDK client for a region/endpoint.
     // Shared by the ctor and connect() so both resolve credentials/endpoint the

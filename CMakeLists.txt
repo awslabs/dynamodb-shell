@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.10.10
+        VERSION 0.11.15
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -57,6 +57,14 @@ option(DDBSH_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 # that needs no AWS SDK at all (minimal/portability scenarios, the offline
 # embed_demo path); the CLI is skipped because it requires the client.
 option(DDBSH_BUILD_AWS "Build the optional AWS-backed client component and the CLI" ON)
+
+# The Emscripten/WASM web target (P6d). OFF by default so the normal Linux CI
+# matrix needs no Emscripten; turned ON only by the `wasm-release` preset (which
+# also sets DDBSH_BUILD_AWS=OFF and DDBSH_BUILD_TESTS=OFF). When ON, it requires
+# the Emscripten toolchain (configure via `emcmake cmake --preset wasm-release`);
+# web/CMakeLists.txt FATAL_ERRORs on a non-Emscripten configure so a
+# misinvocation fails fast. See web/README.md.
+option(DDBSH_BUILD_WEB "Build the Emscripten/WASM web target" OFF)
 
 # Warnings-as-errors, narrowly scoped to our own targets (not third-party).
 add_library(ddbsh_warnings INTERFACE)
@@ -117,6 +125,7 @@ add_library(ddbsh
             src/connection/connection.cpp
             src/render/renderer.cpp
             src/parser/driver.cpp
+            src/parser/param_bind.cpp
             src/parser/lex_debug.cpp
             src/parser/help_text.cpp
             src/expressions/symbol_table.cpp
@@ -124,6 +133,7 @@ add_library(ddbsh
             src/planner/get_key_schema.cpp
             src/planner/select_planner.cpp
             src/execute/select_executor.cpp
+            src/execute/select_cursor.cpp
             src/execute/insert_executor.cpp
             src/execute/update_executor.cpp
             src/execute/delete_executor.cpp
@@ -172,6 +182,37 @@ set_target_properties(ddbsh PROPERTIES OUTPUT_NAME ddbsh)
 set_source_files_properties(
     "${GEN_DIR}/grammar.cpp" "${GEN_DIR}/lexer.cpp"
     PROPERTIES COMPILE_OPTIONS "-Wno-error")
+
+# --- ddbsh-wire: SDK-free AWS JSON 1.0 codec (ddbsh::wire, P6 / D-P6-13) ------
+# The JSON-string transport counterpart to ddbsh-aws (the AWS SDK transport):
+# serialize(request) -> (operation, AWS-JSON-1.0 body), and — in a later P6
+# sub-phase — parse(response) over the engine's SDK-free request/response
+# structs. It is portable, SDK-free, and terminal-free, built on ALL platforms
+# so its host unit tests run in the normal CI matrix independent of the
+# Emscripten target. The browser (Emscripten, DDBSH_BUILD_AWS=OFF) build links
+# this and NOT ddbsh-aws. It PUBLIC-links the engine purely for its SDK-free
+# public headers (the request structs); it uses no engine runtime symbols, and
+# it never pulls the AWS SDK (an engine_boundary_check-style invariant: nothing
+# under include/ddbsh/wire/ includes <aws/...>).
+add_library(ddbsh-wire wire/codec.cpp wire/parse.cpp wire/json_reader.cpp wire/datetime.cpp wire/wire_client.cpp)
+add_library(ddbsh::wire ALIAS ddbsh-wire)
+# EXPORT_NAME `wire` so the INSTALLED imported target is `ddbsh::wire`, matching
+# the in-tree alias (the NAMESPACE `ddbsh::` prefixes the EXPORT_NAME).
+set_target_properties(ddbsh-wire PROPERTIES OUTPUT_NAME ddbsh-wire EXPORT_NAME wire
+                      POSITION_INDEPENDENT_CODE ON)
+target_include_directories(ddbsh-wire
+    PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+    # The repo root carries the component's INTERNAL headers (wire/json_reader.hpp,
+    # the SDK-free JSON reader the parser uses). It is PRIVATE + BUILD_INTERFACE
+    # only — not part of the installed/exported surface, exactly like the engine's
+    # private src/ include — so json_reader.hpp never reaches a consumer.
+    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+# ddbsh_warnings wrapped in $<BUILD_INTERFACE:> so it is not recorded in the
+# installed/exported link interface (it is not itself an exported target).
+target_link_libraries(ddbsh-wire
+    PUBLIC  ddbsh::ddbsh
+    PRIVATE $<BUILD_INTERFACE:ddbsh_warnings>)
 
 # --- CLI driver core (terminal-free, engine-only) ----------------------------
 # The terminal-free CLI driver (isql batch assembly + execute/exit loop) lives
@@ -244,6 +285,16 @@ if(DDBSH_BUILD_AWS)
         PRIVATE ddbsh::ddbsh ddbsh::aws ddbsh-cli-core ddbsh_warnings readline)
 endif()
 
+# --- Emscripten/WASM web target (P6d) ----------------------------------------
+# The browser build: engine + wire + cli-core linked into a WASM module with an
+# embind surface and the Asyncify transport. Opt-in (DDBSH_BUILD_WEB, default
+# OFF) and Emscripten-only. It needs the SDK-free libraries only — never
+# ddbsh-aws, never the CLI — so it coexists with DDBSH_BUILD_AWS=OFF (the
+# wasm-release preset sets exactly that). See web/CMakeLists.txt.
+if(DDBSH_BUILD_WEB)
+    add_subdirectory(web)
+endif()
+
 # --- tests -------------------------------------------------------------------
 if(DDBSH_BUILD_TESTS)
     include(FetchContent)
@@ -258,6 +309,8 @@ if(DDBSH_BUILD_TESTS)
     add_executable(ddbsh-tests
                    tests/walking_path_test.cpp
                    tests/connection_api_test.cpp
+                   tests/prepared_test.cpp
+                   tests/memory_client_test.cpp
                    tests/reentrancy_test.cpp
                    tests/lexer_test.cpp
                    tests/parse_test.cpp
@@ -266,6 +319,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/expression_test.cpp
                    tests/planner_test.cpp
                    tests/select_exec_test.cpp
+                   tests/select_stream_test.cpp
                    tests/write_exec_test.cpp
                    tests/update_delete_exec_test.cpp
                    tests/return_values_ratelimit_test.cpp
@@ -278,13 +332,24 @@ if(DDBSH_BUILD_TESTS)
                    tests/describe_exec_test.cpp
                    tests/explain_exec_test.cpp
                    tests/connect_reconnect_test.cpp
-                   tests/cli_exit_code_test.cpp)
+                   tests/cli_exit_code_test.cpp
+                   tests/wire_json_reader_test.cpp
+                   tests/wire_parse_roundtrip_test.cpp
+                   tests/wire_parse_control_test.cpp
+                   tests/wire_datetime_test.cpp
+                   tests/wire_client_test.cpp
+                   tests/wire_client_control_test.cpp
+                   tests/wire_client_retry_test.cpp)
     target_include_directories(ddbsh-tests
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cli")
+                "${CMAKE_CURRENT_SOURCE_DIR}/cli"
+                # Repo root for the wire component's internal header
+                # (wire/json_reader.hpp), which wire_json_reader_test drives
+                # directly. PRIVATE to the test binary only.
+                "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(ddbsh-tests
-        PRIVATE ddbsh::ddbsh ddbsh-cli-core ddbsh_warnings GTest::gtest_main)
+        PRIVATE ddbsh::ddbsh ddbsh::wire ddbsh-cli-core ddbsh_warnings GTest::gtest_main)
 
     include(GoogleTest)
     # PRE_TEST discovery enumerates tests at ctest time (not build time), so the
@@ -296,6 +361,27 @@ if(DDBSH_BUILD_TESTS)
     add_test(NAME engine_boundary_check
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # --- ddbsh-wire EXPLAIN-vs-wire differential gate (P6a, P6-02 §9.1) ------
+    # The SDK-free ddbsh::wire serializer becomes a production codec the live
+    # browser transport depends on, so every byte it emits must match the AWS
+    # SDK. This test asserts serialize(in).body == AwsDDBClient::explain_request
+    # (in) (the raw SDK SerializePayload bytes) for a corpus covering every
+    # field and AttributeValue type of the data-plane ops. It needs the SDK
+    # (ddbsh::aws), so it is built only with DDBSH_BUILD_AWS; it makes no network
+    # call (serialization is offline). It provides its own main() to wrap the
+    # whole process in one AwsApiGuard, so it links GTest::gtest (not
+    # gtest_main). add_dependencies ties it to ddbsh-tests so run-tests'
+    # `--target ddbsh-tests` native step builds it and ctest runs it.
+    if(DDBSH_BUILD_AWS)
+        add_executable(ddbsh-wire-diff-tests tests/wire_serialize_diff_test.cpp)
+        target_include_directories(ddbsh-wire-diff-tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+        target_link_libraries(ddbsh-wire-diff-tests
+            PRIVATE ddbsh::wire ddbsh::aws ddbsh_warnings GTest::gtest)
+        add_test(NAME ddbsh_wire_serialize_diff COMMAND ddbsh-wire-diff-tests)
+        add_dependencies(ddbsh-tests ddbsh-wire-diff-tests)
+    endif()
 
     # D19 (P4d): the embedding API's own misuse messages must never appear in a
     # golden .exp — the CLI does not drive those paths, so the 705/705 CLI
@@ -319,6 +405,20 @@ if(DDBSH_BUILD_TESTS)
     # `--target ddbsh-tests` build (the gate's native step) produces it and its
     # default-on CTest runs rather than reporting "Not Run".
     add_dependencies(ddbsh-tests ddbshlib_inmemory_sample)
+
+    # Phase-5 FEATURE sample (D9): a worked, heavily-commented tour of the P5
+    # embedding surface — prepared statements + re-exec, typed set/binary bind,
+    # lazy streaming (small page size), and transactions — driven offline over
+    # the in-memory ddbsh::testing::MemoryClient. Built in-tree against the
+    # SDK-free engine and run as a default-on, credential-less CTest, exactly
+    # like ddbshlib_inmemory_sample. Its own standalone
+    # examples/ddbshlib_features_sample/CMakeLists.txt additionally proves it as
+    # an EXTERNAL find_package(ddbsh) consumer.
+    add_executable(ddbshlib_features_sample
+                   examples/ddbshlib_features_sample/ddbshlib_features_sample.cpp)
+    target_link_libraries(ddbshlib_features_sample PRIVATE ddbsh::ddbsh ddbsh_warnings)
+    add_test(NAME ddbshlib_features_sample COMMAND ddbshlib_features_sample)
+    add_dependencies(ddbsh-tests ddbshlib_features_sample)
 
     # LIVE embedding sample (D28): built in-tree against ddbsh::aws and run
     # against REAL DynamoDB (us-east-1) via the standard ~/.aws chain. OFF by
@@ -359,7 +459,7 @@ endif()
 #                        needs no SDK at all.
 include(CMakePackageConfigHelpers)
 
-install(TARGETS ddbsh
+install(TARGETS ddbsh ddbsh-wire
         EXPORT ddbsh-targets
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib

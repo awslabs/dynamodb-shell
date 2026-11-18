@@ -113,6 +113,50 @@ std::optional<std::string> StreamLineSource::next() {
     return line;
 }
 
+BatchStatus run_batch(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
+                      std::string_view text, bool abort_on_error, ddbsh::OutcomeSink& sink,
+                      const std::function<void(const std::string&)>& report_error) {
+    BatchStatus status;
+    ddbsh::ParsedBatch batch = session.parse_batch(text);
+    for (const auto& stmt : batch.statements) {
+        auto outcome = session.execute(stmt, sink);
+        if (!outcome.has_value()) {
+            report_error(renderer.render_error(outcome.error()));
+            // This failing statement is the most-recently executed one.
+            status.last_error = true;
+            if (abort_on_error) {
+                status.aborted = true;
+                return status;
+            }
+            continue;
+        }
+        // A successful command run() RESETS the last-executed status to OK,
+        // matching the oracle's retval overwrite (arch §3).
+        status.last_error = false;
+        if (stmt.kind() == ddbsh::StatementKind::quit) {
+            status.quit = true;
+            return status;
+        }
+    }
+    if (batch.error.has_value()) {
+        // A PARSE error is reported to the error channel but does NOT set the
+        // process error exit, matching the original's run loop (ddbsh.cpp
+        // CDDBSh::run): `retval` is updated ONLY by `pCommand->run()`, so a
+        // yyparse failure leaves it untouched (0 for a pure parse error) and
+        // the shell exits 0. Only a command's run() failure (handled above)
+        // contributes to the nonzero exit code. This is the behavior the golden
+        // suite pins — e.g. ddbsh-basic-test-9 / ddbsh-cross-account-test-9,
+        // whose mutual-exclusion semantic error must still exit 0 (the oracle
+        // does). Abort-on-error likewise keys off run() failures, not parse
+        // failures (a config-file parse error does not abort startup in the
+        // original either). Crucially, it also leaves `last_error` UNTOUCHED, so
+        // a trailing parse error does not disturb the last executed statement's
+        // contribution to the exit code.
+        report_error(renderer.render_error(*batch.error));
+    }
+    return status;
+}
+
 BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
                            std::string_view text, bool abort_on_error) {
     // Render each outcome fragment to stdout as the engine emits it, so a
@@ -137,48 +181,15 @@ BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Rendere
         }
     };
 
-    BatchStatus status;
-    ddbsh::ParsedBatch batch = session.parse_batch(text);
-    for (const auto& stmt : batch.statements) {
-        RenderingSink sink(renderer);
-        auto outcome = session.execute(stmt, sink);
-        if (!outcome.has_value()) {
-            std::fputs(renderer.render_error(outcome.error()).c_str(), stderr);
-            std::fflush(stderr);
-            // This failing statement is the most-recently executed one.
-            status.last_error = true;
-            if (abort_on_error) {
-                status.aborted = true;
-                return status;
-            }
-            continue;
-        }
-        // A successful command run() RESETS the last-executed status to OK,
-        // matching the oracle's retval overwrite (arch §3).
-        status.last_error = false;
-        if (stmt.kind() == ddbsh::StatementKind::quit) {
-            status.quit = true;
-            return status;
-        }
-    }
-    if (batch.error.has_value()) {
-        // A PARSE error is reported to stderr but does NOT set the process
-        // error exit, matching the original's run loop (ddbsh.cpp CDDBSh::run):
-        // `retval` is updated ONLY by `pCommand->run()`, so a yyparse failure
-        // leaves it untouched (0 for a pure parse error) and the shell exits 0.
-        // Only a command's run() failure (handled above) contributes to the
-        // nonzero exit code. This is the behavior the golden suite pins — e.g.
-        // ddbsh-basic-test-9 / ddbsh-cross-account-test-9, whose mutual-exclusion
-        // semantic error must still exit 0 (the oracle does). Abort-on-error
-        // likewise keys off run() failures, not parse failures (a config-file
-        // parse error does not abort startup in the original either). Crucially,
-        // it also leaves `last_error` UNTOUCHED, so a trailing parse error does
-        // not disturb the last executed statement's contribution to the exit
-        // code.
-        std::fputs(renderer.render_error(*batch.error).c_str(), stderr);
-        std::fflush(stderr);
-    }
-    return status;
+    RenderingSink sink(renderer);
+    return run_batch(session, renderer, text, abort_on_error, sink,
+                     [](const std::string& rendered) {
+                         // A failing statement's error (and a trailing parse
+                         // error) go to stderr, flushed so a mid-batch error
+                         // interleaves with already-written stdout tokens.
+                         std::fputs(rendered.c_str(), stderr);
+                         std::fflush(stderr);
+                     });
 }
 
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,

@@ -81,6 +81,15 @@ public:
     void on_token(const char* text, int length);
     const std::string& last_lexeme() const { return last_lexeme_; }
 
+    /// Assign the next 1-based positional parameter ordinal to a `?` marker
+    /// (prepared-statement facility, D-P5-2). Counts per statement: parse_next()
+    /// resets the counter so each statement in a batch numbers its markers from
+    /// 1 in text-appearance order. The grammar's `lee_rhs: '?'` /
+    /// `insert_value: '?'` actions call this.
+    int next_param_ordinal() { return ++param_count_; }
+    /// The number of `?` markers seen in the statement just parsed.
+    int param_count() const { return param_count_; }
+
     // ---- result builders invoked by the grammar actions --------------------
     /// The empty statement (blank / comment-only / bare-';' input).
     void set_empty_result();
@@ -122,6 +131,7 @@ private:
     int line_ = 1;                 ///< 1-based line of the scan cursor
     int column_ = 1;               ///< 1-based column of the scan cursor
     bool saw_eof_ = false;         ///< scanner reached end of input (sticky)
+    int param_count_ = 0;          ///< `?` markers in the current statement (reset per statement)
     std::optional<Statement> result_;
     std::optional<Error> error_;
 };

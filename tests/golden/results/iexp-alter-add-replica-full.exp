@@ -1,0 +1,23 @@
+UpdateTable({
+   "TableName":   "foo",
+   "ReplicaUpdates":   [{
+         "Create":   {
+            "RegionName":   "us-west-2",
+            "ProvisionedThroughputOverride":   {
+               "ReadCapacityUnits":   50
+            },
+            "GlobalSecondaryIndexes":   [{
+                  "IndexName":   "g1",
+                  "ProvisionedThroughputOverride":   {
+                     "ReadCapacityUnits":   10
+                  }
+               }, {
+                  "IndexName":   "g2",
+                  "ProvisionedThroughputOverride":   {
+                     "ReadCapacityUnits":   20
+                  }
+               }],
+            "TableClassOverride":   "STANDARD_INFREQUENT_ACCESS"
+         }
+      }]
+})

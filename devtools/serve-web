@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/serve-web — build the Emscripten/WASM web bundle (if needed) and
+# serve it over HTTP so the P6e browser UI can be hand-tested (D-P6e-4, D-P6e-5).
+#
+# WASM + ES modules cannot load from file:// (module CORS + the application/wasm
+# MIME requirement), so the servable static bundle in the build output dir must
+# be served over HTTP. This wraps the exact serve command documented in
+# web/README.md in one place, symmetric with devtools/run-web-smoke.
+#
+# No cross-origin-isolation headers are needed: the web target uses Asyncify,
+# not threads/SharedArrayBuffer (D-P6-12), so plain http.server is enough.
+#
+# Usage:
+#   devtools/serve-web [PORT]      # default port 8080
+# Env overrides (shared with run-web-smoke): EMSDK, EMSDK_PYTHON,
+# DDBSH_WASM_BUILD_DIR, DDBSH_EXTENDDB_WEBASM_PKG (the in-browser ExtendDB
+# adapter drop-in source; see web/vendor/extenddb/PROVENANCE.md). Ctrl-C stops
+# the server.
+#
+# Binding: the server defaults to loopback (127.0.0.1) so the bundle is only
+# reachable from this machine. This edition serves the credential-free in-browser
+# build, but loopback-by-default is the baseline for any dev server (and the
+# proxy editions must stay loopback regardless). To hand-test from another
+# machine, prefer an SSH local port-forward (`ssh -L $PORT:localhost:$PORT host`).
+# If you knowingly want the server reachable on your LAN, set the bind explicitly:
+#   DDBSH_SERVE_BIND=0.0.0.0 devtools/serve-web [PORT]
+# which exposes the bundle to every host that can route to this interface.
+
+set -euo pipefail
+
+PORT="${1:-8080}"
+BIND="${DDBSH_SERVE_BIND:-127.0.0.1}"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
+WEB_OUT="$WASM_BUILD/web"
+
+# --- Build the bundle if the output is missing ------------------------------
+if [ ! -f "$WEB_OUT/ddbsh-extenddb.js" ] || [ ! -f "$WEB_OUT/index.html" ]; then
+    echo "web bundle not found at $WEB_OUT — building via emcmake ..."
+    EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
+    if [ ! -f "$EMSDK_ROOT/emsdk_env.sh" ]; then
+        echo "error: emsdk not found at '$EMSDK_ROOT' (set EMSDK or install per web/README.md)." >&2
+        exit 1
+    fi
+    if [ -z "${EMSDK_PYTHON:-}" ]; then
+        if python3 -c 'import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
+            EMSDK_PYTHON="$(command -v python3)"
+        else
+            for cand in python3.13 python3.12 python3.11 python3.10; do
+                if command -v "$cand" >/dev/null 2>&1; then
+                    EMSDK_PYTHON="$(command -v "$cand")"
+                    break
+                fi
+            done
+        fi
+    fi
+    export EMSDK_PYTHON EMSDK="$EMSDK_ROOT"
+    EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | head -1)" 2>/dev/null || true)"
+    export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten${EMSDK_NODE_BIN:+:$EMSDK_NODE_BIN}:$PATH"
+    if [ ! -f "$WASM_BUILD/CMakeCache.txt" ]; then
+        ( cd "$REPO_DIR" && emcmake cmake --preset wasm-release )
+    fi
+    cmake --build "$WASM_BUILD"
+fi
+
+# --- Drop in the in-browser ExtendDB adapter --------------------------------
+# ddbsh does not ship the adapter (D-P6f-8); the in-tab browser UI needs it in
+# vendor/extenddb/ to load. Stage it from the upstream package as a dev
+# convenience. Non-fatal: if the upstream package is absent, print the manual
+# drop-in instructions and serve anyway (the UI shows a clear load-failure until
+# the adapter is dropped in). See web/vendor/extenddb/PROVENANCE.md.
+if ! "$REPO_DIR/devtools/stage-extenddb-webasm" "$WEB_OUT"; then
+    echo "note: the in-browser ExtendDB adapter was not staged automatically." >&2
+    echo "      Drop an extenddb-wasm-adapter@0.1.26 build into $WEB_OUT/vendor/extenddb/" >&2
+    echo "      (or set DDBSH_EXTENDDB_WEBASM_PKG); see web/vendor/extenddb/PROVENANCE.md." >&2
+fi
+
+# --- Serve ------------------------------------------------------------------
+# Use any available python3 for the static server (3.9 is fine here; only the
+# emsdk scripts need 3.10+). Bind loopback-only by default (DDBSH_SERVE_BIND to
+# override knowingly — see the header).
+if [ "$BIND" = "127.0.0.1" ] || [ "$BIND" = "::1" ] || [ "$BIND" = "localhost" ]; then
+    echo "Serving $WEB_OUT at http://localhost:$PORT/ (bind $BIND, loopback-only; Ctrl-C to stop)"
+else
+    echo "WARNING: binding $BIND — the bundle is reachable by other machines on this network." >&2
+    echo "Serving $WEB_OUT at http://$BIND:$PORT/ (Ctrl-C to stop)"
+fi
+cd "$WEB_OUT"
+exec python3 -m http.server --bind "$BIND" "$PORT"

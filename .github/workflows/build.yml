@@ -3,19 +3,28 @@ name: Build DynamoDB Shell
 on:
   release:
     types: [created]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04 LTS, not ubuntu-latest. ubuntu-latest moved to 26.04,
+    # whose OpenSSL 3.5 static libcrypto.a pulls a jitterentropy seed source
+    # (jent_* symbols) that needs an external libjitterentropy the image does
+    # not package — an unwinnable static-link chase. 24.04 ships OpenSSL 3.0,
+    # whose static libcrypto has no such provider deps, so the static AWS SDK
+    # links clean. Revisit when a shared AWS SDK build (or a 26.04 image that
+    # packages the provider libs) is adopted.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake
+          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison libzstd-dev
 
       - name: Install AWS SDK for C++
         run: |
@@ -30,13 +39,107 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF
+          # -lzstd is a cheap, always-available belt-and-suspenders: appended
+          # last via CMAKE_CXX_STANDARD_LIBRARIES (after the target's own libs,
+          # so it resolves even under --as-needed), and a harmless no-op if the
+          # static libcrypto on this image does not reference zstd.
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES="-lzstd"
           make
 
       - name: Upload binaries as artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: binaries-linux
           path: |
                 build/ddbsh
 
+  # ddbsh-web-proxy — the native companion for the real-backend web UI (phase
+  # 6f). A portable Rust single binary (D-P6f-3); this matrix proves it builds +
+  # tests clean on Linux, macOS, and Windows (D-P6f-11 cross-platform). The proxy
+  # is self-contained (no AWS SDK for C++, no flex/bison), so the job is fast.
+  build-proxy:
+    name: build-proxy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: proxy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain info
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test
+
+      - name: Format check (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --check
+
+      - name: Clippy (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Upload proxy binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddbsh-web-proxy-${{ matrix.os }}
+          path: |
+            proxy/target/release/ddbsh-web-proxy
+            proxy/target/release/ddbsh-web-proxy.exe
+          if-no-files-found: ignore
+
+  # The browser/WASM editions (phase 6d/6e/6f). The whole SDK-free engine +
+  # ddbsh-wire codec + UI compile to WebAssembly via the pinned emsdk; this job
+  # proves both editions (ddbsh.js fetch + ddbsh-extenddb.js in-tab) build. It is
+  # Linux-only (one portable artifact serves every browser) and needs no AWS SDK
+  # (the wasm-release preset sets DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_WEB=ON).
+  build-wasm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install cmake flex bison
+
+      - name: Set up Emscripten (pinned)
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61
+
+      - name: Configure + build the wasm editions
+        run: |
+          emcmake cmake --preset wasm-release
+          cmake --build build-preset/wasm-release
+
+      - name: Verify both editions were emitted
+        run: |
+          test -f build-preset/wasm-release/web/ddbsh.js
+          test -f build-preset/wasm-release/web/ddbsh.wasm
+          test -f build-preset/wasm-release/web/ddbsh-extenddb.js
+          test -f build-preset/wasm-release/web/ddbsh-extenddb.wasm
+
+      - name: Upload wasm bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddbsh-wasm-bundle
+          path: |
+            build-preset/wasm-release/web/ddbsh.js
+            build-preset/wasm-release/web/ddbsh.wasm
+            build-preset/wasm-release/web/ddbsh-extenddb.js
+            build-preset/wasm-release/web/ddbsh-extenddb.wasm

@@ -33,12 +33,26 @@
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
         "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
       }
+    },
+    {
+      "name": "wasm-release",
+      "displayName": "WASM Release (Emscripten)",
+      "description": "Browser/WASM target. Configure with `emcmake cmake --preset wasm-release` so the Emscripten toolchain is injected (see web/README.md).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-preset/wasm-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DDBSH_BUILD_AWS": "OFF",
+        "DDBSH_BUILD_WEB": "ON",
+        "DDBSH_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "linux-release", "configurePreset": "linux-release" },
-    { "name": "linux-sanitize", "configurePreset": "linux-sanitize" }
+    { "name": "linux-sanitize", "configurePreset": "linux-sanitize" },
+    { "name": "wasm-release", "configurePreset": "wasm-release" }
   ],
   "testPresets": [
     {

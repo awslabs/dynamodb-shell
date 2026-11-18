@@ -1,0 +1,8 @@
+UpdateTable({
+   "TableName":   "foo",
+   "ReplicaUpdates":   [{
+         "Delete":   {
+            "RegionName":   "us-west-2"
+         }
+      }]
+})

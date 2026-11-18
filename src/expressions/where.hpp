@@ -148,6 +148,10 @@ public:
     /// Direct access to the root (for probes the planner composes itself).
     const LogicalExpression& root() const { return *m_where; }
 
+    /// Collect pointers to every unresolved parameter-marker Value slot in the
+    /// WHERE tree (prepared-statement facility, D-P5-2), in traversal order.
+    void collect_param_slots(std::vector<Value*>& out) { m_where->collect_param_slots(out); }
+
 private:
     std::unique_ptr<LogicalExpression> m_where;
 };

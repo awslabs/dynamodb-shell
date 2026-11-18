@@ -82,6 +82,12 @@ public:
         return ct;
     }
 
+    void collect_param_slots(std::vector<Value*>& out) override {
+        for (auto& child : m_exprlist) {
+            child->collect_param_slots(out);
+        }
+    }
+
 private:
     std::string do_serialize(SymbolTable* st) override {
         std::string rv = is_paren_group() ? "(" : "";

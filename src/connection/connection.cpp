@@ -14,12 +14,18 @@
 #include <charconv>
 #include <cstddef>
 #include <limits>
+#include <locale>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <variant>
 
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
+#include "execute/select_cursor.hpp"
+#include "parser/param_bind.hpp"
+#include "session_internal.hpp"
 
 namespace ddbsh {
 
@@ -39,79 +45,40 @@ WriteVerb to_write_verb(BulkWriteOutcome::Verb v) {
     return WriteVerb::update;
 }
 
-/// Render one Value to the ddbsh source literal that re-parses to it (the
-/// inverse of the lexer's literal rules). Returns an Error for a shape with no
-/// literal syntax (DynamoDB sets SS/NS/BS have none in the grammar).
-std::optional<Error> render_literal(const Value& v, std::string& out) {
-    switch (v.type) {
-        case Value::Type::S: {
-            out.push_back('"');
-            for (char c : v.s) {
-                if (c == '"') {
-                    out.push_back('"');  // SQL-style "" doubling (lexer §4)
-                }
-                out.push_back(c);
-            }
-            out.push_back('"');
-            return std::nullopt;
-        }
-        case Value::Type::N:
-            out += v.s;  // bare, exact lexeme
-            return std::nullopt;
-        case Value::Type::BOOL:
-            out += (v.boolean ? "true" : "false");
-            return std::nullopt;
-        case Value::Type::NUL:
-            out += "null";
-            return std::nullopt;
-        case Value::Type::L: {
-            out.push_back('[');
-            for (std::size_t i = 0; i < v.list.size(); ++i) {
-                if (i != 0) {
-                    out += ", ";
-                }
-                if (auto e = render_literal(v.list[i], out)) {
-                    return e;
-                }
-            }
-            out.push_back(']');
-            return std::nullopt;
-        }
-        case Value::Type::M: {
-            out.push_back('{');
-            for (std::size_t i = 0; i < v.map.size(); ++i) {
-                if (i != 0) {
-                    out += ", ";
-                }
-                out.push_back('"');
-                for (char c : v.map[i].first) {
-                    if (c == '"') {
-                        out.push_back('"');
-                    }
-                    out.push_back(c);
-                }
-                out += "\":";
-                if (auto e = render_literal(v.map[i].second, out)) {
-                    return e;
-                }
-            }
-            out.push_back('}');
-            return std::nullopt;
-        }
-        case Value::Type::B:
-        case Value::Type::SS:
-        case Value::Type::NS:
-        case Value::Type::BS:
-            return Error{Errc::invalid_argument,
-                         "cannot bind a DynamoDB binary or set value: no literal syntax",
-                         std::nullopt, std::nullopt};
+// Locale-independent, strict parse of a DynamoDB N value into a double.
+// DynamoDB N values always use '.' as the decimal point, so the parse must NOT
+// follow the global C++ locale (std::stod can misparse under a comma-decimal
+// locale).
+//
+// std::from_chars is the ideal locale-independent parser, but the FLOATING-
+// POINT overloads are not universally available: libstdc++ (gcc >= 11) ships
+// them, while libc++ — the Emscripten/WASM toolchain's standard library — does
+// not implement them yet and =delete-s the otherwise-ambiguous overload. Use
+// from_chars where the library's feature-test macro reports the FP overloads
+// (__cpp_lib_to_chars is defined only once BOTH integer and FP to/from_chars
+// exist), and otherwise fall back to a classic-locale istringstream, which is
+// also locale-independent. Both branches reject trailing characters and
+// out-of-range values, so they are behaviorally identical (tenet 4 / portable).
+std::optional<double> parse_double_strict(const std::string& s) {
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    double result = 0.0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+    if (ec != std::errc{} || ptr != s.data() + s.size()) {
+        return std::nullopt;  // not a number / trailing chars / out of range
     }
-    return Error{Errc::invalid_argument, "cannot bind value of unknown type", std::nullopt,
-                 std::nullopt};
-}
-
-bool is_name_char(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    return result;
+#else
+    std::istringstream iss(s);
+    iss.imbue(std::locale::classic());
+    double result = 0.0;
+    iss >> result;
+    // Reject a failed parse, an out-of-range value (>> sets failbit), or any
+    // trailing character (the strict contract from_chars enforces via `ptr`).
+    if (iss.fail() || iss.peek() != std::char_traits<char>::eof()) {
+        return std::nullopt;
+    }
+    return result;
+#endif
 }
 
 }  // namespace
@@ -147,15 +114,10 @@ std::optional<double> Cell::as_double() const {
     }
     // Locale-independent parse: DynamoDB N values always use '.' as the decimal
     // point, so std::stod (which follows the global C++ locale and can misparse
-    // under a comma-decimal locale) must not be used. std::from_chars is
-    // locale-independent by contract.
-    const std::string& s = value_->s;
-    double result = 0.0;
-    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
-    if (ec != std::errc{} || ptr != s.data() + s.size()) {
-        return std::nullopt;  // not a number / trailing chars / out of range
-    }
-    return result;
+    // under a comma-decimal locale) must not be used. parse_double_strict is
+    // locale-independent and portable across the libstdc++/libc++ toolchains
+    // (see its definition — FP std::from_chars is not available under libc++).
+    return parse_double_strict(value_->s);
 }
 
 std::optional<bool> Cell::as_bool() const {
@@ -210,119 +172,56 @@ Cell Row::cell(std::string_view name) const {
 
 // ====================== PreparedStatement ===================================
 
+struct PreparedStatement::Impl {
+    Statement statement;                         ///< parsed once; owns the AST + its `?` markers
+    std::vector<Value*> slots;                   ///< slots[i] -> the (i+1)-th `?` marker Value
+    std::vector<std::optional<Value>> bindings;  ///< bindings[i] -> value bound to parameter i+1
+    std::optional<Error> bind_error;             ///< first bind misuse, surfaced at exec/query
+
+    /// Validate every parameter is bound, then write each bound Value into its
+    /// AST slot in place, leaving the statement ready for the normal planner /
+    /// serializer (Approach H). Re-callable: a re-execute rebinds and resolves
+    /// again over the same stable slots (the AST is not reallocated).
+    Result<void> resolve() {
+        if (bind_error.has_value()) {
+            return fail(*bind_error);
+        }
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            if (!bindings[i].has_value()) {
+                return fail(Errc::unbound_parameter,
+                            "parameter #" + std::to_string(i + 1) + " is not bound");
+            }
+            *slots[i] = *bindings[i];
+        }
+        return {};
+    }
+};
+
+PreparedStatement::PreparedStatement(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+PreparedStatement::~PreparedStatement() = default;
+PreparedStatement::PreparedStatement(PreparedStatement&&) noexcept = default;
+PreparedStatement& PreparedStatement::operator=(PreparedStatement&&) noexcept = default;
+
+int PreparedStatement::parameter_count() const {
+    return static_cast<int>(impl_->slots.size());
+}
+
 PreparedStatement& PreparedStatement::bind(int index1, Value v) {
-    if (index1 < 1) {
-        // A positional index is 1-based; a value <1 is caller misuse. bind()
+    if (index1 < 1 || static_cast<std::size_t>(index1) > impl_->slots.size()) {
+        // A positional index is 1-based and must name an actual `?`. bind()
         // returns *this for chaining and cannot return a Result, so record the
-        // first such error and surface it from expand() (no silent swallow).
-        if (!bind_error_.has_value()) {
-            bind_error_ = Error{Errc::invalid_argument,
-                                "positional bind index must be >= 1, got " + std::to_string(index1),
-                                std::nullopt, std::nullopt};
+        // first such misuse and surface it when the statement executes.
+        if (!impl_->bind_error.has_value()) {
+            impl_->bind_error =
+                Error{Errc::invalid_argument,
+                      "bind index " + std::to_string(index1) + " out of range [1, " +
+                          std::to_string(impl_->slots.size()) + "]",
+                      std::nullopt, std::nullopt};
         }
         return *this;
     }
-    auto idx = static_cast<std::size_t>(index1 - 1);
-    if (idx >= positional_.size()) {
-        positional_.resize(idx + 1);
-    }
-    positional_[idx] = std::move(v);
+    impl_->bindings[static_cast<std::size_t>(index1 - 1)] = std::move(v);
     return *this;
-}
-
-PreparedStatement& PreparedStatement::bind(std::string_view name, Value v) {
-    for (auto& [n, val] : named_) {
-        if (n == name) {
-            val = std::move(v);
-            return *this;
-        }
-    }
-    named_.emplace_back(std::string(name), std::move(v));
-    return *this;
-}
-
-Result<std::string> PreparedStatement::expand() const {
-    if (bind_error_.has_value()) {
-        return fail(*bind_error_);
-    }
-    std::string out;
-    out.reserve(sql_.size() + 16);
-    std::size_t next_positional = 0;
-    std::vector<bool> named_used(named_.size(), false);
-    bool in_string = false;
-
-    for (std::size_t i = 0; i < sql_.size(); ++i) {
-        char c = sql_[i];
-        if (in_string) {
-            out.push_back(c);
-            if (c == '"') {
-                if (i + 1 < sql_.size() && sql_[i + 1] == '"') {
-                    out.push_back('"');  // escaped "" — stay in string
-                    ++i;
-                } else {
-                    in_string = false;
-                }
-            }
-            continue;
-        }
-        if (c == '"') {
-            in_string = true;
-            out.push_back(c);
-            continue;
-        }
-        if (c == '?') {
-            if (next_positional >= positional_.size()) {
-                return fail(Errc::invalid_argument, "positional placeholder #" +
-                                                        std::to_string(next_positional + 1) +
-                                                        " has no bound value");
-            }
-            if (auto e = render_literal(positional_[next_positional], out)) {
-                return fail(*e);
-            }
-            ++next_positional;
-            continue;
-        }
-        if (c == ':' && i + 1 < sql_.size() && is_name_char(sql_[i + 1]) &&
-            !(sql_[i + 1] >= '0' && sql_[i + 1] <= '9')) {
-            std::size_t j = i + 1;
-            while (j < sql_.size() && is_name_char(sql_[j])) {
-                ++j;
-            }
-            std::string name = sql_.substr(i + 1, j - i - 1);
-            bool matched = false;
-            for (std::size_t k = 0; k < named_.size(); ++k) {
-                if (named_[k].first == name) {
-                    if (auto e = render_literal(named_[k].second, out)) {
-                        return fail(*e);
-                    }
-                    named_used[k] = true;
-                    matched = true;
-                    break;
-                }
-            }
-            if (matched) {
-                i = j - 1;
-                continue;
-            }
-            // Unbound :name — leave verbatim (the grammar deals with it).
-            out.push_back(c);
-            continue;
-        }
-        out.push_back(c);
-    }
-
-    if (next_positional < positional_.size()) {
-        return fail(Errc::invalid_argument, "bound positional parameter #" +
-                                                std::to_string(next_positional + 1) +
-                                                " has no matching ? placeholder");
-    }
-    for (std::size_t k = 0; k < named_.size(); ++k) {
-        if (!named_used[k]) {
-            return fail(Errc::invalid_argument,
-                        "bound parameter :" + named_[k].first + " has no matching placeholder");
-        }
-    }
-    return out;
 }
 
 // ============================ Results =======================================
@@ -343,6 +242,15 @@ struct ResultSetData {
     std::vector<std::string> lines;
     std::vector<ExplainBlock> explain_blocks;
     ExecOutcome render_source{EmptyOutcome{}};
+
+    // Lazy SELECT path (D-P5-1): a non-EXPLAIN, non-vector row SELECT backs its
+    // `rows` result set with a streaming cursor instead of a materialized
+    // `rows` vector. next_row() pages lazily through it; render()/render_all()
+    // drain it into `render_source` on demand. Empty for every other result set
+    // (including vector-search / read-transaction rows sets, which stay
+    // materialized in `rows`). A result set uses EITHER `cursor` (lazy) OR
+    // `rows` (materialized), never both.
+    std::optional<engine::SelectRowCursor> cursor;
 };
 
 void flatten(const ExecOutcome& o, std::vector<ResultSetData>& out);
@@ -456,11 +364,20 @@ struct Results::Impl {
     long long row_index = -1;
     Row current_row;
 
+    // Lazy-cursor iteration state for the CURRENT result set (valid only when
+    // that set is a lazy SELECT — sets[set_index].cursor present). `lazy_page_`
+    // points into the cursor's current page and is valid until the next
+    // next_page()/materialize; `lazy_pos_` is the index within it.
+    const std::vector<ItemRow>* lazy_page_ = nullptr;
+    std::size_t lazy_pos_ = 0;
+
     const std::vector<std::string> empty_lines{};
 
     void reset_row_cursor() {
         row_index = -1;
         current_row = Row{};
+        lazy_page_ = nullptr;
+        lazy_pos_ = 0;
     }
 
     const ResultSetData* current() const {
@@ -468,6 +385,81 @@ struct Results::Impl {
             return nullptr;
         }
         return &sets[set_index];
+    }
+
+    ResultSetData* current_mutable() {
+        if (!loaded || set_index >= sets.size()) {
+            return nullptr;
+        }
+        return &sets[set_index];
+    }
+
+    /// Advance within a lazy (cursor-backed) rows result set, paging the cursor
+    /// as needed. Bounded memory: only the current page is resident. On
+    /// exhaustion it records the totalized capacity so consumed_capacity()
+    /// reflects it; a service error ends the set and is readable via error().
+    bool lazy_next_row(ResultSetData& c) {
+        if (lazy_page_ != nullptr && lazy_pos_ + 1 < lazy_page_->size()) {
+            ++lazy_pos_;
+            current_row = Row((*lazy_page_)[lazy_pos_]);
+            return true;
+        }
+        auto page = c.cursor->next_page();
+        if (!page.has_value()) {
+            error = page.error();
+            c.cc = c.cursor->consumed_capacity();
+            lazy_page_ = nullptr;
+            return false;
+        }
+        if (*page == nullptr) {  // end of the row stream
+            c.cc = c.cursor->consumed_capacity();
+            lazy_page_ = nullptr;
+            return false;
+        }
+        lazy_page_ = *page;
+        lazy_pos_ = 0;
+        current_row = Row((*lazy_page_)[0]);
+        return true;
+    }
+
+    /// Drain a lazy result set from its current position into a buffered
+    /// SelectOutcome cached in `render_source`, so render()/render_all() produce
+    /// the byte-exact CLI output. Idempotent (once drained the cursor is gone).
+    /// Forward-only: it includes the unconsumed tail of the current page then
+    /// every remaining page — matching DB-Library cursor semantics (a render
+    /// after a partial next_row walk renders what is left). A no-op on a
+    /// non-lazy set.
+    void materialize_lazy(ResultSetData& c) {
+        if (!c.cursor.has_value()) {
+            return;
+        }
+        SelectOutcome out;
+        if (lazy_page_ != nullptr) {
+            for (std::size_t i = lazy_pos_ + 1; i < lazy_page_->size(); ++i) {
+                out.items.push_back((*lazy_page_)[i]);
+            }
+        }
+        for (;;) {
+            auto page = c.cursor->next_page();
+            if (!page.has_value()) {
+                if (!error.has_value()) {
+                    error = page.error();
+                }
+                break;
+            }
+            if (*page == nullptr) {
+                break;
+            }
+            for (const auto& item : **page) {
+                out.items.push_back(item);
+            }
+        }
+        out.consumed_capacity = c.cursor->consumed_capacity();
+        c.cc = out.consumed_capacity;
+        c.render_source = ExecOutcome{std::move(out)};
+        c.cursor.reset();
+        lazy_page_ = nullptr;
+        lazy_pos_ = 0;
     }
 
     bool advance_statement() {
@@ -485,6 +477,33 @@ struct Results::Impl {
             return false;
         }
         stmt_index = next;
+
+        // Lazy SELECT: a non-EXPLAIN, non-vector row SELECT is backed by a
+        // streaming cursor rather than a buffered result (D-P5-1). Planning
+        // failures surface here exactly as the buffering path would.
+        auto cursor = engine::open_select_cursor_for(*session, statements[stmt_index]);
+        if (!cursor.has_value()) {
+            error = cursor.error();
+            done = true;
+            loaded = false;
+            sets.clear();
+            return false;
+        }
+        if (cursor->has_value()) {
+            sets.clear();
+            ResultSetData r;
+            r.kind = ResultKind::rows;
+            r.cursor = std::move(**cursor);
+            sets.push_back(std::move(r));
+            set_index = 0;
+            loaded = true;
+            reset_row_cursor();
+            return true;
+        }
+
+        // Everything else buffers via Session::execute and flattens (the
+        // existing eager path: status/report/write/explain/vector/transact and
+        // multi-row writes).
         auto r = session->execute(statements[stmt_index]);
         if (!r.has_value()) {
             error = r.error();
@@ -531,10 +550,15 @@ bool Results::next_result() {
 }
 
 bool Results::next_row() {
-    const auto* c = impl_->current();
+    auto* c = impl_->current_mutable();
     if (c == nullptr || c->kind != ResultKind::rows) {
         return false;
     }
+    if (c->cursor.has_value()) {
+        // Lazy SELECT: page through the streaming cursor (bounded memory).
+        return impl_->lazy_next_row(*c);
+    }
+    // Materialized rows (vector search, read transaction): index the buffer.
     auto next = impl_->row_index + 1;
     if (next < 0 || static_cast<std::size_t>(next) >= c->rows.size()) {
         return false;
@@ -634,10 +658,11 @@ std::optional<Error> Results::error() const {
 }
 
 std::string Results::render() const {
-    const auto* c = impl_->current();
+    auto* c = impl_->current_mutable();
     if (c == nullptr || impl_->renderer == nullptr) {
         return {};
     }
+    impl_->materialize_lazy(*c);  // drain a lazy SELECT into render_source first
     return impl_->renderer->render(c->render_source);
 }
 
@@ -646,15 +671,18 @@ std::string Results::render_all() {
     if (impl_->renderer == nullptr) {
         return out;
     }
-    // Render the current result set, then every remaining one in order.
-    const auto* c = impl_->current();
+    // Render the current result set, then every remaining one in order. A lazy
+    // SELECT is drained into its render_source before rendering.
+    auto* c = impl_->current_mutable();
     if (c != nullptr) {
+        impl_->materialize_lazy(*c);
         out += impl_->renderer->render(c->render_source);
         out += impl_->renderer->render_stderr(c->render_source);
     }
     while (next_result()) {
-        const auto* cur = impl_->current();
+        auto* cur = impl_->current_mutable();
         if (cur != nullptr) {
+            impl_->materialize_lazy(*cur);
             out += impl_->renderer->render(cur->render_source);
             out += impl_->renderer->render_stderr(cur->render_source);
         }
@@ -713,16 +741,82 @@ Result<Results> Connection::exec(std::string_view sql) {
     return out;
 }
 
-Result<Results> Connection::exec(const PreparedStatement& stmt) {
-    auto expanded = stmt.expand();
-    if (!expanded.has_value()) {
-        return fail(expanded.error());
+Result<PreparedStatement> Connection::prepare(std::string_view sql) {
+    if (impl_->closed) {
+        return fail(Errc::invalid_argument, "connection is closed");
     }
-    return exec(*expanded);
+    // Parse ONCE into an owned AST (Approach H). A single statement is prepared
+    // (ODBC SQLPrepare semantics); parse() returns the first statement of the
+    // text and tolerates a missing trailing `;`.
+    auto stmt = impl_->session->parse(sql);
+    if (!stmt.has_value()) {
+        return fail(stmt.error());
+    }
+
+    auto pimpl = std::make_unique<PreparedStatement::Impl>();
+    pimpl->statement = std::move(*stmt);
+
+    // Locate the `?` markers in the parsed AST; order them by their 1-based
+    // ordinal (text-appearance order) and validate the numbering is contiguous
+    // 1..N with no gaps or duplicates.
+    std::vector<Value*> raw;
+    if (engine::ParsedStatement* ast = pimpl->statement.ast()) {
+        engine::collect_param_slots(ast->command, raw);
+    }
+    std::vector<Value*> ordered(raw.size(), nullptr);
+    for (Value* slot : raw) {
+        int ord = slot->param_ordinal;
+        if (ord < 1 || static_cast<std::size_t>(ord) > raw.size() ||
+            ordered[static_cast<std::size_t>(ord - 1)] != nullptr) {
+            return fail(Errc::internal_error,
+                        "malformed parameter numbering in prepared statement");
+        }
+        ordered[static_cast<std::size_t>(ord - 1)] = slot;
+    }
+    pimpl->slots = std::move(ordered);
+    pimpl->bindings.resize(pimpl->slots.size());
+
+    return PreparedStatement(std::move(pimpl));
 }
 
-Result<RowSet> Connection::query(std::string_view sql) {
-    auto r = exec(sql);
+Result<Results> Connection::exec(const PreparedStatement& stmt) {
+    if (impl_->closed) {
+        return fail(Errc::invalid_argument, "connection is closed");
+    }
+    // Resolve the bound parameters into the parsed AST in place, then execute
+    // the single statement eagerly and expose its outcome as a Results. The
+    // prepared AST stays intact (markers overwritten by bound Values), so the
+    // same handle can be re-bound and re-executed.
+    auto resolved = stmt.impl_->resolve();
+    if (!resolved.has_value()) {
+        return fail(resolved.error());
+    }
+
+    auto rimpl = std::make_unique<Results::Impl>();
+    rimpl->session = impl_->session.get();
+    rimpl->renderer = &impl_->renderer;
+
+    auto outcome = impl_->session->execute(stmt.impl_->statement);
+    if (!outcome.has_value()) {
+        // Mirror exec(sql)'s execution-error behavior: the Results carries the
+        // error (readable via error()); the handle is already parsed.
+        rimpl->error = outcome.error();
+        rimpl->done = true;
+        rimpl->loaded = false;
+        return Results(std::move(rimpl));
+    }
+    flatten(*outcome, rimpl->sets);
+    rimpl->loaded = true;
+    rimpl->set_index = 0;
+    rimpl->stmt_index = 0;  // no statements[]; next_result exhausts `sets` then ends
+    return Results(std::move(rimpl));
+}
+
+namespace {
+
+/// Drain a row-returning Results into a RowSet, or fail with the result's error
+/// / a kind-mismatch message. Shared by the query() overloads.
+Result<RowSet> drain_rowset(Result<Results> r) {
     if (!r.has_value()) {
         return fail(r.error());
     }
@@ -765,12 +859,12 @@ Result<RowSet> Connection::query(std::string_view sql) {
     return RowSet(std::move(rows));
 }
 
+}  // namespace
+
+Result<RowSet> Connection::query(std::string_view sql) { return drain_rowset(exec(sql)); }
+
 Result<RowSet> Connection::query(const PreparedStatement& stmt) {
-    auto expanded = stmt.expand();
-    if (!expanded.has_value()) {
-        return fail(expanded.error());
-    }
-    return query(*expanded);
+    return drain_rowset(exec(stmt));
 }
 
 Result<void> Connection::reconnect(const std::string& region, const std::string& endpoint) {

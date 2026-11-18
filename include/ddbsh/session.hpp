@@ -34,6 +34,16 @@
 
 namespace ddbsh {
 
+namespace engine {
+/// Engine-internal accessor seam (defined in session.cpp, declared in the
+/// private src/session_internal.hpp). It grants the engine's own connection
+/// layer the narrow access it needs to Session internals (the injected client
+/// and the per-statement alias-prefix counter) to open a lazy SELECT cursor
+/// (D-P5-1), WITHOUT widening the public, SDK-free embedder surface. It is NOT
+/// part of the embedder-facing API.
+struct SessionAccess;
+}  // namespace engine
+
 /// The result of parsing a whole batch of `;`-separated statements from one
 /// string (Session::parse_batch). `statements` holds every statement that
 /// parsed successfully, in order; a bare `;` yields an empty statement, and a
@@ -131,6 +141,11 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+
+    // Narrow engine-internal access to impl_ for the connection layer's lazy
+    // SELECT cursor (D-P5-1). SessionAccess is defined in session.cpp where
+    // Impl is complete; this friendship does not widen the public surface.
+    friend struct engine::SessionAccess;
 };
 
 }  // namespace ddbsh

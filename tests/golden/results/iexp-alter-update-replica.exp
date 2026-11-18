@@ -1,0 +1,12 @@
+UpdateTable({
+   "TableName":   "foo",
+   "ReplicaUpdates":   [{
+         "Update":   {
+            "RegionName":   "us-west-2",
+            "ProvisionedThroughputOverride":   {
+               "ReadCapacityUnits":   99
+            },
+            "TableClassOverride":   "STANDARD"
+         }
+      }]
+})

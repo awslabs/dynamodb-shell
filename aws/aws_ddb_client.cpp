@@ -2139,4 +2139,11 @@ Result<std::string> AwsDDBClient::explain_request(const ExplainRequest& request)
         request);
 }
 
+std::string AwsDDBClient::connection_descriptor() const {
+    // The AWS client calls DynamoDB directly through the AWS SDK for C++; there
+    // is no wire proxy. SHOW CONNECTION prefixes the library version and the
+    // session region/endpoint, so this contributes only the transport kind.
+    return "aws-sdk-cpp (direct DynamoDB)";
+}
+
 }  // namespace ddbsh::aws

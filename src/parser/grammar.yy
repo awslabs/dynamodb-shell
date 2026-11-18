@@ -95,6 +95,7 @@
 %token K_CLASS
 %token K_COMMIT
 %token K_CONNECT
+%token K_CONNECTION
 %token K_CONSISTENT
 %token K_CONSUMED
 %token K_CONTAINS
@@ -226,6 +227,7 @@
 %type <ddbsh::engine::CommandNode> connect_command quit_command
 %type <ddbsh::engine::CommandNode> drop_table_command describe_command
 %type <ddbsh::engine::CommandNode> show_tables_command show_version_command
+%type <ddbsh::engine::CommandNode> show_connection_command
 %type <ddbsh::engine::CommandNode> create_backup_command drop_backup_command
 %type <ddbsh::engine::CommandNode> describe_backup_command restore_command
 %type <ddbsh::engine::CommandNode> show_backups_command show_limits_command
@@ -444,6 +446,7 @@ write_command:
 show_command:
       show_tables_command   { $$ = std::move($1); }
     | show_version_command  { $$ = std::move($1); }
+    | show_connection_command   { $$ = std::move($1); }
     | show_backups_command      { $$ = std::move($1); }
     | show_limits_command       { $$ = std::move($1); }
     | show_create_table_command { $$ = std::move($1); }
@@ -457,6 +460,15 @@ quit_command:
 show_version_command:
       K_SHOW K_VERSION
         { $$ = ddbsh::engine::ShowVersionCmd{}; }
+    ;
+
+/* SHOW CONNECTION — report the running composition (library version, the
+ * client's transport/backend binding, region/endpoint). Additive, opt-in
+ * extension introduced in phase 6f (D-P6f-9); contacts no service. There is no
+ * SHOW VERSIONS pair (a version/versions pair is a foot-gun). */
+show_connection_command:
+      K_SHOW K_CONNECTION
+        { $$ = ddbsh::engine::ShowConnectionCmd{}; }
     ;
 
 /* ---- HELP (D-B) ----------------------------------------------------------
@@ -1709,6 +1721,7 @@ insert_value:
     | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
     | K_NULL                    { $$ = ddbsh::Value::null_value(); }
     | '{' map_element_list '}'  { $$ = std::move($2); }
+    | '?'                       { $$ = ddbsh::Value::param_marker(drv.next_param_ordinal()); }
     ;
 
 /* lee_rhs is the full value literal (adds top-level empty []/{} over
@@ -1729,6 +1742,7 @@ lee_rhs:
     | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
     | '{' map_element_list '}'  { $$ = std::move($2); }
     | K_NULL                    { $$ = ddbsh::Value::null_value(); }
+    | '?'                       { $$ = ddbsh::Value::param_marker(drv.next_param_ordinal()); }
     | '[' ']'
         {
             ddbsh::Value v;

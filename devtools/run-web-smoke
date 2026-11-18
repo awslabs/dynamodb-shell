@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/run-web-smoke — build the Emscripten/WASM web target and run the
+# Node end-to-end smoke (P6d, D-P6d-2).
+#
+# This is the WASM-specific companion to devtools/run-tests. It is SEPARATE from
+# the default phase gate on purpose: the normal gate (real-DDB golden + native
+# GoogleTest) needs no Emscripten, and DDBSH_BUILD_WEB defaults OFF. This script
+# is the only thing that needs the emsdk toolchain, and it proves the one thing
+# the host build cannot: that the Asyncify bridge carries a real op round-trip
+# through the engine against in-browser ExtendDB.
+#
+# What it does:
+#   1. locate + activate the pinned emsdk (web/README.md documents the install),
+#   2. configure + build the `wasm-release` preset (engine + wire + cli-core ->
+#      ddbsh.js/ddbsh.wasm (fetch) + ddbsh-extenddb.js (in-tab), with harnesses + UI
+#      staged; the in-browser ExtendDB adapter is a drop-in, NOT shipped by
+#      ddbsh — this script stages it from DDBSH_EXTENDDB_WEBASM_PKG, D-P6f-8),
+#   3. run `node web/harness.mjs` from the build output dir,
+#   4. run `node web/app-core.test.mjs` (the DOM-free P6e UI unit tests),
+#   5. capture the output into discussions/test-websmoke-<HEAD-short>.log.
+#
+# No AWS account, no credentials, no network: the smoke runs entirely in-process
+# (in-browser ExtendDB, in-memory SQLite). Safe to run anywhere emsdk + Node are
+# present.
+#
+# Env overrides: EMSDK (emsdk root; default $HOME/emsdk), EMSDK_PYTHON (a
+# python >= 3.10 for the emsdk scripts; auto-detected), DDBSH_WASM_BUILD_DIR.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DISCUSSIONS_DIR="$REPO_DIR/discussions"
+mkdir -p "$DISCUSSIONS_DIR"
+LOG_FILE="$DISCUSSIONS_DIR/test-websmoke-${HASH}.log"
+
+# --- Locate the emsdk toolchain ---------------------------------------------
+EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
+if [ ! -f "$EMSDK_ROOT/emsdk_env.sh" ]; then
+    echo "error: emsdk not found at '$EMSDK_ROOT' (set EMSDK or install per web/README.md)." >&2
+    exit 1
+fi
+
+# emsdk's python scripts and the emcc wrapper need python >= 3.10. Pick a
+# suitable interpreter if the default python3 is too old (as on this host, where
+# /usr/bin/python3 is 3.9 but /usr/bin/python3.12 exists).
+if [ -z "${EMSDK_PYTHON:-}" ]; then
+    if python3 -c 'import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
+        EMSDK_PYTHON="$(command -v python3)"
+    else
+        for cand in python3.13 python3.12 python3.11 python3.10; do
+            if command -v "$cand" >/dev/null 2>&1; then
+                EMSDK_PYTHON="$(command -v "$cand")"
+                break
+            fi
+        done
+    fi
+fi
+if [ -z "${EMSDK_PYTHON:-}" ]; then
+    echo "error: no python >= 3.10 found for the emsdk scripts (set EMSDK_PYTHON)." >&2
+    exit 1
+fi
+export EMSDK_PYTHON
+
+# Put emcc/emcmake + the emsdk node on PATH. We set PATH directly rather than
+# sourcing emsdk_env.sh in a pipeline (the env must survive into this script).
+export EMSDK="$EMSDK_ROOT"
+EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | head -1)" 2>/dev/null || true)"
+export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten${EMSDK_NODE_BIN:+:$EMSDK_NODE_BIN}:$PATH"
+
+if ! command -v emcmake >/dev/null 2>&1; then
+    echo "error: emcmake not on PATH after emsdk setup (EMSDK=$EMSDK_ROOT)." >&2
+    exit 1
+fi
+NODE_BIN="$(command -v node)"
+
+echo "=== Web smoke: emsdk + toolchain ===" | tee "$LOG_FILE"
+{
+    echo "  commit:   $HASH"
+    echo "  emsdk:    $EMSDK_ROOT"
+    echo "  emcc:     $(emcc --version 2>/dev/null | head -1)"
+    echo "  node:     $NODE_BIN ($("$NODE_BIN" --version 2>/dev/null))"
+    echo "  python:   $EMSDK_PYTHON"
+} | tee -a "$LOG_FILE"
+
+# --- Configure + build the wasm-release preset ------------------------------
+WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
+echo "=== Configuring wasm-release (emcmake) ===" | tee -a "$LOG_FILE"
+if [ ! -f "$WASM_BUILD/CMakeCache.txt" ]; then
+    emcmake cmake --preset wasm-release 2>&1 | tee -a "$LOG_FILE"
+fi
+echo "=== Building web editions (ddbsh-wasm + ddbsh-wasm-extenddb-wasm) ===" | tee -a "$LOG_FILE"
+cmake --build "$WASM_BUILD" 2>&1 | tee -a "$LOG_FILE"
+
+# --- Run the Node smoke from the build output dir ---------------------------
+WEB_OUT="$WASM_BUILD/web"
+if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/ddbsh-extenddb.js" ] \
+   || [ ! -f "$WEB_OUT/harness.mjs" ] || [ ! -f "$WEB_OUT/harness-fetch.mjs" ]; then
+    echo "error: web build output not found at $WEB_OUT" >&2 | tee -a "$LOG_FILE"
+    exit 1
+fi
+echo "=== Running Node WASM smoke ($HASH) ===" | tee -a "$LOG_FILE"
+
+# Drop the in-browser ExtendDB adapter into the bundle's vendor/extenddb/
+# (D-P6f-8): ddbsh does not ship it, so the in-tab smokes (harness.mjs,
+# harness-fetch.mjs) stage it here from the upstream package. A missing/incomplete
+# upstream package is an INFRASTRUCTURE FAILURE, not a skip.
+echo "=== Staging in-browser ExtendDB adapter (drop-in) ===" | tee -a "$LOG_FILE"
+"$REPO_DIR/devtools/stage-extenddb-webasm" "$WEB_OUT" 2>&1 | tee -a "$LOG_FILE"
+
+set +e
+( cd "$WEB_OUT" && "$NODE_BIN" harness.mjs ) 2>&1 | tee -a "$LOG_FILE"
+RC=${PIPESTATUS[0]}
+set -e
+
+# --- Run the FETCH-edition Node smoke (P6f-a) -------------------------------
+# The real-backend `ddbsh-wasm` edition (FetchTransport) over a stubbed proxy
+# (in-browser ExtendDB), proving the Module.fetchDdb bridge carries a real op
+# round-trip. Separate module (ddbsh.js, the fetch edition) from the in-tab
+# edition (ddbsh-extenddb.js) above.
+echo "=== Running Node WASM FETCH smoke ($HASH) ===" | tee -a "$LOG_FILE"
+set +e
+( cd "$WEB_OUT" && "$NODE_BIN" harness-fetch.mjs ) 2>&1 | tee -a "$LOG_FILE"
+RC_FETCH=${PIPESTATUS[0]}
+set -e
+if [ "$RC" -eq 0 ]; then
+    RC=$RC_FETCH
+fi
+
+# --- Run the DOM-free app-core unit tests (P6e, D-P6e-3) --------------------
+# Pure JavaScript: no WASM, no DOM, no backend. Covers the new P6e UI logic
+# (history ring, prompt builder, transcript model, file->submission, run guard).
+# Run from the staged bundle so it imports the same app-core.mjs that ships.
+echo "=== Running app-core unit tests ($HASH) ===" | tee -a "$LOG_FILE"
+set +e
+( cd "$WEB_OUT" && "$NODE_BIN" app-core.test.mjs ) 2>&1 | tee -a "$LOG_FILE"
+RC_CORE=${PIPESTATUS[0]}
+set -e
+if [ "$RC" -eq 0 ]; then
+    RC=$RC_CORE
+fi
+
+echo "=== Web smoke exit: $RC ===" | tee -a "$LOG_FILE"
+echo "  artifact: $LOG_FILE"
+exit $RC

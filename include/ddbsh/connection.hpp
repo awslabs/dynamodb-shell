@@ -19,11 +19,17 @@
 // unit-testable (the engine_boundary_check asserts this header pulls no
 // <aws/...>).
 //
-// The engine is materialized-fetch (D11): a Query/Scan is paged internally and
-// its rows buffered, so a large scan buffers in memory. Row-at-a-time lazy
-// pagination is a future enhancement (TODO(phase-N)); result-SET advancement
-// (next_result) IS lazy — the next statement in a batch runs only when the
-// caller advances to it.
+// Fetch model (D-P5-1): a row-returning SELECT (GetItem/Query/Scan) pages
+// LAZILY — next_row() pulls the next page only when the current one is
+// exhausted, so a large Scan is bounded to one page in memory, never fully
+// resident. consumed_capacity() for such a set is a post-fetch figure, valid
+// once the rows are exhausted (it is the totalized capacity across pages). A
+// vector search and a read transaction are single, bounded requests and remain
+// materialized. render()/render_all() drain a lazy SELECT to produce the
+// byte-exact CLI output (forward-only: a render after a partial next_row walk
+// renders the remaining rows, matching DB-Library cursor semantics).
+// Result-SET advancement (next_result) is also lazy — the next statement in a
+// batch runs only when the caller advances to it.
 
 #ifndef DDBSH_CONNECTION_HPP
 #define DDBSH_CONNECTION_HPP
@@ -262,23 +268,45 @@ private:
     explicit Results(std::unique_ptr<Impl> impl);
 };
 
-/// A prepared statement with client-side parameter binding (D6). The caller
-/// writes positional `?` (1-based) and/or named `:name` placeholders and binds
-/// Values; the API substitutes correctly-escaped ddbsh literals into the SQL
-/// text BEFORE it reaches the parser, so EXPLAIN/alias/golden fidelity is
-/// untouched (binding is purely an embedding convenience). This is the
-/// injection-safe path: an embedder building a statement from untrusted input
-/// SHOULD bind rather than concatenate — the escaping is the API's job.
-/// Binding operates on the pre-parse text, so a placeholder anywhere in a
-/// multi-statement `BEGIN; … COMMIT;` body is substituted the same way (D21).
+/// A prepared statement produced by Connection::prepare(sql) (D-P5-2, Approach
+/// H). It reads like ODBC / Sybase DB-Library: prepare once (the SQL is parsed
+/// a SINGLE time into an owned AST), bind each positional `?` parameter, exec,
+/// then re-bind and re-exec WITHOUT re-parsing. Parameters are positional `?`
+/// markers, 1-based by order of appearance — the ODBC-canonical marker; named
+/// `:name` markers are intentionally NOT offered (the no-space `{key:value}`
+/// map form makes a `:ident` marker ambiguous in this grammar — AI-H1 audit).
+///
+/// Binding is TYPED (not textual substitution): a bound Value flows straight
+/// into the request through the engine's normal planner/serializer, so any
+/// Value type binds — including sets (SS/NS/BS) and binary (B) via
+/// Value::string_set / number_set / binary_set / binary_value (D-P5-3), which
+/// have no ddbsh literal syntax and so cannot be expressed any other way. This
+/// is the injection-safe path: an embedder building a statement from untrusted
+/// input SHOULD bind rather than concatenate.
+///
+/// A marker may appear anywhere a value is expected, including inside a
+/// `BEGIN; … COMMIT;` transaction body (one prepared statement). Move-only: it
+/// owns the parsed AST. A PreparedStatement is valid only while its Connection
+/// is open.
 class PreparedStatement {
 public:
-    explicit PreparedStatement(std::string sql) : sql_(std::move(sql)) {}
+    ~PreparedStatement();
+    PreparedStatement(PreparedStatement&&) noexcept;
+    PreparedStatement& operator=(PreparedStatement&&) noexcept;
+    PreparedStatement(const PreparedStatement&) = delete;
+    PreparedStatement& operator=(const PreparedStatement&) = delete;
 
+    /// The number of positional `?` parameters in the prepared SQL.
+    int parameter_count() const;
+
+    /// Bind the `index1`-th positional parameter (1-based) to `v`. Returns
+    /// *this for chaining. Re-binding overwrites. An index < 1 or > the
+    /// parameter count records an error surfaced when the statement executes
+    /// (exec/query) — bind() cannot return a Result, so it never throws.
     PreparedStatement& bind(int index1, Value v);
-    PreparedStatement& bind(std::string_view name, Value v);
 
-    // Convenience overloads.
+    // Convenience overloads for the common scalar binds. Sets and binary bind
+    // via the Value factories: bind(i, Value::string_set({...})) etc.
     PreparedStatement& bind(int index1, std::string s) {
         return bind(index1, Value::string_value(std::move(s)));
     }
@@ -286,26 +314,12 @@ public:
         return bind(index1, Value::number_value(std::to_string(n)));
     }
     PreparedStatement& bind(int index1, bool b) { return bind(index1, Value::bool_value(b)); }
-    PreparedStatement& bind(std::string_view name, std::string s) {
-        return bind(name, Value::string_value(std::move(s)));
-    }
-    PreparedStatement& bind(std::string_view name, long long n) {
-        return bind(name, Value::number_value(std::to_string(n)));
-    }
-    PreparedStatement& bind(std::string_view name, bool b) {
-        return bind(name, Value::bool_value(b));
-    }
-
-    /// Substitute the bound values into the SQL, producing literal SQL ready to
-    /// parse. An unknown placeholder, an out-of-range index, or a value that
-    /// cannot be rendered to a literal is an Errc::invalid_argument error.
-    Result<std::string> expand() const;
 
 private:
-    std::string sql_;
-    std::vector<Value> positional_;
-    std::vector<std::pair<std::string, Value>> named_;
-    std::optional<Error> bind_error_;  ///< first bind misuse; surfaced by expand()
+    friend class Connection;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+    explicit PreparedStatement(std::unique_ptr<Impl> impl);
 };
 
 /// The embedding handle: open over an injected IDDBClient, submit statements,
@@ -334,7 +348,17 @@ public:
     /// through result sets. A parse error on the FIRST statement (no statement
     /// parsed) is returned here directly.
     Result<Results> exec(std::string_view sql);
-    /// Submit a prepared statement (client-side binding expanded first).
+
+    /// Prepare a SINGLE statement for repeated execution with bound parameters
+    /// (D-P5-2). The SQL is parsed once; bind the returned handle's `?`
+    /// parameters, then exec/query it, re-binding and re-executing without
+    /// re-parsing. A parse error is returned here. (ODBC SQLPrepare /
+    /// DB-Library dbcmd+dbsqlexec shape.)
+    Result<PreparedStatement> prepare(std::string_view sql);
+
+    /// Execute a prepared statement after resolving its bound parameters. An
+    /// unbound parameter (or an out-of-range bind index) is an
+    /// Errc::unbound_parameter / Errc::invalid_argument error.
     Result<Results> exec(const PreparedStatement& stmt);
 
     /// Execute a single row-returning statement and iterate its rows directly.

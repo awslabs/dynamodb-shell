@@ -12,8 +12,11 @@
 #include "ddbsh/session.hpp"
 
 #include <utility>
+#include <vector>
 
 #include "ddbsh/version.hpp"
+#include "session_internal.hpp"
+
 #include "execute/alter_table_executor.hpp"
 #include "execute/backup_restore_executor.hpp"
 #include "execute/create_table_executor.hpp"
@@ -29,6 +32,7 @@
 #include "expressions/prefix.hpp"
 #include "parser/driver.hpp"
 #include "parser/help_text.hpp"
+#include "parser/param_bind.hpp"
 
 namespace ddbsh {
 
@@ -96,10 +100,33 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
     // 1 -> that fragment, >1 -> MultiOutcome). On failure the Error is returned
     // and buffered fragments are discarded (D-2c-12). The streaming overload is
     // the primary; this wraps it with a collecting sink.
+    // An unbound `?` parameter marker must never reach serialization (it would
+    // become a bogus NULL request). A statement carrying markers is only legal
+    // through the prepared-statement bind path (which resolves them in place
+    // before execute); reaching execute with markers still present is caller
+    // misuse (D-P5-2). No standard CLI command ever carries a marker, so this
+    // guard never fires on the golden path.
+    if (statement.ast() != nullptr && engine::count_param_markers(*statement.ast()) > 0) {
+        return fail(Errc::unbound_parameter,
+                    "statement has unbound parameter marker(s); use prepare() and bind()");
+    }
+
     struct BufferingSink : OutcomeSink {
         std::vector<ExecOutcome> parts;
         void emit(const ExecOutcome& fragment) override { parts.push_back(fragment); }
     } sink;
+
+    // A non-EXPLAIN SELECT buffers into ONE SelectOutcome / VectorSearchOutcome
+    // (the buffering contract the native tests and the embedding connection
+    // layer rely on). The streaming overload emits per-page fragments for
+    // bounded CLI memory (D-P5-1); routing the buffering overload through it
+    // would fold a multi-page SELECT into a MultiOutcome of SelectOutcomes.
+    // Short-circuit to the buffering executor so this overload's result shape
+    // is unchanged.
+    if (statement.kind() == StatementKind::select_statement && !statement.ast()->explain) {
+        const auto& select = std::get<engine::SelectCmd>(statement.ast()->command);
+        return engine::execute_select(select, impl_->client, impl_->next_alias_prefix());
+    }
 
     auto streamed = execute(statement, sink);
     if (!streamed.has_value()) {
@@ -115,6 +142,13 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
 }
 
 Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
+    // Reject an unbound `?` marker before any serialization (see the buffering
+    // overload); markers are legal only through the prepared bind path.
+    if (statement.ast() != nullptr && engine::count_param_markers(*statement.ast()) > 0) {
+        return fail(Errc::unbound_parameter,
+                    "statement has unbound parameter marker(s); use prepare() and bind()");
+    }
+
     // Emit a single buffered outcome (the common case for every command that
     // does not stream per-row), or propagate its Error unemitted.
     auto emit_single = [&sink](Result<ExecOutcome> outcome) -> Result<void> {
@@ -138,6 +172,22 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
             // line as data (ReportOutcome) so the engine never writes to a
             // stream (P2a-03); the Renderer emits the identical bytes.
             return emit_single(ExecOutcome{ReportOutcome{{"ddbsh - version " + version()}}});
+        case StatementKind::show_connection: {
+            // SHOW CONNECTION reports the running composition (phase 6f,
+            // D-P6f-9): the library version, the session's region/endpoint, and
+            // the injected client's transport/backend binding. Additive and
+            // terminal-free — the same carry-the-line-as-data pattern SHOW
+            // VERSION uses, so the engine writes to no stream. Contacts no API.
+            const std::string& region = impl_->config.region;
+            const std::string& endpoint = impl_->config.endpoint;
+            std::vector<std::string> lines;
+            lines.push_back("ddbsh - version " + version());
+            lines.push_back("Region: " + (region.empty() ? std::string("(default)") : region));
+            lines.push_back("Endpoint: " +
+                            (endpoint.empty() ? std::string("(default)") : endpoint));
+            lines.push_back("Backend: " + impl_->client.connection_descriptor());
+            return emit_single(ExecOutcome{ReportOutcome{std::move(lines)}});
+        }
         case StatementKind::quit:
             return emit_single(ExecOutcome{StatusOutcome{"QUIT"}});
         case StatementKind::help: {
@@ -176,8 +226,13 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 return emit_single(engine::execute_select_explain(select, impl_->client,
                                                                   impl_->next_alias_prefix()));
             }
-            return emit_single(
-                engine::execute_select(select, impl_->client, impl_->next_alias_prefix()));
+            // Stream the SELECT with bounded memory: one SelectOutcome fragment
+            // per page, then a final capacity fragment if the user asked
+            // (D-P5-1 / D2). Byte-identical to the old single-outcome path. The
+            // CLI's RenderingSink renders each page and drops it, so a large
+            // Scan is no longer resident in memory.
+            return engine::execute_select_streaming(select, impl_->client,
+                                                    impl_->next_alias_prefix(), sink);
         }
         case StatementKind::drop_table: {
             const auto& drop = std::get<engine::DropTableCmd>(statement.ast()->command);
@@ -335,5 +390,47 @@ Result<void> Session::run(std::string_view text, OutcomeSink& sink) {
 ConnectionHint Session::connection_hint() const {
     return ConnectionHint{impl_->config.region, !impl_->config.endpoint.empty()};
 }
+
+namespace engine {
+
+// Narrow friend accessors into Session::Impl (declared in session_internal.hpp).
+// Defined here, where Impl is complete.
+IDDBClient& SessionAccess::client(Session& session) { return session.impl_->client; }
+
+std::string SessionAccess::next_alias_prefix(Session& session) {
+    return session.impl_->next_alias_prefix();
+}
+
+Result<std::optional<SelectRowCursor>> open_select_cursor_for(Session& session,
+                                                              const Statement& stmt) {
+    // Only a non-EXPLAIN SELECT can stream; everything else (and EXPLAIN) uses
+    // the buffering Session::execute path.
+    if (stmt.kind() != StatementKind::select_statement || stmt.ast() == nullptr ||
+        stmt.ast()->explain) {
+        return std::optional<SelectRowCursor>{};
+    }
+    // An unbound `?` marker must not reach the lazy SELECT cursor either (it
+    // would serialize a bogus request); reject it here as the execute overloads
+    // do (D-P5-2). Prepared SELECTs are resolved before reaching this path.
+    if (count_param_markers(*stmt.ast()) > 0) {
+        return fail(Errc::unbound_parameter,
+                    "statement has unbound parameter marker(s); use prepare() and bind()");
+    }
+    const auto& select = std::get<SelectCmd>(stmt.ast()->command);
+    // A vector NEAREST search is a single bounded SearchVectors request — keep
+    // it on the buffering path (execute_select builds the VectorSearchOutcome,
+    // scores and all); the cursor never models vectors.
+    if (select.search_vector.has_value()) {
+        return std::optional<SelectRowCursor>{};
+    }
+    auto cursor = open_select_cursor(select, SessionAccess::client(session),
+                                     SessionAccess::next_alias_prefix(session));
+    if (!cursor.has_value()) {
+        return fail(cursor.error());
+    }
+    return std::optional<SelectRowCursor>{std::move(*cursor)};
+}
+
+}  // namespace engine
 
 }  // namespace ddbsh

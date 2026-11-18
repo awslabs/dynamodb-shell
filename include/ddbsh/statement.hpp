@@ -37,6 +37,7 @@ struct ParsedStatement;  // defined in src/parser/ast.hpp (engine-internal)
 enum class StatementKind {
     empty,              ///< blank / comment-only / bare-';' input
     show_version,       ///< SHOW VERSION
+    show_connection,    ///< SHOW CONNECTION — report the running composition (phase 6f)
     quit,               ///< QUIT
     connect,            ///< CONNECT <region> [WITH ENDPOINT <endpoint>]
     show_tables,        ///< SHOW TABLES [BRIEF] [LIKE <template>]
@@ -90,6 +91,13 @@ public:
     /// executor uses it to read the parsed command. Returns a borrowed,
     /// non-owning pointer valid for this Statement's lifetime.
     const engine::ParsedStatement* ast() const noexcept { return ast_.get(); }
+
+    /// Mutable library-internal accessor to the owned AST (nullptr for the
+    /// empty statement). Not part of the embedder-facing API surface; the
+    /// prepared-statement facility uses it to resolve `?` parameter markers in
+    /// place before execution (D-P5-2). Borrowed, non-owning, valid for this
+    /// Statement's lifetime.
+    engine::ParsedStatement* ast() noexcept { return ast_.get(); }
 
 private:
     std::unique_ptr<engine::ParsedStatement> ast_;
