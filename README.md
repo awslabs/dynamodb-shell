@@ -12,7 +12,7 @@ ddbsh can operate directly against your dynamodb tables and thus delete/drop wil
 
 For details on how to restrict access to specific APIs, refer to the documentation on [Fine Grained Access Control in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/authentication-and-access-control.html).
 
-It is strongly advised that you understand what ddbsh is doing, and experiment with DynamoDB Local first.
+It is strongly advised that you understand what ddbsh is doing, and experiment with [ExtendDB](#running-ddbsh-the-five-configurations) (a local, self-hosted DynamoDB-compatible server) first.
 
 ---
 
@@ -27,7 +27,7 @@ a library with an SDK-free, terminal-free public API (headers under
 and history, config-file loading, signal handling, and wiring a concrete AWS SDK
 client into the library.
 
-Current version: **0.9.19**. The reimplementation drives the full standard
+Current version: **0.11.17**. The reimplementation drives the full standard
 `ddbsh` command surface (every non-global-tables command) end to end against
 real DynamoDB; global tables are the sole deferred family. The command surface
 below lists what the engine drives today. The full command reference further
@@ -401,7 +401,7 @@ create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c)
 ## CLI flags, config, and environment
 
 ```
-Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [-c "<cmds>" | -f <file>]
 ```
 
 - `-c "<cmds>"` — run a batch string, then exit (mutually exclusive with `-f`).
@@ -414,6 +414,13 @@ Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c "<cmds>" | -f <file>]
   so the behavior is wired in a future phase without a CLI surface change
   (`TODO(phase-N)`).
 - `-t[STR]` / `--terminator[=STR]` — set the batch terminator (see above).
+- `--ca-bundle <file>` — trust a custom/self-signed TLS CA bundle (PEM) for the
+  DynamoDB endpoint, mirroring the AWS CLI's `--ca-bundle`. The CLI also honors
+  the `AWS_CA_BUNDLE` environment variable; the flag wins when both are set. The
+  resolved path is mapped to the SDK client's `caFile`. Needed to reach an
+  endpoint that serves a self-signed certificate — for example a local ExtendDB
+  server (see [Running ddbsh](#running-ddbsh-the-five-configurations)). The
+  trust setting is preserved across a `CONNECT` to another region/endpoint.
 
 At startup the CLI loads a config file (`DDBSH_CONFIG_FILE`, else
 `~/.ddbsh_config`) if present and reads/writes interactive history at
@@ -808,34 +815,132 @@ ddbsh respects the default AWS environment variables, see [How to set environmen
 
 ### DDBSH\_ENDPOINT\_OVERRIDE
 
-Used to specify an alternate endpoint, such as when using DynamoDB Local.
+Used to specify an alternate endpoint, such as when using ExtendDB.
 
-# Using DynamoDB Local
+# Running ddbsh: the five configurations
 
-WARNING: To connect with DynamoDB Local you must be running ddbsh version 0.2 or higher and using the AWS C++ SDK version 1.11 or higher.
+ddbsh runs in five configurations, formed by two choices: **which form of ddbsh**
+(the native binary or the browser/WebAssembly build) and **which backend** (real
+Amazon DynamoDB, a self-hosted [ExtendDB](https://github.com/awslabs/extenddb)
+server, or an ExtendDB database bundled into the same browser tab). ExtendDB is a
+local, self-hosted, DynamoDB-compatible server — it is the recommended way to
+experiment with ddbsh without touching a real AWS account or incurring cost.
 
-If you want to use ddbsh with DynamoDB Local, follow these steps.
+| # | ddbsh form | Backend | How it connects |
+|---|---|---|---|
+| 1 | native binary | AWS DynamoDB | default AWS credential chain, standard regional endpoint |
+| 2 | native binary | ExtendDB on a host | `DDBSH_ENDPOINT_OVERRIDE` + an ExtendDB-issued key in a dedicated `~/.aws` profile + a CA bundle for the self-signed cert |
+| 3 | browser (WASM) | AWS DynamoDB | the `ddbsh-web-proxy` SigV4-signs and forwards; credentials never enter the browser |
+| 4 | browser (WASM) | ExtendDB on a host | the same proxy, with a per-endpoint profile + CA bundle |
+| 5 | browser (WASM) | ExtendDB bundled in the browser | an in-tab ExtendDB WebAssembly adapter; no network, no credentials (**pre-release**) |
 
-First, install DynamoDB Local as described [here](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html).
+Configurations 3–5 (the browser builds and the proxy) are documented in detail in
+[`web/README.md`](web/README.md) and [`proxy/README.md`](proxy/README.md); this
+section covers the two native configurations and summarizes the browser ones.
 
-Set the environment variables as shown below.
+## Configuration 1 — native ddbsh against AWS DynamoDB
+
+The default. Run `ddbsh` with no endpoint override; it resolves credentials from
+the standard AWS chain (environment variables, `~/.aws/credentials`/`config`
+profiles, `AWS_PROFILE`, container/instance roles, and `role_arn` +
+`source_profile` AssumeRole) and the region from `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then `us-east-1`.
 
 ```
-export AWS_ACCESS_KEY_ID="fakeMyKeyId"
-export AWS_SECRET_ACCESS_KEY="fakeSecretAccessKey"
-export AWS_DEFAULT_REGION="dynamodb-local"
-export DDBSH_ENDPOINT_OVERRIDE="http://localhost:8000"
+$ ddbsh
+ddbsh - version 0.11.17
+us-east-1>
 ```
 
-You will then be able to connect to DynamoDB Local.
+## Configuration 2 — native ddbsh against a local ExtendDB server
+
+ExtendDB serves the DynamoDB wire protocol over HTTPS with a **self-signed
+certificate** and requires its **own issued SigV4 key** (it is not AWS; your real
+AWS credentials do not apply). Point ddbsh at it with three things: an endpoint
+override, a dedicated `~/.aws` profile holding the ExtendDB-issued key, and a CA
+bundle so the TLS handshake trusts the self-signed cert.
+
+### 1. Build and start ExtendDB
+
+Build ExtendDB with a SQLite backend and start it (see the ExtendDB documentation
+for the authoritative instructions):
 
 ```
-ddbsh
-ddbsh - version 0.2
-dynamodb-local (*)>
+cargo build --release --no-default-features --features sqlite
+extenddb init --backend sqlite        # prints the admin password once
+extenddb serve                        # serves HTTPS, e.g. on 127.0.0.1:18443
 ```
 
-The (*) at the end of the prompt indicates a non-standard endpoint is in use.
+Create an IAM user, attach a policy, and issue an access key through ExtendDB's
+management surface (the SQLite data file and the self-signed TLS cert live under
+ExtendDB's data directory, e.g. `~/.extenddb/tls/cert.pem`):
+
+```
+extenddb manage ... create-user ddbsh
+extenddb manage ... put-user-policy ddbsh --policy '{ "dynamodb:*" on "*" }'
+extenddb manage ... create-access-key ddbsh
+```
+
+### 2. Store the ExtendDB key in a dedicated AWS profile
+
+Put the **ExtendDB-issued** key in its own profile — never mix it with real AWS
+keys:
+
+```
+# ~/.aws/credentials
+[extenddb]
+aws_access_key_id     = <extenddb-issued-access-key-id>
+aws_secret_access_key = <extenddb-issued-secret-key>
+```
+
+### 3. Point ddbsh at ExtendDB
+
+```
+export DDBSH_ENDPOINT_OVERRIDE="https://127.0.0.1:18443"
+export AWS_PROFILE="extenddb"
+export AWS_REGION="us-east-1"
+
+ddbsh --ca-bundle ~/.extenddb/tls/cert.pem
+```
+
+`--ca-bundle` (or the `AWS_CA_BUNDLE` environment variable — the flag wins when
+both are set) makes the AWS SDK trust ExtendDB's self-signed certificate; the AWS
+SDK for C++ does not honor `AWS_CA_BUNDLE` on its own, so ddbsh wires the path to
+the SDK client's `caFile`. This mirrors the AWS CLI's `--ca-bundle`. Without it,
+the TLS handshake fails with a self-signed-certificate error.
+
+ddbsh then behaves exactly as it does against AWS — the `(*)` suffix on the prompt
+indicates the non-standard endpoint:
+
+```
+ddbsh - version 0.11.17
+us-east-1 (*)>
+```
+
+## Configurations 3–5 — the browser (WebAssembly) build
+
+The SDK-free ddbsh engine also compiles to WebAssembly and runs in a browser. A
+browser cannot read `~/.aws/credentials` and cannot call DynamoDB directly (no
+CORS), so two of the three browser configurations use the native
+**`ddbsh-web-proxy`**, which signs requests with SigV4 and forwards them;
+credentials stay on the host and never enter the browser.
+
+- **Configuration 3 — browser against AWS DynamoDB.** The proxy SigV4-signs with
+  the host's AWS credentials and forwards to DynamoDB. **Production-ready.**
+- **Configuration 4 — browser against a local ExtendDB server.** The same proxy,
+  with a per-endpoint profile (the ExtendDB-issued key) and a per-endpoint CA
+  bundle for the self-signed cert. **Production-ready.**
+- **Configuration 5 — ExtendDB bundled in the browser.** An in-tab ExtendDB
+  WebAssembly database, reached over an in-process transport with no network, no
+  credentials, and no TLS. **Pre-release**: ddbsh does not ship the ExtendDB
+  WebAssembly adapter blob; it is a drop-in placed under `web/vendor/extenddb/`,
+  and this configuration is finished when an official ExtendDB WebAssembly build
+  is released.
+
+See [`web/README.md`](web/README.md) and [`proxy/README.md`](proxy/README.md) for
+the build steps, the proxy's security model (loopback-only ingress, origin +
+per-session-token guard, a user-owned egress allowlist), and the per-endpoint
+credential/CA configuration.
 
 ## Cross Account Access
 
@@ -2248,26 +2353,26 @@ The following logical expressions are supported.
 Examples: First some sample data
 
 ```
-dynamodb-local (*)> select * from exprtest;
+us-east-1 (*)> select * from exprtest;
 {a: 2, b: 2}
 {a: 1, b: 2}
 {a: 3, b: cooperate}
 {a: 5, c: coffee}
 {a: 4, b: coffee}
-dynamodb-local (*)>
+us-east-1 (*)>
 ```
 
 Inequality comparison with AND
 
 ```
-dynamodb-local (*)> select * from exprtest where a > 3 and a < 5;
+us-east-1 (*)> select * from exprtest where a > 3 and a < 5;
 {a: 4, b: coffee}
 ```
 
 The BETWEEN operator
 
 ```
-dynamodb-local (*)> select * from exprtest where a between 2 and 5;
+us-east-1 (*)> select * from exprtest where a between 2 and 5;
 {a: 2, b: 2}
 {a: 3, b: cooperate}
 {a: 5, c: coffee}
@@ -2277,7 +2382,7 @@ dynamodb-local (*)> select * from exprtest where a between 2 and 5;
 The BEGINS_WITH operator
 
 ```
-dynamodb-local (*)> select * from exprtest where begins_with(b, "co");
+us-east-1 (*)> select * from exprtest where begins_with(b, "co");
 {a: 3, b: cooperate}
 {a: 4, b: coffee}
 ```
@@ -2285,13 +2390,13 @@ dynamodb-local (*)> select * from exprtest where begins_with(b, "co");
 The ATTRIBUTE_EXISTS operator
 
 ```
-dynamodb-local (*)> select * from exprtest where attribute_exists(c);
+us-east-1 (*)> select * from exprtest where attribute_exists(c);
 {a: 5, c: coffee}
 
-dynamodb-local (*)> select * from exprtest where attribute_exists(c) and a != 3;
+us-east-1 (*)> select * from exprtest where attribute_exists(c) and a != 3;
 {a: 5, c: coffee}
 
-dynamodb-local (*)> select * from exprtest where attribute_exists(c) or a = 3;
+us-east-1 (*)> select * from exprtest where attribute_exists(c) or a = 3;
 {a: 3, b: cooperate}
 {a: 5, c: coffee}
 ```
@@ -2299,17 +2404,17 @@ dynamodb-local (*)> select * from exprtest where attribute_exists(c) or a = 3;
 The ATTRIBUTE_TYPE operator
 
 ```
-dynamodb-local (*)> select * from exprtest where attribute_type(b, string);
+us-east-1 (*)> select * from exprtest where attribute_type(b, string);
 {a: 3, b: cooperate}
 {a: 4, b: coffee}
-dynamodb-local (*)>
+us-east-1 (*)>
 ```
 
 Using parenthesis to group items in a WHERE clause
 
 ```
 
-dynamodb-local (*)> select * from exprtest where attribute_type(b, string) or ( a = 5 and c = "coffee");
+us-east-1 (*)> select * from exprtest where attribute_type(b, string) or ( a = 5 and c = "coffee");
 {a: 3, b: cooperate}
 {a: 5, c: coffee}
 {a: 4, b: coffee}
@@ -2319,7 +2424,7 @@ You can always see how ddbsh executes any command with the EXPLAIN command.
 
 
 ```
-dynamodb-local (*)> explain select * from exprtest where attribute_type(b, string) or ( a = 5 and c = "coffee");
+us-east-1 (*)> explain select * from exprtest where attribute_type(b, string) or ( a = 5 and c = "coffee");
 Scan({
    "TableName":   "exprtest",
    "ReturnConsumedCapacity":   "NONE",
@@ -2342,37 +2447,37 @@ Scan({
    },
    "ConsistentRead":   false
 })
-dynamodb-local (*)>
+us-east-1 (*)>
 ```
 
 You can use a WHERE clause in an UPDATE as well.
 
 ```
-dynamodb-local (*)> help update;
+us-east-1 (*)> help update;
 UPDATE - Update items in a table
 
    UPDATE <name> SET <update_set> [where clause]
 
    UPDATE <name> REMOVE <remove list> [where clause]
 
-dynamodb-local (*)>
+us-east-1 (*)>
 
-dynamodb-local (*)> update exprtest set b = 15 where a = 5;
+us-east-1 (*)> update exprtest set b = 15 where a = 5;
 UPDATE (0 read, 1 modified, 0 ccf)
-dynamodb-local (*)> select * from exprtest where a = 5;
+us-east-1 (*)> select * from exprtest where a = 5;
 {a: 5, b: 15, c: coffee}
-dynamodb-local (*)>
+us-east-1 (*)>
 
 ```
 
 Now delete the attribute ‘c’
 
 ```
-dynamodb-local (*)> update exprtest remove c where a = 5;
+us-east-1 (*)> update exprtest remove c where a = 5;
 UPDATE (0 read, 1 modified, 0 ccf)
-dynamodb-local (*)> select * from exprtest where a = 5;
+us-east-1 (*)> select * from exprtest where a = 5;
 {a: 5, b: 15}
-dynamodb-local (*)>
+us-east-1 (*)>
 ```
 
 ## Rate Limiting

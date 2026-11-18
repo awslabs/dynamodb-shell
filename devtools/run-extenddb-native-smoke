@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/run-extenddb-native-smoke — the P7 config-2 integration smoke:
+# the NATIVE ddbsh binary against a REAL local ExtendDB server (SQLite, HTTPS),
+# exercising the human-ratified --ca-bundle / AWS_CA_BUNDLE TLS-trust path (D1).
+#
+# This is the native-CLI companion to devtools/run-extenddb-smoke (which proves
+# the browser/WASM fetch edition over the proxy against ExtendDB — config 4).
+# THIS script proves config 2 end-to-end: the shipped `ddbsh` executable, an
+# endpoint override, an ExtendDB-issued SigV4 key in a dedicated AWS profile,
+# and the self-signed TLS cert supplied via --ca-bundle.
+#
+# It is an INTEGRATION SMOKE, not a golden test: ExtendDB is a web-backend
+# integration target and is never added to the real-DDB golden oracle (the P6f
+# decision). The golden suite stays real-DynamoDB-only (devtools/run-tests).
+#
+# What it does:
+#   1. build the native release ddbsh (cmake --preset linux-release),
+#   2. locate the ExtendDB binary (a SQLite build) and init a FRESH deployment
+#      in a temp dir (its own sqlite file + config; TLS cert reused from
+#      ~/.extenddb/tls); set control_plane_delay_seconds 0 for fast transitions,
+#   3. launch ExtendDB (serve --foreground) on loopback (teardown on exit),
+#   4. create an IAM user + DynamoDB policy + access key, and write that key into
+#      a TEMP AWS credentials file under a dedicated profile (the real ~/.aws is
+#      never touched),
+#   5. run a batch through the native ddbsh against ExtendDB over HTTPS, pointing
+#      it with DDBSH_ENDPOINT_OVERRIDE + AWS_PROFILE + --ca-bundle, and ASSERT
+#      the expected status tokens / items appear (CREATE / INSERT / SELECT item /
+#      GetItem / UPDATE / DELETE / EXPLAIN GetItem plan / COMMIT / DROP),
+#   6. re-run one command with AWS_CA_BUNDLE (instead of --ca-bundle) to prove
+#      the env path, and once with NEITHER to prove it fails closed on the
+#      self-signed cert,
+#   7. capture everything into
+#      discussions/test-extenddb-native-<HEAD-short>.log.
+#
+# No credential ever touches a real AWS account. Everything is local and
+# loopback.
+#
+# Env: DDBSH_EXTENDDB_BIN (default ~/source/extenddb-pristine/target/release/extenddb,
+#        then ~/source/extenddb-READ-ONLY/target/release/extenddb),
+#      DDBSH_EXTENDDB_PORT (default 18444, distinct from the web smoke's 18443),
+#      DDBSH_REGION / AWS_REGION (default us-east-1),
+#      DDBSH_NATIVE_BIN (default build-preset/linux-release/ddbsh).
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DISCUSSIONS_DIR="$REPO_DIR/discussions"
+mkdir -p "$DISCUSSIONS_DIR"
+LOG_FILE="$DISCUSSIONS_DIR/test-extenddb-native-${HASH}.log"
+
+EXTENDDB_PORT="${DDBSH_EXTENDDB_PORT:-18444}"
+REGION="${DDBSH_REGION:-${AWS_REGION:-us-east-1}}"
+EXTENDDB_ENDPOINT="https://127.0.0.1:${EXTENDDB_PORT}"
+PROFILE="ddbsh-extenddb-native-smoke"
+TABLE="ddbsh_native_smoke_$$"
+
+# --- Build the native release ddbsh -----------------------------------------
+echo "=== native ExtendDB smoke: build the native release ddbsh ===" | tee "$LOG_FILE"
+NATIVE_BUILD="$REPO_DIR/build-preset/linux-release"
+NATIVE_BIN="${DDBSH_NATIVE_BIN:-$NATIVE_BUILD/ddbsh}"
+if [ ! -x "$NATIVE_BIN" ]; then
+    if [ ! -f "$NATIVE_BUILD/CMakeCache.txt" ]; then
+        ( cd "$REPO_DIR" && cmake --preset linux-release ) 2>&1 | tee -a "$LOG_FILE"
+    fi
+    cmake --build "$NATIVE_BUILD" --target ddbsh-cli 2>&1 | tee -a "$LOG_FILE"
+fi
+if [ ! -x "$NATIVE_BIN" ]; then
+    echo "error: native ddbsh not built at $NATIVE_BIN" | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+echo "  native ddbsh: $NATIVE_BIN ($("$NATIVE_BIN" -c 'quit;' 2>/dev/null | head -1))" | tee -a "$LOG_FILE"
+
+# --- Locate ExtendDB + echo the target (no skip on missing) -----------------
+echo "=== native ExtendDB smoke: ExtendDB target ===" | tee -a "$LOG_FILE"
+EXTENDDB_BIN="${DDBSH_EXTENDDB_BIN:-}"
+if [ -z "$EXTENDDB_BIN" ]; then
+    for cand in "$HOME/source/extenddb-pristine/target/release/extenddb" \
+                "$HOME/source/extenddb-READ-ONLY/target/release/extenddb"; do
+        if [ -x "$cand" ]; then EXTENDDB_BIN="$cand"; break; fi
+    done
+fi
+if [ -z "$EXTENDDB_BIN" ] || [ ! -x "$EXTENDDB_BIN" ]; then
+    echo "error: ExtendDB binary not found (set DDBSH_EXTENDDB_BIN; build it with 'cargo build --release --no-default-features --features sqlite' in a checkout). This is an infrastructure failure, not a skip." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+EXTENDDB_VERSION="$("$EXTENDDB_BIN" version 2>&1 | head -1 || true)"
+if ! "$EXTENDDB_BIN" version 2>&1 | grep -qi "sqlite"; then
+    echo "error: ExtendDB binary at '$EXTENDDB_BIN' is not a SQLite build. Infrastructure failure." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+CA_BUNDLE="$HOME/.extenddb/tls/cert.pem"
+{
+    echo "  binary:   $EXTENDDB_BIN"
+    echo "  version:  $EXTENDDB_VERSION"
+    echo "  endpoint: $EXTENDDB_ENDPOINT  (HTTPS, self-signed)"
+    echo "  region:   $REGION"
+    echo "  table:    $TABLE"
+} | tee -a "$LOG_FILE"
+
+# --- A temp working dir for the ExtendDB deployment + the temp AWS creds -----
+WORK_DIR="$(mktemp -d /tmp/ddbsh-extenddb-native-smoke.XXXXXX)"
+EXTENDDB_CONFIG="$WORK_DIR/extenddb.toml"
+EXTENDDB_SQLITE="$WORK_DIR/extenddb.sqlite"
+AWS_CREDS_FILE="$WORK_DIR/aws-credentials"
+AWS_CFG_FILE="$WORK_DIR/aws-config"
+: >"$AWS_CFG_FILE"
+
+EXTENDDB_PID=""
+cleanup() {
+    if [ -n "$EXTENDDB_PID" ] && kill -0 "$EXTENDDB_PID" 2>/dev/null; then
+        kill "$EXTENDDB_PID" 2>/dev/null || true
+        wait "$EXTENDDB_PID" 2>/dev/null || true
+    fi
+    rm -rf "$WORK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# --- Init a fresh ExtendDB deployment (SQLite, HTTPS) -----------------------
+echo "=== native ExtendDB smoke: init (SQLite, fresh catalog) ===" | tee -a "$LOG_FILE"
+"$EXTENDDB_BIN" init --backend sqlite --sqlite-path "$EXTENDDB_SQLITE" \
+    --config "$EXTENDDB_CONFIG" >"$WORK_DIR/init.out" 2>&1 || {
+        echo "error: extenddb init failed:" | tee -a "$LOG_FILE" >&2
+        cat "$WORK_DIR/init.out" | tee -a "$LOG_FILE" >&2
+        exit 1
+    }
+cat "$WORK_DIR/init.out" >>"$LOG_FILE"
+ADMIN_PW="$(sed -n 's/.*Password:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$WORK_DIR/init.out" | head -1)"
+if [ -z "$ADMIN_PW" ]; then
+    echo "error: could not parse the admin password from extenddb init output." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+if [ ! -f "$CA_BUNDLE" ]; then
+    echo "error: ExtendDB TLS cert not found at $CA_BUNDLE after init." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+
+"$EXTENDDB_BIN" settings --config "$EXTENDDB_CONFIG" set control_plane_delay_seconds 0 \
+    >>"$LOG_FILE" 2>&1 || true
+
+# --- Launch ExtendDB (foreground), teardown on exit -------------------------
+echo "=== native ExtendDB smoke: launch extenddb serve on 127.0.0.1:$EXTENDDB_PORT ===" | tee -a "$LOG_FILE"
+"$EXTENDDB_BIN" serve --config "$EXTENDDB_CONFIG" --port "$EXTENDDB_PORT" --foreground \
+    >>"$LOG_FILE" 2>&1 &
+EXTENDDB_PID=$!
+
+READY=""
+for _ in $(seq 1 100); do
+    if curl -fsS --cacert "$CA_BUNDLE" "$EXTENDDB_ENDPOINT/health" >/dev/null 2>&1; then
+        READY=1
+        break
+    fi
+    if ! kill -0 "$EXTENDDB_PID" 2>/dev/null; then
+        echo "error: ExtendDB exited during startup (see log)." | tee -a "$LOG_FILE" >&2
+        exit 1
+    fi
+    sleep 0.2
+done
+if [ -z "$READY" ]; then
+    echo "error: ExtendDB did not become ready on $EXTENDDB_ENDPOINT" | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+echo "  extenddb ready (pid $EXTENDDB_PID)" | tee -a "$LOG_FILE"
+
+# --- Create an IAM user + DynamoDB policy + access key ----------------------
+echo "=== native ExtendDB smoke: issue a SigV4 key ===" | tee -a "$LOG_FILE"
+# manage speaks to ExtendDB's management API; --endpoint makes it agree with the
+# serve --port above (the generated config's default port may differ).
+edb_manage() {
+    EXTENDDB_PASSWORD="$ADMIN_PW" "$EXTENDDB_BIN" manage --user admin \
+        --config "$EXTENDDB_CONFIG" --endpoint "$EXTENDDB_ENDPOINT" "$@"
+}
+ACCT_ID="$(edb_manage list-accounts 2>>"$LOG_FILE" \
+    | sed -n 's/.*"account_id":[[:space:]]*"\([0-9]*\)".*/\1/p' | head -1)"
+if [ -z "$ACCT_ID" ]; then
+    echo "error: could not determine the default ExtendDB account id." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+echo "  account:  $ACCT_ID" | tee -a "$LOG_FILE"
+
+edb_manage create-user --account-id "$ACCT_ID" --user-name ddbshnative >>"$LOG_FILE" 2>&1
+edb_manage put-user-policy --account-id "$ACCT_ID" --user-name ddbshnative \
+    --policy-name FullAccess \
+    --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:*","Resource":"*"}]}' \
+    >>"$LOG_FILE" 2>&1
+KEY_JSON="$(edb_manage create-access-key --account-id "$ACCT_ID" --user-name ddbshnative 2>>"$LOG_FILE")"
+AKID="$(echo "$KEY_JSON" | sed -n 's/.*"access_key_id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+SECRET="$(echo "$KEY_JSON" | sed -n 's/.*"secret_access_key":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+if [ -z "$AKID" ] || [ -z "$SECRET" ]; then
+    echo "error: could not parse the issued access key from create-access-key." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+echo "  access key id: $AKID  (ExtendDB-issued; secret withheld from the log)" | tee -a "$LOG_FILE"
+
+umask 077
+cat >"$AWS_CREDS_FILE" <<EOF
+[$PROFILE]
+aws_access_key_id = $AKID
+aws_secret_access_key = $SECRET
+EOF
+
+# Helper: run ddbsh with the isolated AWS env pointed at ExtendDB.
+run_ddbsh() {  # args: extra ddbsh flags...; reads batch on stdin
+    AWS_SHARED_CREDENTIALS_FILE="$AWS_CREDS_FILE" \
+    AWS_CONFIG_FILE="$AWS_CFG_FILE" \
+    AWS_PROFILE="$PROFILE" \
+    AWS_REGION="$REGION" \
+    DDBSH_ENDPOINT_OVERRIDE="$EXTENDDB_ENDPOINT" \
+        "$NATIVE_BIN" -q "$@" -f /dev/stdin
+}
+
+# --- The batch: full command surface against ExtendDB over HTTPS ------------
+echo "=== native ExtendDB smoke: run the batch via --ca-bundle ($HASH) ===" | tee -a "$LOG_FILE"
+BATCH_OUT="$WORK_DIR/batch.out"
+set +e
+run_ddbsh --ca-bundle "$CA_BUNDLE" >"$BATCH_OUT" 2>&1 <<EOF
+create table $TABLE ( id number ) primary key ( id hash );
+insert into $TABLE ( id, name ) values ( 1, "alice" ), ( 2, "bob" ), ( 3, "carol" );
+select * from $TABLE where id = 2;
+update $TABLE set name = "ALICE" where id = 1;
+delete from $TABLE where id = 3;
+explain select * from $TABLE where id = 5;
+begin;
+insert into $TABLE ( id, name ) values ( 10, "dave" );
+insert into $TABLE ( id, name ) values ( 11, "erin" );
+commit;
+drop table $TABLE;
+EOF
+BATCH_RC=$?
+set -e
+cat "$BATCH_OUT" | tee -a "$LOG_FILE"
+
+# --- Assertions on the batch output -----------------------------------------
+echo "=== native ExtendDB smoke: assertions ===" | tee -a "$LOG_FILE"
+FAILS=0
+assert_contains() {  # args: needle, label
+    if grep -qF "$1" "$BATCH_OUT"; then
+        echo "  PASS: $2" | tee -a "$LOG_FILE"
+    else
+        echo "  FAIL: $2 (expected to find: $1)" | tee -a "$LOG_FILE" >&2
+        FAILS=$((FAILS + 1))
+    fi
+}
+if [ "$BATCH_RC" -ne 0 ]; then
+    echo "  FAIL: batch exited nonzero ($BATCH_RC)" | tee -a "$LOG_FILE" >&2
+    FAILS=$((FAILS + 1))
+fi
+assert_contains "CREATE" "CREATE TABLE status token"
+assert_contains "INSERT" "INSERT status token"
+assert_contains "bob" "GetItem (id=2) returned the item"
+assert_contains "UPDATE (0 read, 1 modified, 0 ccf)" "UPDATE accounting"
+assert_contains "DELETE (0 read, 1 modified, 0 ccf)" "DELETE accounting"
+assert_contains "GetItem(" "EXPLAIN emitted a GetItem plan"
+assert_contains "COMMIT" "transaction COMMIT status token"
+assert_contains "DROP" "DROP TABLE status token"
+
+# --- AWS_CA_BUNDLE env path (no flag): a GetItem should still connect --------
+# Recreate a tiny table, read it back using the ENV var only.
+echo "=== native ExtendDB smoke: AWS_CA_BUNDLE env path ===" | tee -a "$LOG_FILE"
+ENV_OUT="$WORK_DIR/env.out"
+set +e
+AWS_CA_BUNDLE="$CA_BUNDLE" run_ddbsh >"$ENV_OUT" 2>&1 <<EOF
+create table $TABLE ( id number ) primary key ( id hash );
+insert into $TABLE ( id, name ) values ( 42, "zoe" );
+select * from $TABLE where id = 42;
+drop table $TABLE;
+EOF
+ENV_RC=$?
+set -e
+cat "$ENV_OUT" | tee -a "$LOG_FILE"
+if [ "$ENV_RC" -eq 0 ] && grep -qF "zoe" "$ENV_OUT"; then
+    echo "  PASS: AWS_CA_BUNDLE env var trusts the self-signed cert" | tee -a "$LOG_FILE"
+else
+    echo "  FAIL: AWS_CA_BUNDLE env path did not connect/return the item" | tee -a "$LOG_FILE" >&2
+    FAILS=$((FAILS + 1))
+fi
+
+# --- Fail-closed: NO ca bundle must NOT connect over the self-signed cert ----
+echo "=== native ExtendDB smoke: fail-closed without a CA bundle ===" | tee -a "$LOG_FILE"
+NOCA_OUT="$WORK_DIR/noca.out"
+set +e
+run_ddbsh >"$NOCA_OUT" 2>&1 <<EOF
+select * from $TABLE where id = 1;
+EOF
+NOCA_RC=$?
+set -e
+cat "$NOCA_OUT" | tee -a "$LOG_FILE"
+# A successful SELECT item would mean the self-signed cert was trusted without
+# a bundle — a security regression. We expect an error, not a returned item.
+if grep -qiE "certificate|curlCode|self.signed|ssl|handshake|error" "$NOCA_OUT"; then
+    echo "  PASS: without a CA bundle the TLS handshake fails closed" | tee -a "$LOG_FILE"
+else
+    echo "  FAIL: expected a TLS trust failure without a CA bundle" | tee -a "$LOG_FILE" >&2
+    FAILS=$((FAILS + 1))
+fi
+
+echo "=== native ExtendDB smoke: $([ "$FAILS" -eq 0 ] && echo PASS || echo FAIL) ($FAILS failures) ===" | tee -a "$LOG_FILE"
+echo "  artifact: $LOG_FILE"
+[ "$FAILS" -eq 0 ]

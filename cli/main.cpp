@@ -38,6 +38,12 @@
 //   -d           debug (accepted; the engine has no logging subsystem yet)
 //   -t[STR] / --terminator[=STR]
 //                set the batch terminator (no argument => a blank line)
+//   --ca-bundle <file>
+//                trust a custom/self-signed TLS CA bundle, mapped to
+//                ClientConfiguration.caFile (AWS-CLI parity, D1). Also honors
+//                the AWS_CA_BUNDLE environment variable; the flag wins. Needed
+//                to reach an endpoint with a self-signed cert (e.g. a local
+//                ExtendDB server).
 
 #include <csignal>
 #include <cstdio>
@@ -51,6 +57,8 @@
 #include <string_view>
 
 #include <getopt.h>
+
+#include <aws/core/client/ClientConfiguration.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -154,10 +162,16 @@ int main(int argc, char** argv) {
     [[maybe_unused]] bool debug = false;
     std::optional<std::string> cmdstring;
     std::optional<std::string> inputfile;
-    Terminator term;  // default: the word `go`
+    std::optional<std::string> ca_bundle_flag;  // --ca-bundle <file> (D1)
+    Terminator term;                            // default: the word `go`
 
+    // --ca-bundle has no short form (matching the AWS CLI, which exposes only
+    // the long flag); give it a val outside the ASCII range so the switch below
+    // can distinguish it.
+    enum { OPT_CA_BUNDLE = 1000 };
     static const struct option long_opts[] = {
         {"terminator", optional_argument, nullptr, 't'},
+        {"ca-bundle", required_argument, nullptr, OPT_CA_BUNDLE},
         {nullptr, 0, nullptr, 0},
     };
 
@@ -191,9 +205,14 @@ int main(int argc, char** argv) {
                     term.word = optarg;
                 }
                 break;
+            case OPT_CA_BUNDLE:
+                ca_bundle_flag = optarg;
+                break;
             default:
-                std::fputs("Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [-c \"<cmds>\" | -f <file>]\n",
-                           stderr);
+                std::fputs(
+                    "Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] "
+                    "[-c \"<cmds>\" | -f <file>]\n",
+                    stderr);
                 return 1;
         }
     }
@@ -207,7 +226,25 @@ int main(int argc, char** argv) {
     const std::string region = env_or("AWS_REGION", env_or("AWS_DEFAULT_REGION", "us-east-1"));
     const std::string endpoint = env_or("DDBSH_ENDPOINT_OVERRIDE", "");
 
-    ddbsh::aws::AwsDDBClient client(region, endpoint);
+    // Resolve the TLS CA bundle with AWS-CLI-parity precedence (D1): the
+    // --ca-bundle flag wins over the AWS_CA_BUNDLE environment variable. When
+    // set, it is mapped onto ClientConfiguration.caFile so the SDK trusts a
+    // custom/self-signed endpoint cert (e.g. a local ExtendDB server). The AWS
+    // SDK for C++ does NOT honor AWS_CA_BUNDLE itself, so the CLI wires it here.
+    // AwsDDBClient::rebuild() carries caFile across reconnect/CONNECT because it
+    // builds every client off the stored base_config.
+    const std::optional<std::string> ca_bundle =
+        ddbsh::cli::resolve_ca_bundle(ca_bundle_flag, std::getenv("AWS_CA_BUNDLE"));
+
+    std::optional<ddbsh::aws::AwsDDBClient> client_storage;
+    if (ca_bundle.has_value()) {
+        Aws::Client::ClientConfiguration cfg;
+        cfg.caFile = Aws::String(ca_bundle->c_str());
+        client_storage.emplace(region, endpoint, cfg);
+    } else {
+        client_storage.emplace(region, endpoint);
+    }
+    ddbsh::aws::AwsDDBClient& client = *client_storage;
     ddbsh::Session session(ddbsh::SessionConfig{region, endpoint}, client);
     ddbsh::render::Renderer renderer;
 

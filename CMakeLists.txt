@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.11.16
+        VERSION 0.11.17
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -333,6 +333,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/explain_exec_test.cpp
                    tests/connect_reconnect_test.cpp
                    tests/cli_exit_code_test.cpp
+                   tests/cli_ca_bundle_test.cpp
                    tests/wire_json_reader_test.cpp
                    tests/wire_parse_roundtrip_test.cpp
                    tests/wire_parse_control_test.cpp
