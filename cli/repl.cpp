@@ -55,6 +55,19 @@ std::string_view strip_quotes(std::string_view s) {
 
 }  // namespace
 
+std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
+                                             const char* env_value) {
+    // Flag wins over env (AWS-CLI-parity precedence, D1). An empty flag string
+    // does not count as "set".
+    if (flag_value.has_value() && !flag_value->empty()) {
+        return *flag_value;
+    }
+    if (env_value != nullptr && env_value[0] != '\0') {
+        return std::string(env_value);
+    }
+    return std::nullopt;
+}
+
 bool is_terminator_line(std::string_view trimmed, const Terminator& term) {
     if (term.blank_line) {
         return trimmed.empty();

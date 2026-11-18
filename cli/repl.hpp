@@ -38,6 +38,16 @@ struct Terminator {
     std::string word = "go";  ///< the terminator word when !blank_line
 };
 
+// Resolve the TLS CA-bundle path with AWS-CLI-parity precedence (D1, P7):
+// the explicit `--ca-bundle` flag wins over the `AWS_CA_BUNDLE` environment
+// variable; an empty flag string or empty/unset env value does not count.
+// Returns the resolved path, or nullopt when neither is supplied. Pure logic
+// (no SDK, no terminal), so it is unit-testable in the cli-core unit; main.cpp
+// maps the result onto Aws::Client::ClientConfiguration.caFile. Mirrors how the
+// AWS CLI trusts a self-signed endpoint (e.g. a local ExtendDB server).
+std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
+                                             const char* env_value);
+
 // True when `trimmed` (an already-trimmed physical line) is the terminator.
 bool is_terminator_line(std::string_view trimmed, const Terminator& term);
 
