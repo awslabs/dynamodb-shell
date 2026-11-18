@@ -87,7 +87,7 @@ The browser build, the web UI, and the `ddbsh-web-proxy` are documented in
 
 ## Direction
 
-Planned work (bugs, new language constructs, DAX, signed binaries, and more) is
+Planned work (bugs, new language constructs, signed binaries, and more) is
 tracked in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#direction).
 
 ## Licensing
