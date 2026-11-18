@@ -159,7 +159,9 @@ The `ddbsh::aws` component and the CLI need the AWS SDK for C++ (`dynamodb`,
 distribution or Homebrew package where available; build it from source only when
 you need a specific version or none is packaged.
 
-1. Building the SDK. I have found the following to work reliably.
+### Building the SDK
+
+The following has been found to work reliably.
 
 > **AWS SDK version.** ddbsh requires the AWS SDK for C++ `dynamodb`, `iam`, and
 > `sts` components. Use a recent release (the project is developed against
@@ -205,7 +207,7 @@ you need a specific version or none is packaged.
 
 ```
 
-1a. Rebuilding the SDK.
+### Rebuilding the SDK
 
 ```
 % cd <aws-sdk-dir>
