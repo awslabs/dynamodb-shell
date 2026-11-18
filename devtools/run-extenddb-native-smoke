@@ -63,7 +63,9 @@ TABLE="ddbsh_native_smoke_$$"
 echo "=== native ExtendDB smoke: build the native release ddbsh ===" | tee "$LOG_FILE"
 NATIVE_BUILD="$REPO_DIR/build-preset/linux-release"
 NATIVE_BIN="${DDBSH_NATIVE_BIN:-$NATIVE_BUILD/ddbsh}"
-if [ ! -x "$NATIVE_BIN" ]; then
+if [ -z "${DDBSH_NATIVE_BIN:-}" ]; then
+    # Default binary: always (re)build so the smoke never runs a stale binary.
+    # cmake --build is a no-op when the target is already up to date.
     if [ ! -f "$NATIVE_BUILD/CMakeCache.txt" ]; then
         ( cd "$REPO_DIR" && cmake --preset linux-release ) 2>&1 | tee -a "$LOG_FILE"
     fi
