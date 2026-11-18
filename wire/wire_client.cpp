@@ -21,7 +21,9 @@
 #include <algorithm>
 #include <chrono>
 #include <optional>
+#include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -63,18 +65,68 @@ bool is_transient_wire_error(const std::string& name) {
 }
 
 // serialize -> send -> parse for an op whose response maps straight to its
-// *Out (no composed error, no paging).
+// *Out (no composed error, no paging). Now routes through send_retrying so a
+// retryable service error is retried (HT-1); defined as a WireClient member
+// (below) so it can reach the retry seam.
+
+}  // namespace
+
+// ---- retry seam (HT-1) -----------------------------------------------------
+
+Result<std::string> WireClient::send_retrying(std::string_view operation, std::string_view body) {
+    // One send with bounded exponential-backoff-plus-full-jitter retry on a
+    // retryable service error (§4.1). On success, a non-retryable error, or an
+    // opaque transport failure the first send's bytes are returned unchanged, so
+    // every currently-green path is byte-for-byte and call-count unchanged; the
+    // retry arm is reachable only when a transient `__type` body comes back.
+    for (unsigned attempt = 0;; ++attempt) {
+        auto resp = transport_.send(operation, body);
+        if (!resp) {
+            // Opaque transport-level failure (no `__type` to classify): the seam
+            // cannot tell "backend down" from "one blip", so do not retry
+            // (D-HT1-3). Return the same Error the one-shot path returned.
+            return resp;
+        }
+        const std::optional<std::string> name = error_type_name(*resp);
+        const bool retryable = name.has_value() && is_transient_wire_error(*name);
+        if (!retryable || attempt + 1 >= max_retry_attempts_) {
+            // Success body, terminal error document, or attempts exhausted. On
+            // exhaustion we return the last `__type` body (not a synthesized
+            // error) so the caller's parse_* maps the exact byte-identical error
+            // string the one-shot path would have (§4.1, fidelity).
+            return resp;
+        }
+        retry_backoff(attempt);  // sleep, then re-send
+    }
+}
+
+void WireClient::retry_backoff(unsigned attempt) {
+    // Full jitter over an exponentially growing, capped ceiling (§4.5): base
+    // 50ms, doubling per attempt, capped at 1000ms; actual sleep is a uniform
+    // draw in [0, ceiling]. Full jitter de-synchronizes a burst (e.g. the
+    // SHOW TABLES describe burst that triggers HT-1), avoiding a thundering herd.
+    constexpr long long kBaseMs = 50;
+    constexpr long long kCapMs = 1000;
+    long long ceiling = kCapMs;
+    // Guard the shift against overflow for a large attempt; by attempt 5
+    // (50 * 32 = 1600ms) the ceiling already saturates at the cap anyway.
+    if (attempt < 20) {
+        const long long scaled = kBaseMs * (1LL << attempt);
+        ceiling = std::min(scaled, kCapMs);
+    }
+    const auto sleep_ms = static_cast<long long>(jitter_unit() * static_cast<double>(ceiling));
+    backoff_sleep(std::chrono::milliseconds{sleep_ms});
+}
+
 template <class Out>
-Result<Out> round_trip(Transport& transport, const WireRequest& req,
-                       Result<Out> (*parse)(const std::string&)) {
-    auto body = transport.send(req.operation, req.body);
+Result<Out> WireClient::round_trip(const WireRequest& req,
+                                   Result<Out> (*parse)(const std::string&)) {
+    auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
     }
     return parse(*body);
 }
-
-}  // namespace
 
 Result<void> WireClient::connect(const std::string& region, const std::string& endpoint) {
     region_ = region;
@@ -95,27 +147,27 @@ std::string WireClient::connection_descriptor() const {
 }
 
 Result<GetItemOut> WireClient::get_item(const GetItemIn& in) {
-    return round_trip<GetItemOut>(transport_, serialize(in), &parse_get_item);
+    return round_trip<GetItemOut>(serialize(in), &parse_get_item);
 }
 
 Result<QueryOut> WireClient::query(const QueryIn& in) {
-    return round_trip<QueryOut>(transport_, serialize(in), &parse_query);
+    return round_trip<QueryOut>(serialize(in), &parse_query);
 }
 
 Result<ScanOut> WireClient::scan(const ScanIn& in) {
-    return round_trip<ScanOut>(transport_, serialize(in), &parse_scan);
+    return round_trip<ScanOut>(serialize(in), &parse_scan);
 }
 
 Result<PutItemOut> WireClient::put_item(const PutItemIn& in) {
-    return round_trip<PutItemOut>(transport_, serialize(in), &parse_put_item);
+    return round_trip<PutItemOut>(serialize(in), &parse_put_item);
 }
 
 Result<UpdateItemOut> WireClient::update_item(const UpdateItemIn& in) {
-    return round_trip<UpdateItemOut>(transport_, serialize(in), &parse_update_item);
+    return round_trip<UpdateItemOut>(serialize(in), &parse_update_item);
 }
 
 Result<DeleteItemOut> WireClient::delete_item(const DeleteItemIn& in) {
-    return round_trip<DeleteItemOut>(transport_, serialize(in), &parse_delete_item);
+    return round_trip<DeleteItemOut>(serialize(in), &parse_delete_item);
 }
 
 Result<std::string> WireClient::explain_request(const ExplainRequest& req) {
@@ -150,12 +202,12 @@ Result<std::string> WireClient::explain_request(const ExplainRequest& req) {
 // ---- control plane / backup-restore (token-only acks + report reads) -------
 
 Result<CreateTableOut> WireClient::create_table(const CreateTableIn& in) {
-    return round_trip<CreateTableOut>(transport_, serialize(in), &parse_create_table);
+    return round_trip<CreateTableOut>(serialize(in), &parse_create_table);
 }
 
 Result<UpdateTableOut> WireClient::update_table(const UpdateTableIn& in) {
     const WireRequest req = serialize(in);
-    auto body = transport_.send(req.operation, req.body);
+    auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
     }
@@ -168,7 +220,7 @@ Result<UpdateTableOut> WireClient::update_table(const UpdateTableIn& in) {
 
 Result<UpdateTimeToLiveOut> WireClient::update_time_to_live(const UpdateTimeToLiveIn& in) {
     const WireRequest req = serialize(in);
-    auto body = transport_.send(req.operation, req.body);
+    auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
     }
@@ -182,7 +234,7 @@ Result<UpdateTimeToLiveOut> WireClient::update_time_to_live(const UpdateTimeToLi
 Result<UpdateContinuousBackupsOut> WireClient::update_continuous_backups(
     const UpdateContinuousBackupsIn& in) {
     const WireRequest req = serialize(in);
-    auto body = transport_.send(req.operation, req.body);
+    auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
     }
@@ -194,19 +246,19 @@ Result<UpdateContinuousBackupsOut> WireClient::update_continuous_backups(
 }
 
 Result<CreateBackupOut> WireClient::create_backup(const CreateBackupIn& in) {
-    return round_trip<CreateBackupOut>(transport_, serialize(in), &parse_create_backup);
+    return round_trip<CreateBackupOut>(serialize(in), &parse_create_backup);
 }
 
 Result<DeleteBackupOut> WireClient::delete_backup(const DeleteBackupIn& in) {
-    return round_trip<DeleteBackupOut>(transport_, serialize(in), &parse_delete_backup);
+    return round_trip<DeleteBackupOut>(serialize(in), &parse_delete_backup);
 }
 
 Result<DescribeBackupOut> WireClient::describe_backup(const DescribeBackupIn& in) {
-    return round_trip<DescribeBackupOut>(transport_, serialize(in), &parse_describe_backup);
+    return round_trip<DescribeBackupOut>(serialize(in), &parse_describe_backup);
 }
 
 Result<RestoreFromBackupOut> WireClient::restore_table_from_backup(const RestoreFromBackupIn& in) {
-    return round_trip<RestoreFromBackupOut>(transport_, serialize(in), &parse_restore_from_backup);
+    return round_trip<RestoreFromBackupOut>(serialize(in), &parse_restore_from_backup);
 }
 
 Result<RestoreToPitrOut> WireClient::restore_table_to_point_in_time(const RestoreToPitrIn& in) {
@@ -217,21 +269,21 @@ Result<RestoreToPitrOut> WireClient::restore_table_to_point_in_time(const Restor
     if (!iso8601_to_epoch(in.restore_datetime).has_value()) {
         return fail(Errc::invalid_argument, "Invalid restore timestamp: " + in.restore_datetime);
     }
-    return round_trip<RestoreToPitrOut>(transport_, serialize(in), &parse_restore_to_pitr);
+    return round_trip<RestoreToPitrOut>(serialize(in), &parse_restore_to_pitr);
 }
 
 Result<DescribeLimitsOut> WireClient::describe_limits(const DescribeLimitsIn& in) {
-    return round_trip<DescribeLimitsOut>(transport_, serialize(in), &parse_describe_limits);
+    return round_trip<DescribeLimitsOut>(serialize(in), &parse_describe_limits);
 }
 
 Result<ListBackupsOut> WireClient::list_backups(const ListBackupsIn& in) {
     // One page per call — the AWS adapter does the same; the SHOW BACKUPS
     // executor drives the cursor loop on last_evaluated_backup_arn.
-    return round_trip<ListBackupsOut>(transport_, serialize(in), &parse_list_backups);
+    return round_trip<ListBackupsOut>(serialize(in), &parse_list_backups);
 }
 
 Result<DeleteTableOut> WireClient::delete_table(const DeleteTableIn& in) {
-    return round_trip<DeleteTableOut>(transport_, serialize(in), &parse_delete_table);
+    return round_trip<DeleteTableOut>(serialize(in), &parse_delete_table);
 }
 
 Result<ListTablesOut> WireClient::list_tables(const ListTablesIn&) {
@@ -242,7 +294,7 @@ Result<ListTablesOut> WireClient::list_tables(const ListTablesIn&) {
     std::optional<std::string> cursor;  // nullopt => first page
     do {
         const WireRequest req = serialize_list_tables(cursor);
-        auto body = transport_.send(req.operation, req.body);
+        auto body = send_retrying(req.operation, req.body);
         if (!body) {
             return fail(body.error());
         }
@@ -259,16 +311,16 @@ Result<ListTablesOut> WireClient::list_tables(const ListTablesIn&) {
 }
 
 Result<DescribeTableOut> WireClient::describe_table(const DescribeTableIn& in) {
-    return round_trip<DescribeTableOut>(transport_, serialize(in), &parse_describe_table);
+    return round_trip<DescribeTableOut>(serialize(in), &parse_describe_table);
 }
 
 Result<SearchVectorsOut> WireClient::search_vectors(const SearchVectorsIn& in) {
-    return round_trip<SearchVectorsOut>(transport_, serialize(in), &parse_search_vectors);
+    return round_trip<SearchVectorsOut>(serialize(in), &parse_search_vectors);
 }
 
 Result<TransactGetItemsOut> WireClient::transact_get_items(const TransactGetItemsIn& in) {
     const WireRequest req = serialize(in);
-    auto body = transport_.send(req.operation, req.body);
+    auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
     }
@@ -281,7 +333,7 @@ Result<TransactGetItemsOut> WireClient::transact_get_items(const TransactGetItem
 
 Result<TransactWriteItemsOut> WireClient::transact_write_items(const TransactWriteItemsIn& in) {
     const WireRequest req = serialize(in);
-    auto body = transport_.send(req.operation, req.body);
+    auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
     }
@@ -293,22 +345,21 @@ Result<TransactWriteItemsOut> WireClient::transact_write_items(const TransactWri
 }
 
 Result<TimeToLiveOut> WireClient::describe_time_to_live(const DescribeTimeToLiveIn& in) {
-    return round_trip<TimeToLiveOut>(transport_, serialize(in), &parse_describe_time_to_live);
+    return round_trip<TimeToLiveOut>(serialize(in), &parse_describe_time_to_live);
 }
 
 Result<ContinuousBackupsOut> WireClient::describe_continuous_backups(
     const DescribeContinuousBackupsIn& in) {
-    return round_trip<ContinuousBackupsOut>(transport_, serialize(in),
-                                            &parse_describe_continuous_backups);
+    return round_trip<ContinuousBackupsOut>(serialize(in), &parse_describe_continuous_backups);
 }
 
 Result<TableReplicaAutoScalingOut> WireClient::describe_table_replica_auto_scaling(
     const DescribeTableReplicaAutoScalingIn& in) {
-    return round_trip<TableReplicaAutoScalingOut>(transport_, serialize(in),
+    return round_trip<TableReplicaAutoScalingOut>(serialize(in),
                                                   &parse_describe_table_replica_auto_scaling);
 }
 
-void WireClient::poll_delay(std::chrono::milliseconds interval) {
+void WireClient::backoff_sleep(std::chrono::milliseconds interval) {
 #if defined(__EMSCRIPTEN__)
     // Asyncify yields to the browser event loop so the transport's fetch/
     // ExtendDB call can make progress between polls (P6d).
@@ -318,6 +369,13 @@ void WireClient::poll_delay(std::chrono::milliseconds interval) {
 #endif
 }
 
+double WireClient::jitter_unit() {
+    // Full-jitter fraction in [0, 1) (HT-1 §4.7). Per-instance RNG (no global
+    // state): the engine may run multiple sessions concurrently.
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    return dist(rng_);
+}
+
 Result<void> WireClient::wait_for_table_active(const std::string& table_name) {
     // Bounded exponential backoff: 100ms doubling to a 2s cap (arch §10). Poll
     // DescribeTable until the table reports ACTIVE. CREATING/UPDATING keep
@@ -325,6 +383,12 @@ Result<void> WireClient::wait_for_table_active(const std::string& table_name) {
     // A ResourceNotFoundException (eventual consistency right after create) or a
     // transient error keeps polling; any other service error is terminal. A
     // transport-level failure is terminal (no `__type` to classify).
+    //
+    // This waiter deliberately uses transport_.send directly, NOT send_retrying
+    // (HT-1 §4.2): it already owns an unbounded poll-with-backoff loop that
+    // treats a transient `__type` as "keep polling", so wrapping each send in a
+    // second bounded retry would be redundant and could interact badly with the
+    // outer loop.
     std::chrono::milliseconds interval(100);
     const std::chrono::milliseconds cap(2000);
     while (true) {
@@ -353,7 +417,7 @@ Result<void> WireClient::wait_for_table_active(const std::string& table_name) {
             }
             // not-found (eventual consistency) or transient: keep polling.
         }
-        poll_delay(interval);
+        backoff_sleep(interval);
         interval = std::min(interval * 2, cap);
     }
 }
@@ -363,6 +427,10 @@ Result<void> WireClient::wait_for_table_gone(const std::string& table_name) {
     // DescribeTable until it reports ResourceNotFoundException (gone). A table
     // that still exists keeps polling; a transient error keeps polling; any
     // other service error is terminal; a transport-level failure is terminal.
+    //
+    // Like wait_for_table_active, this waiter uses transport_.send directly, NOT
+    // send_retrying (HT-1 §4.2): its own poll loop already absorbs transient
+    // errors by retrying.
     std::chrono::milliseconds interval(100);
     const std::chrono::milliseconds cap(2000);
     while (true) {
@@ -383,7 +451,7 @@ Result<void> WireClient::wait_for_table_gone(const std::string& table_name) {
             // transient: keep polling.
         }
         // else: table still exists -> keep polling.
-        poll_delay(interval);
+        backoff_sleep(interval);
         interval = std::min(interval * 2, cap);
     }
 }

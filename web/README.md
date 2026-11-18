@@ -28,6 +28,33 @@ the **product UI** (`index.html`/`app.js`, history, file upload, result pane);
 P6f added the **real-backend** path (the fetch edition, the proxy, and the local
 ExtendDB server wiring).
 
+## Quickstart — real DynamoDB via the proxy (HT-2)
+
+The shortest path from a built bundle to a browser talking to **real** DynamoDB.
+Run the proxy on your devbox, SSH-forward its loopback port to your laptop, and
+open the page:
+
+```bash
+# devbox (Linux): launch the signing proxy + serve the bundle (loopback :8456)
+cd dynamodb-shell/proxy
+./target/release/ddbsh-web-proxy --serve --webroot ../build-preset/wasm-release/web
+
+# your machine: SSH local-forward, SAME port both ends (origin/host guard)
+ssh -L 8456:127.0.0.1:8456 <devbox-host>
+
+# browser: open http://localhost:8456/   (plain CONNECT us-east-1 = real DynamoDB)
+```
+
+**The local-forward port must match the proxy port on both ends.** The proxy's
+origin/host guard (`proxy/src/security.rs`) accepts only
+`localhost:<proxy-port>` / `127.0.0.1:<proxy-port>`, so a mismatched `ssh -L`
+port (e.g. `-L 9000:127.0.0.1:8456`) is rejected by the guard even though the
+tunnel connects. Use the same number on both sides.
+
+For a local ExtendDB target instead of AWS, see "Local ExtendDB via the proxy"
+below (it needs the per-endpoint profile + CA-bundle query parameters).
+
+
 ## What's here
 
 | File | Role |
@@ -438,7 +465,7 @@ nothing here weakens it.)
   terminal-free (`engine_boundary_check`). `<emscripten.h>` appears only in
   `transport_browser.cpp` and `transport_fetch.cpp` (the WASM target, not
   `ddbsh-wire`) and in the single pre-ratified `#if __EMSCRIPTEN__` arm of
-  `WireClient::poll_delay`.
+  `WireClient::backoff_sleep`.
 - The batch-execution policy is shared with the CLI via
   `ddbsh::cli::run_batch` (`cli/repl.*`) — no duplicated, drift-prone copy.
 - The CLI and the real-DDB golden suite are untouched; the golden contract

@@ -18,7 +18,7 @@
 // is a link error by design — the single caller is the Emscripten web target.
 // Keeping the definition out of ddbsh-wire preserves the portable library's
 // invariant that nothing under wire/ pulls <emscripten.h> (the one sanctioned
-// exception is WireClient::poll_delay's pre-ratified `#if`-gated arm, D-P6c-6).
+// exception is WireClient::backoff_sleep's pre-ratified `#if`-gated arm, D-P6c-6).
 
 #ifndef DDBSH_WIRE_SUBMIT_TRANSPORT_HPP
 #define DDBSH_WIRE_SUBMIT_TRANSPORT_HPP

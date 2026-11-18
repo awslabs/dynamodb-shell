@@ -177,6 +177,18 @@ function wireBridges(Module, proxyUrl, authHeaders, connectExtra) {
 ///   connectExtra  — extra /connect body fields (ExtendDB: {profile, ca_bundle}).
 ///   table         — the table name to create/drop.
 ///   label         — a human label for the log banner.
+///   showTablesBurst — optional count N (default 0). When > 0, after the main
+///                   corpus the harness creates N extra `${table}_burst_*`
+///                   tables (NOWAIT) to provoke the SHOW TABLES
+///                   DescribeTable/DescribeTimeToLive burst (2N control calls),
+///                   runs SHOW TABLES, and asserts EVERY burst table renders a
+///                   FULL status row (a `"<name> | "` line), i.e. zero name-only
+///                   fallback rows. This is the HT-1 §6.2 happy-path-over-a-burst
+///                   check. HONEST CAVEAT: throttling is probabilistic — a green
+///                   run proves the burst still renders fully, NOT that the retry
+///                   fired (the deterministic retry proof is the native
+///                   wire_client_retry_test suite). The burst tables are dropped
+///                   (NOWAIT, best-effort) in teardown.
 ///
 /// Returns { pass, failures, fetchCalls }. Always attempts table teardown.
 export async function runCorpus({
@@ -187,9 +199,11 @@ export async function runCorpus({
     connectExtra = {},
     table,
     label,
+    showTablesBurst = 0,
 }) {
     const url = new URL(proxyUrl);
     const checks = new Checks();
+    const burstTables = [];
 
     // --- browser handshake: mint a session + token ------------------------
     const { sessionId, token, version: proxyVersion } = await mintSession(url);
@@ -299,6 +313,31 @@ export async function runCorpus({
         checks.check(!r.ok, "duplicate insert fails (not ok)");
         checks.contains(r.stderr, "The conditional request failed",
             "ccf error mapped to ddbsh string");
+
+        // 10) HT-1 §6.2 — SHOW TABLES over a describe BURST. Create N extra
+        //     tables (NOWAIT, fast) so SHOW TABLES issues a burst of 2*(N+…)
+        //     DescribeTable/DescribeTimeToLive calls that can trip the account's
+        //     control-plane throttle. Assert EVERY burst table renders a FULL
+        //     status row (a `"<name> | "` line), i.e. the WireClient retry (not a
+        //     name-only fallback) absorbed any throttle. CAVEAT: a green run does
+        //     not prove the retry fired (throttling is probabilistic); the
+        //     deterministic proof is the native retry suite.
+        if (showTablesBurst > 0) {
+            for (let i = 0; i < showTablesBurst; i += 1) {
+                const bt = `${table}_burst_${i}`;
+                burstTables.push(bt);
+                const cr = await run(session,
+                    `create table ${bt} ( p number ) primary key ( p hash ) ` +
+                    "billing mode on demand nowait");
+                checks.check(cr.ok, `burst create ${bt} ok`);
+            }
+            r = await run(session, "show tables");
+            checks.check(r.ok, "show tables (burst) ok");
+            for (const bt of burstTables) {
+                checks.contains(r.stdout, `${bt} | `,
+                    `burst table ${bt} renders a FULL status row (no name-only fallback)`);
+            }
+        }
     } catch (e) {
         console.error(`${label}: ERROR during corpus`, e);
         ok = false;
@@ -310,6 +349,15 @@ export async function runCorpus({
             console.log(`  (teardown) drop ${table}: ${r.ok ? "ok" : "failed"}`);
         } catch (e) {
             console.error(`  (teardown) drop ${table} ERROR`, e);
+        }
+        // Teardown the HT-1 burst tables too (best-effort, NOWAIT).
+        for (const bt of burstTables) {
+            try {
+                const r = await run(session, `drop table if exists ${bt} nowait`);
+                console.log(`  (teardown) drop ${bt}: ${r.ok ? "ok" : "failed"}`);
+            } catch (e) {
+                console.error(`  (teardown) drop ${bt} ERROR`, e);
+            }
         }
     }
 

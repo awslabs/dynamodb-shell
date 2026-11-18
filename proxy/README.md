@@ -32,6 +32,27 @@ carries a `ca_bundle` field (the cert's path) and the proxy builds a
 ExtendDB. Both `profile` and `ca_bundle` are non-secret (a profile name and a
 file path) — the key itself stays in the credentials file the proxy reads.
 
+## Quickstart — real DynamoDB via the proxy (HT-2)
+
+Run the proxy on your devbox (it serves the bundle too), SSH-forward its loopback
+port to your laptop, and open the page:
+
+```bash
+# devbox (Linux): launch the signing proxy + serve the bundle (loopback :8456)
+cd dynamodb-shell/proxy
+./target/release/ddbsh-web-proxy --serve --webroot ../build-preset/wasm-release/web
+
+# your machine: SSH local-forward, SAME port both ends (origin/host guard)
+ssh -L 8456:127.0.0.1:8456 <devbox-host>
+
+# browser: open http://localhost:8456/   (plain CONNECT us-east-1 = real DynamoDB)
+```
+
+**The local-forward port must match the proxy port on both ends.** The
+origin/host guard (`src/security.rs`) accepts only `localhost:<proxy-port>` /
+`127.0.0.1:<proxy-port>`, so a mismatched `ssh -L` port is rejected by the guard
+even though the tunnel itself connects. Use the same number on both sides.
+
 ## Endpoints
 
 | Method / path | Purpose | Auth |

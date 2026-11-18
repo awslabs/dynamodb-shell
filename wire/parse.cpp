@@ -288,6 +288,15 @@ Result<std::optional<ConsumedCapacity>> parse_consumed_capacity(const JsonValue&
     return std::optional<ConsumedCapacity>{std::move(out)};
 }
 
+// The bare exception name from a raw `__type` string: the substring after the
+// last '#' (strip the shape/namespace prefix). No '#' => the whole string.
+// Shared by error_from_type_document and the public error_type_name so the
+// name the retry classifier sees matches the name parse_* reports.
+std::string exception_name_from_type(const std::string& type_name) {
+    const std::size_t hash = type_name.rfind('#');
+    return (hash == std::string::npos) ? type_name : type_name.substr(hash + 1);
+}
+
 // __type document -> ddbsh::Error (reproduces from_sdk_error). Precondition:
 // `root` has a "__type" member.
 Error error_from_type_document(const JsonValue& root) {
@@ -295,10 +304,7 @@ Error error_from_type_document(const JsonValue& root) {
     if (const JsonValue* t = root.find("__type"); t != nullptr && t->is_string()) {
         type_name = t->text;
     }
-    // Exception name = the substring after the last '#' (strip the
-    // shape/namespace prefix). No '#' => the whole string.
-    const std::size_t hash = type_name.rfind('#');
-    const std::string name = (hash == std::string::npos) ? type_name : type_name.substr(hash + 1);
+    const std::string name = exception_name_from_type(type_name);
 
     // DynamoDB uses lowercase "message" in the __type document; accept "Message"
     // too for robustness (matches GetMessage()).
@@ -395,6 +401,24 @@ Result<std::optional<ValueMap>> parse_last_evaluated_key(const JsonValue& root) 
 }
 
 }  // namespace
+
+std::optional<std::string> error_type_name(const std::string& body) {
+    // Classify a response body for the retry path (HT-1 §4.3) WITHOUT committing
+    // to a full parse: return the bare exception name iff `body` is a DynamoDB
+    // `__type` error document, else nullopt. A success body or a malformed/
+    // non-object body yields nullopt (treated as "not a retryable service
+    // error"). Reuses the exact extraction error_from_type_document uses, so the
+    // name the retry classifier sees matches what parse_* reports.
+    auto doc = json::parse(body);
+    if (!doc || !doc->is_object()) {
+        return std::nullopt;
+    }
+    const json::JsonValue* t = doc->find("__type");
+    if (t == nullptr || !t->is_string()) {
+        return std::nullopt;
+    }
+    return exception_name_from_type(t->text);
+}
 
 Result<GetItemOut> parse_get_item(const std::string& body) {
     auto root = parse_response_object(body);

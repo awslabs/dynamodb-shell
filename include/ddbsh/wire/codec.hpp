@@ -179,6 +179,17 @@ Result<RestoreFromBackupOut> parse_restore_from_backup(const std::string& body);
 Result<RestoreToPitrOut> parse_restore_to_pitr(const std::string& body);
 Result<TransactWriteItemsOut> parse_transact_write_items(const std::string& body);
 
+// ---- Retry classification helper (HT-1) ------------------------------------
+/// If `body` is a DynamoDB `__type` error document, return its bare exception
+/// name (the substring after the last '#', matching what parse_* reports);
+/// otherwise std::nullopt. A success body or a malformed/non-object body yields
+/// nullopt. WireClient's retry path (wire_client.cpp) uses this to decide
+/// whether a service error is transient (is_transient_wire_error) BEFORE
+/// parsing, so the same `__type` body is re-parsed on exhaustion to the exact
+/// byte-identical error string. Keeping the classification in the codec (not a
+/// second JSON peek in WireClient) avoids a divergent parser.
+std::optional<std::string> error_type_name(const std::string& body);
+
 }  // namespace ddbsh::wire
 
 #endif  // DDBSH_WIRE_CODEC_HPP

@@ -43,6 +43,10 @@ async function main() {
         // proxy signs with the host's default AWS credential chain.
         table: TABLE,
         label: "P6f-b WASM smoke — ddbsh FETCH edition over the REAL ddbsh-web-proxy (real DynamoDB)",
+        // HT-1 §6.2: provoke the SHOW TABLES describe burst and assert every
+        // table renders a full status row (no name-only fallback). AWS only —
+        // this is the control-plane throttle path HT-1 fixed.
+        showTablesBurst: Number(process.env.DDBSH_SHOW_TABLES_BURST || "8"),
     });
 
     console.log(pass

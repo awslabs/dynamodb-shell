@@ -30,12 +30,19 @@
 #define DDBSH_WIRE_WIRE_CLIENT_HPP
 
 #include <chrono>
+#include <random>
 #include <string>
+#include <string_view>
 
 #include "ddbsh/iddbclient.hpp"
 #include "ddbsh/wire/transport.hpp"
 
 namespace ddbsh::wire {
+
+/// A serialized DynamoDB request (operation + body). Defined in codec.hpp;
+/// forward-declared here so the private round_trip helper can take it by
+/// reference without the header depending on the full codec surface.
+struct WireRequest;
 
 /// An IDDBClient backed by the SDK-free ddbsh-wire codec and a Transport.
 class WireClient : public ddbsh::IDDBClient {
@@ -102,17 +109,56 @@ public:
     std::string connection_descriptor() const override;
 
 protected:
-    /// The waiter poll delay (D-P6c-6). Default: emscripten_sleep under
-    /// Asyncify (so the browser event loop keeps turning), std::this_thread::
-    /// sleep_for on the host. The single platform `#if` lives in this one
-    /// method; nothing else in WireClient is platform-coupled. A test overrides
-    /// it to a no-op so the waiter loops run instantly (no real sleep in CI).
-    virtual void poll_delay(std::chrono::milliseconds interval);
+    /// The backoff sleep, shared by the two table waiters and the retry path
+    /// (D-P6c-6; extended for HT-1 retry). Default: emscripten_sleep under
+    /// Asyncify (so the browser event loop keeps turning so the fetch/ExtendDB
+    /// call makes progress), std::this_thread::sleep_for on the host. The single
+    /// platform `#if` in WireClient lives in this one method; nothing else is
+    /// platform-coupled. A test overrides it to a no-op so the waiter and retry
+    /// loops run instantly (no real sleep in CI).
+    virtual void backoff_sleep(std::chrono::milliseconds interval);
+
+    /// A uniform random fraction in [0, 1) for full-jitter backoff (HT-1 §4.7).
+    /// Default: a per-instance mt19937_64 seeded once from random_device. A test
+    /// overrides it (e.g. to a constant) so retry timing — and thus attempt
+    /// counts — is deterministic. Per-instance (no global state): the engine may
+    /// run multiple sessions concurrently (shared-steering tenet).
+    virtual double jitter_unit();
+
+    /// Retry attempt cap: 1 initial attempt + (cap - 1) retries. Default 11 is
+    /// parity with the AWS SDK DefaultRetryStrategy (maxRetries = 10) the
+    /// SDK-backed CLI used below the IDDBClient seam, so the SDK-free wire path
+    /// gets the same resilience ceiling (HT-1 §4.5). A test subclass lowers it to
+    /// exercise exhaustion quickly.
+    unsigned max_retry_attempts_ = 11;
 
 private:
+    /// Send one request through the transport, retrying a retryable service
+    /// error (a `__type` document whose exception name is transient, per
+    /// is_transient_wire_error) with bounded exponential backoff + full jitter
+    /// (HT-1 §4.1). Returns the final response body: a success body, a terminal
+    /// error document, or the last retryable error document after the attempt
+    /// cap (so parse_* maps the exact same error string the one-shot path
+    /// would). An opaque transport-level failure (no `__type` to classify) is
+    /// returned immediately (D-HT1-3). This is the single retry seam every
+    /// non-waiter op routes through; the two waiters keep their own poll loop.
+    Result<std::string> send_retrying(std::string_view operation, std::string_view body);
+
+    /// Sleep the full-jitter backoff interval for the given 0-based attempt
+    /// (HT-1 §4.5): a uniform draw in [0, min(cap, base * 2^attempt)], base
+    /// 50ms, cap 1000ms. Calls backoff_sleep for the actual wait.
+    void retry_backoff(unsigned attempt);
+
+    /// serialize -> send_retrying -> parse for an op whose response maps
+    /// straight to its *Out (no composed error, no paging). Defined in
+    /// wire_client.cpp; every instantiation is internal to that TU.
+    template <class Out>
+    Result<Out> round_trip(const WireRequest& req, Result<Out> (*parse)(const std::string&));
+
     Transport& transport_;
     std::string region_;
     std::string endpoint_;
+    std::mt19937_64 rng_{std::random_device{}()};
 };
 
 }  // namespace ddbsh::wire

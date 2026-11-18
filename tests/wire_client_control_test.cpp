@@ -35,16 +35,16 @@ using ddbsh::Value;
 using ddbsh::testing::CannedTransport;
 using ddbsh::wire::WireClient;
 
-// A WireClient whose waiter poll delay is a no-op, so the scripted poll loops
-// run instantly in the test (no real sleep). poll_delay is the single
-// platform-coupled seam (D-P6c-6); overriding it exercises the waiter logic
-// without wall-clock cost.
+// A WireClient whose waiter backoff sleep is a no-op, so the scripted poll loops
+// run instantly in the test (no real sleep). backoff_sleep is the single
+// platform-coupled seam (D-P6c-6; shared with the HT-1 retry path); overriding
+// it exercises the waiter logic without wall-clock cost.
 class NoSleepWireClient : public WireClient {
 public:
     using WireClient::WireClient;
 
 protected:
-    void poll_delay(std::chrono::milliseconds) override {}
+    void backoff_sleep(std::chrono::milliseconds) override {}
 };
 
 // ---- ListTables internal paging --------------------------------------------

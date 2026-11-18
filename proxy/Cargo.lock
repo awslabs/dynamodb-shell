@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "ddbsh-web-proxy"
-version = "0.11.14"
+version = "0.11.15"
 dependencies = [
  "aws-config",
  "aws-credential-types",
