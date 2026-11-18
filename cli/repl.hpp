@@ -38,6 +38,22 @@ struct Terminator {
     std::string word = "go";  ///< the terminator word when !blank_line
 };
 
+// Resolve the TLS CA-bundle path with AWS-CLI-parity precedence (D1 P7, D-P8-2):
+// the explicit `--ca-bundle` flag wins over the `AWS_CA_BUNDLE` environment
+// variable, which in turn wins over the resolved profile's `ca_bundle` config
+// setting (the third, lowest source added in P8). An empty flag string, an
+// empty/unset env value, and an empty/nullopt profile value each do not count
+// as "set". Returns the first source that is set, or nullopt when none is.
+// Pure logic (no SDK, no terminal), so it is unit-testable in the cli-core
+// unit; main.cpp maps the result onto Aws::Client::ClientConfiguration.caFile.
+// The profile value is read in the AWS adapter (ddbsh::aws::profile_ca_bundle)
+// and passed in here, keeping this function the single, offline-testable owner
+// of the precedence contract. Mirrors how the AWS CLI trusts a self-signed
+// endpoint (e.g. a local ExtendDB server).
+std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
+                                             const char* env_value,
+                                             const std::optional<std::string>& profile_value);
+
 // True when `trimmed` (an already-trimmed physical line) is the terminator.
 bool is_terminator_line(std::string_view trimmed, const Terminator& term);
 

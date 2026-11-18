@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.11.16
+        VERSION 0.11.18
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -333,6 +333,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/explain_exec_test.cpp
                    tests/connect_reconnect_test.cpp
                    tests/cli_exit_code_test.cpp
+                   tests/cli_ca_bundle_test.cpp
                    tests/wire_json_reader_test.cpp
                    tests/wire_parse_roundtrip_test.cpp
                    tests/wire_parse_control_test.cpp
@@ -381,6 +382,22 @@ if(DDBSH_BUILD_TESTS)
             PRIVATE ddbsh::wire ddbsh::aws ddbsh_warnings GTest::gtest)
         add_test(NAME ddbsh_wire_serialize_diff COMMAND ddbsh-wire-diff-tests)
         add_dependencies(ddbsh-tests ddbsh-wire-diff-tests)
+
+        # P8 (D-P8-1/5): the AWS-adapter profile `ca_bundle` reader
+        # (ddbsh::aws::profile_ca_bundle) read offline against a temp AWS config
+        # file. It needs the SDK (ddbsh::aws) and the SDK config cache, so it is
+        # built only with DDBSH_BUILD_AWS. It provides its own main() to point
+        # AWS_CONFIG_FILE at the temp file BEFORE InitAPI and wrap the process in
+        # one AwsApiGuard, so it links GTest::gtest (not gtest_main). It makes no
+        # network call (a pure config-file parse). add_dependencies ties it to
+        # ddbsh-tests so run-tests' native step builds it and ctest runs it.
+        add_executable(ddbsh-aws-profile-ca-bundle-tests tests/aws_profile_ca_bundle_test.cpp)
+        target_include_directories(ddbsh-aws-profile-ca-bundle-tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+        target_link_libraries(ddbsh-aws-profile-ca-bundle-tests
+            PRIVATE ddbsh::aws ddbsh_warnings GTest::gtest)
+        add_test(NAME ddbsh_aws_profile_ca_bundle COMMAND ddbsh-aws-profile-ca-bundle-tests)
+        add_dependencies(ddbsh-tests ddbsh-aws-profile-ca-bundle-tests)
     endif()
 
     # D19 (P4d): the embedding API's own misuse messages must never appear in a

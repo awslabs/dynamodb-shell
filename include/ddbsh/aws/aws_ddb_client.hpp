@@ -125,6 +125,30 @@ private:
     std::string profile_;                                          // explicit credential profile
 };
 
+/// Read the `ca_bundle` setting from the resolved AWS config profile (D-P8-1/3).
+///
+/// The AWS SDK for C++ (1.11.916, the version ddbsh links) does NOT populate
+/// ClientConfiguration.caFile from a profile's `ca_bundle` key on its own — the
+/// token appears nowhere in the SDK. ddbsh therefore reads it explicitly here,
+/// via Aws::Config::GetCachedConfigProfile(profile).GetValue("ca_bundle") (the
+/// config file, where `aws configure set ca_bundle --profile <p>` writes it, NOT
+/// the credentials file). This is the lowest-precedence CA-bundle source: the
+/// CLI passes the result to ddbsh::cli::resolve_ca_bundle beneath the
+/// `--ca-bundle` flag and the `AWS_CA_BUNDLE` environment variable (D-P8-2).
+///
+/// The profile honored is the SAME one the credentials resolve from (D-P8-3):
+/// `explicit_profile` when non-empty, else `AWS_PROFILE`, else
+/// `AWS_DEFAULT_PROFILE`, else `"default"`.
+///
+/// @param explicit_profile  an explicitly selected profile (e.g. an embedder's
+///                          OpenOptions profile); nullopt/empty => env/default.
+/// @return the profile's `ca_bundle` value (assigned to caFile verbatim — no `~`
+///         expansion, D-P8-4), or nullopt when the key is absent/empty.
+/// @note Requires Aws::InitAPI to have run (the SDK config cache). An isolated
+///       test pointing AWS_CONFIG_FILE at a temp file must set it BEFORE InitAPI
+///       or call Aws::Config::ReloadCachedConfigFile() after writing it (D-P8-5).
+std::optional<std::string> profile_ca_bundle(const std::optional<std::string>& explicit_profile);
+
 }  // namespace ddbsh::aws
 
 #endif  // DDBSH_AWS_AWS_DDB_CLIENT_HPP

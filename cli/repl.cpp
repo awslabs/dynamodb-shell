@@ -55,6 +55,23 @@ std::string_view strip_quotes(std::string_view s) {
 
 }  // namespace
 
+std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
+                                             const char* env_value,
+                                             const std::optional<std::string>& profile_value) {
+    // Precedence (D-P8-2): flag > env > profile > none. An empty value from any
+    // source does not count as "set".
+    if (flag_value.has_value() && !flag_value->empty()) {
+        return *flag_value;
+    }
+    if (env_value != nullptr && env_value[0] != '\0') {
+        return std::string(env_value);
+    }
+    if (profile_value.has_value() && !profile_value->empty()) {
+        return *profile_value;
+    }
+    return std::nullopt;
+}
+
 bool is_terminator_line(std::string_view trimmed, const Terminator& term) {
     if (term.blank_line) {
         return trimmed.empty();
