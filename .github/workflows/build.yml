@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison libzstd-dev libjitterentropy-dev
+          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison libzstd-dev
 
       - name: Install AWS SDK for C++
         run: |
@@ -25,20 +25,23 @@ jobs:
           cd aws-sdk-cpp
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF -DOPENSSL_USE_STATIC_LIBS=OFF
           make && sudo make install
 
       - name: Build binaries
         run: |
           mkdir build
           cd build
-          # The AWS SDK links the system STATIC libcrypto.a, which on this
-          # runner is built with provider deps (zstd compression, jitterentropy
-          # seed source) and references ZSTD_* / jent_* symbols. Put those libs
-          # at the very end of every link line (CMAKE_CXX_STANDARD_LIBRARIES is
-          # appended after the target's own libraries, so they resolve
-          # libcrypto's references even with --as-needed).
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES="-lzstd -ljitterentropy"
+          # Primary fix for the static-libcrypto provider-dep problem: the AWS
+          # SDK above is configured with OPENSSL_USE_STATIC_LIBS=OFF, so it links
+          # the SHARED libcrypto.so, which carries its own DT_NEEDED for its
+          # provider deps (zstd, jitterentropy, ...) — no need to name each one.
+          # -lzstd is kept as a cheap, always-available belt-and-suspenders in
+          # case any static OpenSSL object still slips into the link; appended
+          # last (CMAKE_CXX_STANDARD_LIBRARIES goes after the target's own libs,
+          # so it resolves even under --as-needed) and is a harmless no-op when
+          # crypto is shared.
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES="-lzstd"
           make
 
       - name: Upload binaries as artifacts
