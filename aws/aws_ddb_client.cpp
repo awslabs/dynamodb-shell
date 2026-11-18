@@ -18,11 +18,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 #include <type_traits>
 
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/core/config/AWSProfileConfig.h>
+#include <aws/core/config/ConfigAndCredentialsCacheManager.h>
 #include <aws/core/utils/HashingUtils.h>
 #include <aws/dynamodb/model/AttributeValue.h>
 #include <aws/dynamodb/model/BackupStatus.h>
@@ -2144,6 +2147,37 @@ std::string AwsDDBClient::connection_descriptor() const {
     // is no wire proxy. SHOW CONNECTION prefixes the library version and the
     // session region/endpoint, so this contributes only the transport kind.
     return "aws-sdk-cpp (direct DynamoDB)";
+}
+
+std::optional<std::string> profile_ca_bundle(const std::optional<std::string>& explicit_profile) {
+    // Resolve the profile name the SAME way the credentials resolve (D-P8-3):
+    // explicit profile, else AWS_PROFILE, else AWS_DEFAULT_PROFILE, else
+    // "default". This keeps the trust bundle following the same profile as the
+    // credentials.
+    std::string profile;
+    if (explicit_profile.has_value() && !explicit_profile->empty()) {
+        profile = *explicit_profile;
+    } else if (const char* p = std::getenv("AWS_PROFILE"); p != nullptr && p[0] != '\0') {
+        profile = p;
+    } else if (const char* d = std::getenv("AWS_DEFAULT_PROFILE"); d != nullptr && d[0] != '\0') {
+        profile = d;
+    } else {
+        profile = "default";
+    }
+
+    // `ca_bundle` is a CONFIG-file setting (written under [profile <p>] in
+    // ~/.aws/config by `aws configure set ca_bundle --profile <p>`), so read it
+    // from the config-profile cache, NOT the credentials cache (D-P8-1). The SDK
+    // captures every `key = value` line of a profile into its key/value map, so
+    // an arbitrary key like `ca_bundle` is available via GetValue; the call
+    // returns "" when the key (or the profile) is absent.
+    const Aws::Config::Profile p =
+        Aws::Config::GetCachedConfigProfile(Aws::String(profile.c_str()));
+    const Aws::String ca = p.GetValue("ca_bundle");
+    if (ca.empty()) {
+        return std::nullopt;
+    }
+    return std::string(ca.c_str());
 }
 
 }  // namespace ddbsh::aws

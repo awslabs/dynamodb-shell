@@ -40,10 +40,11 @@
 //                set the batch terminator (no argument => a blank line)
 //   --ca-bundle <file>
 //                trust a custom/self-signed TLS CA bundle, mapped to
-//                ClientConfiguration.caFile (AWS-CLI parity, D1). Also honors
-//                the AWS_CA_BUNDLE environment variable; the flag wins. Needed
-//                to reach an endpoint with a self-signed cert (e.g. a local
-//                ExtendDB server).
+//                ClientConfiguration.caFile (AWS-CLI parity, D1). Precedence
+//                (D-P8-2): this flag > the AWS_CA_BUNDLE environment variable >
+//                the resolved profile's `ca_bundle` config setting > system
+//                trust. Needed to reach an endpoint with a self-signed cert
+//                (e.g. a local ExtendDB server).
 
 #include <csignal>
 #include <cstdio>
@@ -226,15 +227,21 @@ int main(int argc, char** argv) {
     const std::string region = env_or("AWS_REGION", env_or("AWS_DEFAULT_REGION", "us-east-1"));
     const std::string endpoint = env_or("DDBSH_ENDPOINT_OVERRIDE", "");
 
-    // Resolve the TLS CA bundle with AWS-CLI-parity precedence (D1): the
-    // --ca-bundle flag wins over the AWS_CA_BUNDLE environment variable. When
-    // set, it is mapped onto ClientConfiguration.caFile so the SDK trusts a
-    // custom/self-signed endpoint cert (e.g. a local ExtendDB server). The AWS
-    // SDK for C++ does NOT honor AWS_CA_BUNDLE itself, so the CLI wires it here.
-    // AwsDDBClient::rebuild() carries caFile across reconnect/CONNECT because it
-    // builds every client off the stored base_config.
+    // Resolve the TLS CA bundle with AWS-CLI-parity precedence (D1, D-P8-2):
+    // the --ca-bundle flag wins over the AWS_CA_BUNDLE environment variable,
+    // which in turn wins over the resolved profile's `ca_bundle` config setting
+    // (the third, lowest source, added in P8). When set, it is mapped onto
+    // ClientConfiguration.caFile so the SDK trusts a custom/self-signed endpoint
+    // cert (e.g. a local ExtendDB server). The AWS SDK for C++ (1.11.916) honors
+    // NEITHER AWS_CA_BUNDLE NOR a profile `ca_bundle` on its own, so the CLI
+    // wires both here: profile_ca_bundle() reads the profile value (it needs
+    // InitAPI, already run by AwsApiGuard above), and resolve_ca_bundle() owns
+    // the precedence. AwsDDBClient::rebuild() carries caFile across
+    // reconnect/CONNECT because it builds every client off the stored
+    // base_config.
+    const std::optional<std::string> profile_ca = ddbsh::aws::profile_ca_bundle(std::nullopt);
     const std::optional<std::string> ca_bundle =
-        ddbsh::cli::resolve_ca_bundle(ca_bundle_flag, std::getenv("AWS_CA_BUNDLE"));
+        ddbsh::cli::resolve_ca_bundle(ca_bundle_flag, std::getenv("AWS_CA_BUNDLE"), profile_ca);
 
     std::optional<ddbsh::aws::AwsDDBClient> client_storage;
     if (ca_bundle.has_value()) {

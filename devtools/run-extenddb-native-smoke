@@ -30,8 +30,9 @@
 #      the expected status tokens / items appear (CREATE / INSERT / SELECT item /
 #      GetItem / UPDATE / DELETE / EXPLAIN GetItem plan / COMMIT / DROP),
 #   6. re-run one command with AWS_CA_BUNDLE (instead of --ca-bundle) to prove
-#      the env path, and once with NEITHER to prove it fails closed on the
-#      self-signed cert,
+#      the env path, once with NEITHER to prove it fails closed on the
+#      self-signed cert, and once with the CA bundle set ONLY via the profile's
+#      `ca_bundle` config key (no flag, no env) to prove the P8 profile path,
 #   7. capture everything into
 #      discussions/test-extenddb-native-<HEAD-short>.log.
 #
@@ -294,6 +295,40 @@ if grep -qiE "certificate|curlCode|self.signed|ssl|handshake|error" "$NOCA_OUT";
     echo "  PASS: without a CA bundle the TLS handshake fails closed" | tee -a "$LOG_FILE"
 else
     echo "  FAIL: expected a TLS trust failure without a CA bundle" | tee -a "$LOG_FILE" >&2
+    FAILS=$((FAILS + 1))
+fi
+
+# --- Profile ca_bundle path (P8): no flag, no env — trust via the profile ----
+# Write `ca_bundle` into the isolated AWS CONFIG file under the dedicated
+# profile (exactly what `aws configure set ca_bundle --profile <p>` does), then
+# run with NEITHER --ca-bundle NOR AWS_CA_BUNDLE and assert the handshake
+# succeeds purely from the profile key (D-P8-1..3). The real ~/.aws is never
+# touched (AWS_CONFIG_FILE points at the temp file).
+echo "=== native ExtendDB smoke: profile ca_bundle path ===" | tee -a "$LOG_FILE"
+cat >>"$AWS_CFG_FILE" <<EOF
+[profile $PROFILE]
+ca_bundle = $CA_BUNDLE
+EOF
+# Verify the key was written where the SDK reads it (config file), AWS-CLI style.
+if command -v aws >/dev/null 2>&1; then
+    GOT_CA="$(AWS_CONFIG_FILE="$AWS_CFG_FILE" aws configure get ca_bundle --profile "$PROFILE" 2>/dev/null || true)"
+    echo "  aws configure get ca_bundle --profile $PROFILE => ${GOT_CA:-<empty>}" | tee -a "$LOG_FILE"
+fi
+PROF_OUT="$WORK_DIR/profca.out"
+set +e
+run_ddbsh >"$PROF_OUT" 2>&1 <<EOF
+create table $TABLE ( id number ) primary key ( id hash );
+insert into $TABLE ( id, name ) values ( 7, "grace" );
+select * from $TABLE where id = 7;
+drop table $TABLE;
+EOF
+PROF_RC=$?
+set -e
+cat "$PROF_OUT" | tee -a "$LOG_FILE"
+if [ "$PROF_RC" -eq 0 ] && grep -qF "grace" "$PROF_OUT"; then
+    echo "  PASS: profile ca_bundle trusts the self-signed cert (no flag, no env)" | tee -a "$LOG_FILE"
+else
+    echo "  FAIL: profile ca_bundle path did not connect/return the item" | tee -a "$LOG_FILE" >&2
     FAILS=$((FAILS + 1))
 fi
 
