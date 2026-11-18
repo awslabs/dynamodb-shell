@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison libzstd-dev
+          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison libzstd-dev libjitterentropy-dev
 
       - name: Install AWS SDK for C++
         run: |
@@ -33,11 +33,12 @@ jobs:
           mkdir build
           cd build
           # The AWS SDK links the system STATIC libcrypto.a, which on this
-          # runner is built with zstd support and references ZSTD_* symbols.
-          # Put -lzstd at the very end of every link line (CMAKE_CXX_STANDARD_
-          # LIBRARIES is appended after the target's own libraries, so it
-          # resolves libcrypto's reference even with --as-needed).
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES=-lzstd
+          # runner is built with provider deps (zstd compression, jitterentropy
+          # seed source) and references ZSTD_* / jent_* symbols. Put those libs
+          # at the very end of every link line (CMAKE_CXX_STANDARD_LIBRARIES is
+          # appended after the target's own libraries, so they resolve
+          # libcrypto's references even with --as-needed).
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES="-lzstd -ljitterentropy"
           make
 
       - name: Upload binaries as artifacts
