@@ -8,14 +8,16 @@ on:
 
 jobs:
   build-linux:
-    # Pinned to 24.04 LTS, not ubuntu-latest. ubuntu-latest moved to 26.04,
-    # whose OpenSSL 3.5 static libcrypto.a pulls a jitterentropy seed source
-    # (jent_* symbols) that needs an external libjitterentropy the image does
-    # not package — an unwinnable static-link chase. 24.04 ships OpenSSL 3.0,
-    # whose static libcrypto has no such provider deps, so the static AWS SDK
-    # links clean. Revisit when a shared AWS SDK build (or a 26.04 image that
-    # packages the provider libs) is adopted.
-    runs-on: ubuntu-24.04
+    # Builds the AWS SDK for C++ SHARED (and therefore OpenSSL shared) so the
+    # job runs on current ubuntu-latest. A shared libcrypto.so records its own
+    # DT_NEEDED entries for its provider dependencies (zstd, jitterentropy, …),
+    # so the final link and the runtime loader resolve them transitively — no
+    # library has to be named by hand to satisfy a static-libcrypto provider
+    # dep. This replaces the earlier ubuntu-24.04 pin, which only worked because
+    # 24.04's OpenSSL 3.0 static libcrypto.a happened to carry no such provider
+    # objects. ddbsh-aws stays STATIC and links the one shared SDK .so, so there
+    # is a single copy of the SDK's global state (no double-InitAPI hazard).
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -24,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison libzstd-dev
+          sudo apt-get -y install libcurl4-openssl-dev libssl-dev build-essential gcc g++ make cmake libreadline-dev flex bison
 
       - name: Install AWS SDK for C++
         run: |
@@ -32,19 +34,26 @@ jobs:
           cd aws-sdk-cpp
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=ON -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=ON
           make && sudo make install
+          # The SDK .so set is installed under /usr/local/lib; refresh the
+          # loader cache so the produced ddbsh binary finds it at runtime.
+          sudo ldconfig
 
       - name: Build binaries
         run: |
           mkdir build
           cd build
-          # -lzstd is a cheap, always-available belt-and-suspenders: appended
-          # last via CMAKE_CXX_STANDARD_LIBRARIES (after the target's own libs,
-          # so it resolves even under --as-needed), and a harmless no-op if the
-          # static libcrypto on this image does not reference zstd.
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES="-lzstd"
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF
           make
+
+      - name: Verify the binary links and runs
+        run: |
+          # A missing-.so runtime failure must not hide behind a successful
+          # link: actually run the binary (and confirm it is dynamically linked
+          # against the shared libcrypto, not a static archive).
+          ./build/ddbsh -c "quit"
+          ldd ./build/ddbsh | grep -i crypto
 
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v4
