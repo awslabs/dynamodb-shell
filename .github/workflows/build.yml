@@ -8,7 +8,14 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04 LTS, not ubuntu-latest. ubuntu-latest moved to 26.04,
+    # whose OpenSSL 3.5 static libcrypto.a pulls a jitterentropy seed source
+    # (jent_* symbols) that needs an external libjitterentropy the image does
+    # not package — an unwinnable static-link chase. 24.04 ships OpenSSL 3.0,
+    # whose static libcrypto has no such provider deps, so the static AWS SDK
+    # links clean. Revisit when a shared AWS SDK build (or a 26.04 image that
+    # packages the provider libs) is adopted.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
@@ -25,22 +32,17 @@ jobs:
           cd aws-sdk-cpp
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF -DOPENSSL_USE_STATIC_LIBS=OFF
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local/ -DCMAKE_INSTALL_PREFIX=/usr/local/ -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=OFF
           make && sudo make install
 
       - name: Build binaries
         run: |
           mkdir build
           cd build
-          # Primary fix for the static-libcrypto provider-dep problem: the AWS
-          # SDK above is configured with OPENSSL_USE_STATIC_LIBS=OFF, so it links
-          # the SHARED libcrypto.so, which carries its own DT_NEEDED for its
-          # provider deps (zstd, jitterentropy, ...) — no need to name each one.
-          # -lzstd is kept as a cheap, always-available belt-and-suspenders in
-          # case any static OpenSSL object still slips into the link; appended
-          # last (CMAKE_CXX_STANDARD_LIBRARIES goes after the target's own libs,
-          # so it resolves even under --as-needed) and is a harmless no-op when
-          # crypto is shared.
+          # -lzstd is a cheap, always-available belt-and-suspenders: appended
+          # last via CMAKE_CXX_STANDARD_LIBRARIES (after the target's own libs,
+          # so it resolves even under --as-needed), and a harmless no-op if the
+          # static libcrypto on this image does not reference zstd.
           cmake .. -DCMAKE_BUILD_TYPE=Release -DDDBSH_BUILD_TESTS=OFF -DCMAKE_CXX_STANDARD_LIBRARIES="-lzstd"
           make
 
