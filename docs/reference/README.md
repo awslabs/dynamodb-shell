@@ -103,7 +103,7 @@ The engine drives this command set end to end against real DynamoDB:
   A partial-hash predicate becomes a Scan with a `FilterExpression`:
 
   ```
-  ddbsh$ explain select * from foo.firstgsi where a = 3;
+  us-east-1> explain select * from foo.firstgsi where a = 3;
   Scan({
      "TableName":   "foo",
      "IndexName":   "firstgsi",
@@ -124,7 +124,7 @@ The engine drives this command set end to end against real DynamoDB:
   A full-hash predicate becomes a Query with a `KeyConditionExpression`:
 
   ```
-  ddbsh$ explain select * from foo.firstgsi where a = 3 and b = 4 and c = 5;
+  us-east-1> explain select * from foo.firstgsi where a = 3 and b = 4 and c = 5;
   Query({
      "TableName":   "foo",
      "IndexName":   "firstgsi",
@@ -259,7 +259,7 @@ and — below the offending input line — a compiler-style caret (`^`) pointing
 the exact error column:
 
 ```
-ddbsh$ create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
+us-east-1> create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
 [1, 68] syntax error at ,
 create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c) range) projecting all ))
                                                                   ^
