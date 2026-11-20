@@ -314,8 +314,10 @@ console.log("CSP");
     check(!/unsafe-inline|'unsafe-eval'/.test(m ? m[1] : ""), "no 'unsafe-inline' or 'unsafe-eval'");
     check(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "no inline <script> in index.html");
     check(!/\sstyle=/i.test(html) && !/<style/i.test(html), "no inline style in index.html");
-    check(ALLOWED_HOSTS.every((h) => /^dynamodb(-fips)?\.[a-z0-9-]+\.(amazonaws\.com|api\.aws)$/.test(h)),
-        "every allowed host is dynamodb[-fips].<region>.{amazonaws.com,api.aws}");
+    check(ALLOWED_HOSTS.every((h) => /^(search-)?dynamodb(-fips)?\.[a-z0-9-]+\.(amazonaws\.com|api\.aws)$/.test(h)),
+        "every allowed host is [search-]dynamodb[-fips].<region>.{amazonaws.com,api.aws}");
+    check(ALLOWED_HOSTS.includes("search-dynamodb.us-east-1.amazonaws.com"),
+        "the SearchVectors host is allowed");
 }
 
 // ---- summary ---------------------------------------------------------------

@@ -4,10 +4,10 @@
   "esbuild_version": "0.28.2",
   "build_command": "esbuild entry.mjs --bundle --format=esm --platform=browser --target=es2022 --minify --legal-comments=none --outfile=aws-sdk-dynamodb.mjs",
   "rebuild": "devtools/vendor-aws-sdk-js (verify: devtools/vendor-aws-sdk-js --check)",
-  "built_utc": "2026-11-20T22:21:02Z",
+  "built_utc": "2026-11-20T23:08:04Z",
   "sha256": {
     "aws-sdk-dynamodb.mjs": "f1dafaa4ac68a4ede3ce232189683febe76b303819cb4de69c4e16a9a42e8f8b",
-    "allowed-hosts.mjs": "5c29bd2460ca6d90aabeebf48acbef04dbda6a4b0ea925d396625c5f387e3b4b",
+    "allowed-hosts.mjs": "1ee18c7c2577c627cdc25aa038999e176255e2f18bccf817cd76b69d1a23834b",
     "THIRD-PARTY-NOTICES.txt": "97422cc51d1010e6aadb3f91c1b2abfc96b868f494e88f08e5fb9352f9734f42"
   }
 }

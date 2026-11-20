@@ -111,6 +111,15 @@ console.log("send: passthrough");
     check(calls[0].auth.startsWith("AWS4-HMAC-SHA256 Credential=" + KEY + "/"), "request is SigV4-signed");
     eq(calls[0].token, TOKEN, "session token header sent");
 }
+{
+    // The SDK's endpoint rules route SearchVectors to search-dynamodb.<region>;
+    // that host is in ALLOWED_HOSTS, so vector search is not refused.
+    const { bridge, calls } = bridgeWith([{ status: 200, body: '{"Items":[]}' }]);
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("SearchVectors", '{"TableName":"t"}'), '{"Items":[]}', "SearchVectors body returned");
+    eq(calls[0].hostname, "search-dynamodb.us-east-1.amazonaws.com", "SearchVectors goes to the search host");
+    eq(calls[0].target, "DynamoDB_20120810.SearchVectors", "SearchVectors target");
+}
 
 // ---- __type error document returned verbatim --------------------------------
 console.log("send: service error");
@@ -210,6 +219,7 @@ console.log("connect");
         ["us-east-1", "https://dynamodb.us-east-1.amazonaws.com/#f", /query or fragment/],
         ["us-east-1", "https://dynamodb.us-east-2.amazonaws.com", /in us-east-2, not us-east-1/],
         ["us-east-1", "https://dynamodb.us-east-1.amazonaws.com.", /not an AWS DynamoDB endpoint/],
+        ["us-east-1", "https://search-dynamodb.us-east-1.amazonaws.com", /not an AWS DynamoDB endpoint/],
         ["us-east-1", "not a url", /not a valid URL/],
         ["mars-north-1", "", /not a known AWS region/],
         ["cn-north-1", "", /not a known AWS region/],

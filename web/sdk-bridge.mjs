@@ -167,7 +167,8 @@ export function createSdkBridge({
         if (url.search !== "" || url.hash !== "") {
             return fail("a query or fragment is not allowed");
         }
-        if (!hostSet.has(url.hostname)) {
+        const label = url.hostname.split(".")[0];
+        if (!hostSet.has(url.hostname) || (label !== "dynamodb" && label !== "dynamodb-fips")) {
             return fail("not an AWS DynamoDB endpoint");
         }
         const hostRegion = url.hostname.split(".")[1];

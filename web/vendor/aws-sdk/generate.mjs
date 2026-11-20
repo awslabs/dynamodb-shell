@@ -48,7 +48,9 @@ for (const p of partitionsInfo.partitions) {
             continue;
         }
         regions.push(r);
-        for (const label of ["dynamodb", "dynamodb-fips"]) {
+        // `search-dynamodb[-fips]` is where the SDK's endpoint rules route
+        // SearchVectors (vector search); the other operations use `dynamodb[-fips]`.
+        for (const label of ["dynamodb", "dynamodb-fips", "search-dynamodb", "search-dynamodb-fips"]) {
             for (const suffix of suffixes) {
                 hosts.push(`${label}.${r}.${suffix}`);
             }
@@ -69,7 +71,8 @@ const allowed = [
     "// @aws-sdk/client-dynamodb partition data. Do not edit by hand.",
     "//",
     "// REGIONS: every region of the `aws` and `aws-us-gov` partitions.",
-    "// ALLOWED_HOSTS: dynamodb[-fips].<region>.{amazonaws.com,api.aws} for each.",
+    "// ALLOWED_HOSTS: [search-]dynamodb[-fips].<region>.{amazonaws.com,api.aws} for",
+    "// each (the SDK routes SearchVectors to the search-dynamodb hosts).",
     "// SDK_VERSION: the bundled @aws-sdk/client-dynamodb version (SHOW CONNECTION).",
     "// The browser edition refuses every other DynamoDB endpoint (D-P9-02-5), and",
     "// index.html's CSP connect-src lists exactly these hosts (D-P9-02-9).",
