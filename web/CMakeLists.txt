@@ -61,6 +61,7 @@ target_link_options(ddbsh-wasm PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
 #   vendor/aws-sdk/{aws-sdk-dynamodb.mjs, allowed-hosts.mjs,
 #                   PROVENANCE.json, THIRD-PARTY-NOTICES.txt}    the pinned SDK
 #   ddbsh-node.mjs        the CLI-shaped Node shim the web golden gate drives
+#   live-smoke.mjs        the live UI-path smoke devtools/run-web-smoke runs
 #   app-core.test.mjs sdk-bridge.test.mjs   the offline Node unit tests
 #   package.json          marks the dir as ES modules for Node
 add_custom_command(TARGET ddbsh-wasm POST_BUILD
@@ -71,6 +72,7 @@ add_custom_command(TARGET ddbsh-wasm POST_BUILD
             "${CMAKE_CURRENT_SOURCE_DIR}/sdk-bridge.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/styles.css"
             "${CMAKE_CURRENT_SOURCE_DIR}/ddbsh-node.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/live-smoke.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/app-core.test.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/sdk-bridge.test.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
