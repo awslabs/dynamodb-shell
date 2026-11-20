@@ -13,10 +13,10 @@ profiles, `AWS_PROFILE`, container/instance roles, and `role_arn` +
 
 ```
 $ ddbsh
-ddbsh - version 0.11.18
+ddbsh - version 0.11.19
 us-east-1>
 ```
 
-For the full five-configuration overview, see the
+For the full three-configuration overview, see the
 [configurations index](README.md).
 

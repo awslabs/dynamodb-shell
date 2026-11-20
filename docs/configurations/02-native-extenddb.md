@@ -63,7 +63,7 @@ ddbsh then behaves exactly as it does against AWS — the `(*)` suffix on the pr
 indicates the non-standard endpoint:
 
 ```
-ddbsh - version 0.11.18
+ddbsh - version 0.11.19
 us-east-1 (*)>
 ```
 
@@ -109,5 +109,5 @@ ca_bundle = /home/you/.extenddb/tls/cert.pem
 `ddbsh` trusts ExtendDB's cert purely from the profile key.
 
 
-For the full five-configuration overview, see the
+For the full three-configuration overview, see the
 [configurations index](README.md).
