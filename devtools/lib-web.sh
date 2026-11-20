@@ -91,7 +91,10 @@ web_offline_gates() {
 
 # web_mint_credentials <dir> <profile>...
 # Mint short-term STS session credentials for each profile (aws sts
-# get-session-token, DDBSH_WEB_CRED_SECONDS, default 7200) and write
+# get-session-token, DDBSH_WEB_CRED_SECONDS, default 7200; for a profile that
+# cannot call it — a role_arn/source_profile or SSO profile — fall back to
+# `aws configure export-credentials --format process`, which must yield ASIA…
+# credentials) and write
 # <dir>/creds.json = { "<profile>": {AccessKeyId, SecretAccessKey,
 # SessionToken, Expiration}, ... } — the DDBSH_WEB_CREDS_FILE format
 # web/ddbsh-node.mjs reads. <dir> must be private (0700); files are 0600.
@@ -107,17 +110,23 @@ web_mint_credentials() {
         for p in "$@"; do
             if ! AWS_STS_REGIONAL_ENDPOINTS=regional aws sts get-session-token \
                     --duration-seconds "$seconds" --profile "$p" --region us-east-1 \
-                    --output json >"$dir/sts-$p.json"; then
-                echo "error: could not mint short-term credentials for profile '$p' (aws sts get-session-token)." >&2
-                exit 1
+                    --output json >"$dir/sts-$p.json" 2>"$dir/sts-$p.err"; then
+                if ! AWS_STS_REGIONAL_ENDPOINTS=regional aws configure export-credentials \
+                        --profile "$p" --format process >"$dir/sts-$p.json"; then
+                    cat "$dir/sts-$p.err" >&2
+                    echo "error: could not mint short-term credentials for profile '$p' (sts get-session-token and configure export-credentials both failed)." >&2
+                    exit 1
+                fi
             fi
+            rm -f "$dir/sts-$p.err"
         done
         "$NODE_BIN" -e '
             const fs = require("node:fs");
             const [dir, ...profiles] = process.argv.slice(1);
             const out = {};
             for (const p of profiles) {
-                const c = JSON.parse(fs.readFileSync(`${dir}/sts-${p}.json`, "utf8")).Credentials;
+                const doc = JSON.parse(fs.readFileSync(`${dir}/sts-${p}.json`, "utf8"));
+                const c = doc.Credentials || doc; // STS JSON, or credential-process JSON
                 if (!c || !/^ASIA/.test(c.AccessKeyId || "") || !c.SessionToken) {
                     console.error(`error: profile ${p}: STS did not return short-term (ASIA…) credentials`);
                     process.exit(1);

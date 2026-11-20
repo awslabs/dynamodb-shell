@@ -3,7 +3,7 @@
 //
 // app-core.test.mjs — Node unit tests for the DOM-free P6e UI logic (D-P6e-3).
 //
-// Zero dependencies (plain asserts + an exit code, like web/harness.mjs), no
+// Zero dependencies (plain asserts + an exit code, like web/sdk-bridge.test.mjs), no
 // DOM, no WASM: run directly with `node web/app-core.test.mjs`, or via
 // devtools/run-web-smoke alongside the engine smoke. Covers the genuinely new
 // P6e logic — the history ring, the prompt builder, the transcript-entry model,
