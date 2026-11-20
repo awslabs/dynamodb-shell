@@ -111,6 +111,10 @@ Result<std::string> JsSdkTransport::send(std::string_view operation, std::string
     }
     if (env[0] == '0') {
         // Success body OR a `__type` error document; the codec decides.
+        // TODO(fidelity): the request id is not returned (Error.request_id
+        // stays nullopt), so composed service errors lack the `<RID>` segment
+        // the CLI prints. CORS exposes x-amzn-RequestId; closing this needs a
+        // Transport return-type change (WireResponse). Deferred, D-P9-02-10.
         return env.substr(1);
     }
     return fail(Errc::service_error, "wire transport: " + env.substr(1));
