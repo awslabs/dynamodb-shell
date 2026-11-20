@@ -123,4 +123,59 @@ TEST(CliExitCode, FailInFirstBatchSucceedInSecondExitsZero) {
     EXPECT_EQ(run(source, /*abort_on_error=*/false), 0);
 }
 
+// ---- the sink overload (P9, D-P9-02-11: the browser runScript path) --------
+// The sink/report_error overload drives the same loop the FD overload does; it
+// is what web/bindings.cpp runScript buffers into ordered segments. Pin that it
+// delivers result fragments and errors in emission order and returns the same
+// exit code.
+
+struct RecordingSink : ddbsh::OutcomeSink {
+    const ddbsh::render::Renderer& renderer;
+    std::string& log;
+    RecordingSink(const ddbsh::render::Renderer& r, std::string& l) : renderer(r), log(l) {}
+    void emit(const ddbsh::ExecOutcome& fragment) override {
+        log += "O:" + renderer.render(fragment);
+    }
+};
+
+int run_to_sink(const std::string& source, bool abort_on_error, std::string& log) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    ddbsh::render::Renderer renderer;
+    std::istringstream in(source);
+    StreamLineSource src(in);
+    Terminator term;
+    RecordingSink sink(renderer, log);
+    return run_source(session, renderer, src, term, abort_on_error, sink,
+                      [&log](const std::string& rendered) { log += "E:" + rendered; });
+}
+
+TEST(CliExitCodeSink, OrderedOutputAndErrorsWithSameExitCode) {
+    std::string log;
+    // CONNECT emits a status token (stdout); the INSERT fails (error channel).
+    const int rc = run_to_sink("connect us-east-2;\n" + std::string(kFail) + "\n",
+                               /*abort_on_error=*/false, log);
+    EXPECT_EQ(rc, 1);
+    const auto o = log.find("O:CONNECT");
+    const auto e = log.find("E:");
+    ASSERT_NE(o, std::string::npos) << log;
+    ASSERT_NE(e, std::string::npos) << log;
+    EXPECT_LT(o, e) << log;
+}
+
+TEST(CliExitCodeSink, AbortOnErrorStopsBeforeLaterStatements) {
+    std::string log;
+    const int rc = run_to_sink(std::string(kFail) + "\nconnect us-east-2;\n",
+                               /*abort_on_error=*/true, log);
+    EXPECT_EQ(rc, 1);
+    EXPECT_EQ(log.find("O:CONNECT"), std::string::npos) << log;
+}
+
+TEST(CliExitCodeSink, QuitStopsTheSource) {
+    std::string log;
+    const int rc = run_to_sink("quit;\ngo\nconnect us-east-2;\n", /*abort_on_error=*/false, log);
+    EXPECT_EQ(rc, 0);
+    EXPECT_EQ(log.find("O:CONNECT"), std::string::npos) << log;
+}
+
 }  // namespace
