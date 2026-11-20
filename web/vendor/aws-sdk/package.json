@@ -1,0 +1,14 @@
+{
+  "name": "ddbsh-vendor-aws-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build inputs for the vendored, pinned AWS SDK for JavaScript v3 bundle the ddbsh browser edition loads (P9, D-P9-5 / D-P9-02-8). Rebuilt only by devtools/vendor-aws-sdk-js; versions are exact pins. Not published.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1174.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -57,3 +57,5 @@ build*
 /examples/*/cmake_install.cmake
 /examples/*/CTestTestfile.cmake
 /examples/*/Makefile
+# Vendored AWS SDK for JS build inputs install here (devtools/vendor-aws-sdk-js uses a temp dir).
+/web/vendor/aws-sdk/node_modules/
