@@ -57,6 +57,12 @@ enable_testing()
 
 set(DDBSH_SHELL_BIN "" CACHE FILEPATH "Path to the shipping ddbsh binary")
 set(DDBSH_SDK_LIB "" CACHE PATH "AWS SDK shared-library directory (LD_LIBRARY_PATH)")
+# The SHOW CONNECTION `Backend:` line is the one golden expectation that names
+# the client stack. The default is the native CLI's (AwsDDBClient); the browser
+# edition's fidelity gate (devtools/run-web-golden, P9 D-P9-02-4) configures
+# its own descriptor pattern. Every other expectation is shared byte-for-byte.
+set(DDBSH_GOLDEN_BACKEND_REGEX "Backend: aws-sdk-cpp \\(direct DynamoDB\\)"
+    CACHE STRING "PASS_REGULAR_EXPRESSION for the ishow-connection Backend line")
 set(GOLDEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
     CACHE PATH "Golden tree root (families/, results/, data/, ddbsh-wait)")
 

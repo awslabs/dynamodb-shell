@@ -38,6 +38,8 @@
 #   devtools/run-tests -R isel             # ctest regex filter (label derived)
 #   devtools/run-tests --suite select -R isel
 #   devtools/run-tests --full-engine       # route EVERY family to the new engine
+#   devtools/run-tests --web-golden        # the golden suite through the
+#                                          # browser edition (devtools/run-web-golden)
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
 #
 # Modes:
@@ -77,6 +79,11 @@ FULL_ENGINE=0
 # configures the native build with -DDDBSH_TEST_LIVE_SAMPLE=ON so the sample is
 # registered and runs alongside the native suite (D8).
 LIVE_SAMPLE=0
+# --web-golden: run the browser edition's fidelity gate instead (P9,
+# D-P9-02-4): the whole golden suite through ddbsh.wasm + the AWS SDK for
+# JavaScript, via devtools/run-web-golden. Remaining args go to ctest. Its
+# artifacts are discussions/test-webgolden-<hash>.{log,txt}.
+WEB_GOLDEN=0
 CTEST_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -92,12 +99,26 @@ while [ $# -gt 0 ]; do
             LIVE_SAMPLE=1
             shift
             ;;
+        --web-golden)
+            WEB_GOLDEN=1
+            shift
+            ;;
         *)
             CTEST_ARGS+=("$1")
             shift
             ;;
     esac
 done
+
+if [ "$WEB_GOLDEN" -eq 1 ]; then
+    exec "$REPO_DIR/devtools/run-web-golden" ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"}
+fi
+
+# The native and web golden suites share the ddbsh_test_* tables in one
+# account; hold the shared lock so they never overlap (devtools/lib-web.sh).
+# shellcheck source=devtools/lib-web.sh
+. "$REPO_DIR/devtools/lib-web.sh"
+web_golden_lock "$REPO_DIR"
 
 # Derive a suite label if not given: use the -R regex if present, else "all"
 # ("full-engine" in exposure mode).
