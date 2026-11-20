@@ -25,6 +25,8 @@
 
 #include <emscripten.h>
 
+// The hook bodies are JavaScript; clang-format would rewrite `===` / `!==`.
+// clang-format off
 EM_ASYNC_JS(char*, ddbsh_js_send, (const char* op, const char* body), {
     function dup(s) {
         const len = lengthBytesUTF8(s) + 1;
@@ -32,12 +34,12 @@ EM_ASYNC_JS(char*, ddbsh_js_send, (const char* op, const char* body), {
         stringToUTF8(s, buf, len);
         return buf;
     }
-    if (typeof Module == = "undefined" || typeof Module.ddbshSend != = "function") {
+    if (typeof Module === "undefined" || typeof Module.ddbshSend !== "function") {
         return dup("1browser SDK bridge not initialized");
     }
     try {
         const resp = await Module.ddbshSend(UTF8ToString(op), UTF8ToString(body));
-        if (typeof resp != = "string") {
+        if (typeof resp !== "string") {
             return dup("1browser SDK bridge returned no response body");
         }
         return dup("0" + resp);
@@ -48,12 +50,12 @@ EM_ASYNC_JS(char*, ddbsh_js_send, (const char* op, const char* body), {
 
 EM_JS(char*, ddbsh_js_connect, (const char* region, const char* endpoint), {
     let msg = "";
-    if (typeof Module == = "undefined" || typeof Module.ddbshConnect != = "function") {
+    if (typeof Module === "undefined" || typeof Module.ddbshConnect !== "function") {
         msg = "browser SDK bridge not initialized";
     } else {
         try {
             const r = Module.ddbshConnect(UTF8ToString(region), UTF8ToString(endpoint));
-            msg = (typeof r == = "string") ? r : "";
+            msg = (typeof r === "string") ? r : "";
         } catch (e) {
             msg = (e && e.message) ? e.message : String(e);
         }
@@ -66,10 +68,10 @@ EM_JS(char*, ddbsh_js_connect, (const char* region, const char* endpoint), {
 
 EM_JS(char*, ddbsh_js_descriptor, (), {
     let d = "wire/aws-sdk-js (bridge not initialized)";
-    if (typeof Module != = "undefined" && typeof Module.ddbshDescriptor == = "function") {
+    if (typeof Module !== "undefined" && typeof Module.ddbshDescriptor === "function") {
         try {
             const r = Module.ddbshDescriptor();
-            if (typeof r == = "string") {
+            if (typeof r === "string") {
                 d = r;
             }
         } catch (e) {
@@ -81,6 +83,7 @@ EM_JS(char*, ddbsh_js_descriptor, (), {
     stringToUTF8(d, buf, len);
     return buf;
 });
+// clang-format on
 
 namespace {
 
