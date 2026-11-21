@@ -13,8 +13,11 @@
 //   - buildTranscriptEntries: a RunResult + echoed input -> ordered render blocks.
 //   - parseCredentials / validateCredentials / credentialStatus /
 //     maskAccessKeyId:        short-term credential handling (P9, D-P9-3).
+//   - credentialEnvironmentProblem: whether this window may take credentials
+//                             at all (secure context, not framed, not opened
+//                             by another page's script; P10, G1).
 //   - fileToSubmission:       file text -> one submission (the `-f`/source path).
-//   - createHistory:          the command-history ring (push/cap/dedup/traverse).
+//   - createHistory:          the command-history ring (push/cap/dedup/traverse/clear).
 //   - createRunGuard:         the one-submission-in-flight re-entrancy guard.
 //
 // No engine logic crosses into JS (tenet 3): the faithful shell text is produced
@@ -305,6 +308,41 @@ export function credentialStatus(c, nowMs = Date.now()) {
 }
 
 /**
+ * Decide whether this window may accept credentials at all (P10, G1). The
+ * page refuses them, before anything is pasted, when:
+ *   - it is inside a frame (`window.top !== window.self`): the framing page may
+ *     overlay or restyle it to capture what is typed (clickjacking). A host
+ *     sends `frame-ancestors 'none'` to stop framing; this check also covers a
+ *     host that cannot send that header;
+ *   - another page's script opened it (`window.opener` is set): a same-origin
+ *     opener has full access to this window's DOM, including the credentials
+ *     text box;
+ *   - it is not in a secure context (not https:// or http://localhost): the
+ *     page could have been modified in transit.
+ * The caller gathers the three facts from `window` (see app.js); this function
+ * only decides, so the rules are unit-testable without a DOM.
+ *
+ * @param {{secureContext: boolean, framed: boolean, opened: boolean}} env
+ * @returns {string|null} null when credentials may be used, else the reason
+ *          to show (which also says what to do instead).
+ */
+export function credentialEnvironmentProblem({ secureContext, framed, opened } = {}) {
+    if (framed !== false) {
+        return "credentials are refused: this page is shown inside a frame on another page, " +
+            "which could capture what you type; open the page directly in its own tab";
+    }
+    if (opened !== false) {
+        return "credentials are refused: another page's script opened this window and can reach " +
+            "into it; open the page directly by typing or pasting its address";
+    }
+    if (secureContext !== true) {
+        return "credentials can only be used on https:// or http://localhost; " +
+            "serve over HTTPS or use an SSH tunnel";
+    }
+    return null;
+}
+
+/**
  * Convert uploaded file text into one submission (the browser equivalent of the
  * CLI's `-f` / `source`). The whole file runs as a single submission; the engine
  * splits the `;`-terminated statements. A trailing newline is harmless (the
@@ -332,9 +370,12 @@ export function fileToSubmission(text) {
  *   - next(): walks toward newer entries (ArrowDown); returns null past the
  *     newest (the live draft).
  *   - list(): a copy of the entries, oldest first (for persistence).
+ *   - clear(): drops every entry and resets the recall cursor (the page's
+ *     "Clear history" button; P10, D-P10-6).
  *
  * The caller owns persistence (e.g. localStorage): seed via `entries` and write
- * `list()` back after each push. This module touches no storage.
+ * `list()` back after each push (and remove the stored copy on clear()). This
+ * module touches no storage.
  *
  * @param {{limit?: number, entries?: string[]}} [opts]
  */
@@ -393,6 +434,12 @@ export function createHistory({ limit = 500, entries = [] } = {}) {
         /** A copy of the stored entries, oldest first. */
         list() {
             return items.slice();
+        },
+
+        /** Drop every entry and reset the recall cursor to the (empty) draft. */
+        clear() {
+            items.length = 0;
+            cursor = 0;
         },
 
         /** The number of stored entries. */

@@ -13,18 +13,23 @@
 //
 // Requests go from this tab straight to Amazon DynamoDB: the engine serializes
 // each request, the vendored AWS SDK for JavaScript signs and sends it (P9,
-// D-P9-1). Credentials (D-P9-3 / D-P9-4):
+// D-P9-1). Credentials (D-P9-3 / D-P9-4; P10):
 //   * short-term only (ASIA… + session token); pasted into the credentials
 //     panel, parsed + validated by app-core, held only inside the bridge;
 //   * the textarea is cleared after every "Use credentials", whatever the
 //     outcome; nothing credential-related is stored, logged or put in the URL;
-//   * refused outside a secure context (https:// or http://localhost,
-//     D-P9-02-7).
-// The only localStorage use is the command history (editor submissions only).
+//   * refused (the panel is disabled at startup and "Use credentials" fails
+//     closed) outside a secure context (https:// or http://localhost,
+//     D-P9-02-7), inside a frame, or when another page's script opened this
+//     window (P10, G1; app-core credentialEnvironmentProblem);
+//   * wiped on pagehide, so the back/forward cache never restores them (P10).
+// The only localStorage use is the command history (editor submissions only),
+// which the "Clear history" button removes (P10, D-P10-6).
 
 import {
     buildPrompt,
     buildTranscriptEntries,
+    credentialEnvironmentProblem,
     credentialStatus,
     fileToSubmission,
     createHistory,
@@ -55,6 +60,8 @@ const els = {
     fileLabel: document.getElementById("file-label"),
     fileInput: document.getElementById("file-input"),
     clearBtn: document.getElementById("clear-btn"),
+    clearHistoryBtn: document.getElementById("clear-history-btn"),
+    toolbarStatus: document.getElementById("toolbar-status"),
 };
 
 const HISTORY_KEY = "ddbsh.history";
@@ -93,6 +100,20 @@ function persistHistory() {
     }
 }
 
+// "Clear history" (D-P10-6): forget the stored copy and the in-memory ring.
+// Saving stays on; the next command starts a new history.
+function onClearHistory() {
+    history.clear();
+    recall.reset();
+    try {
+        window.localStorage.removeItem(HISTORY_KEY);
+    } catch {
+        // storage unavailable: there was no stored copy to remove.
+    }
+    els.toolbarStatus.textContent = "history cleared";
+    els.editor.focus();
+}
+
 // ---- transcript painting (textContent only — D-P6e-6) ----------------------
 function appendEntries(entries) {
     if (entries.length === 0) {
@@ -113,6 +134,21 @@ function appendEntries(entries) {
 }
 
 // ---- credentials panel -----------------------------------------------------
+// The three facts credentialEnvironmentProblem decides on. Comparing
+// window.top with window.self and reading window.opener are allowed even when
+// the other window is cross-origin.
+function windowEnvironment() {
+    let framed = true;
+    let opened = true;
+    try {
+        framed = window.top !== window.self;
+        opened = window.opener !== null && window.opener !== undefined;
+    } catch {
+        // cannot tell: treat as framed / opened (fail closed).
+    }
+    return { secureContext: window.isSecureContext === true, framed, opened };
+}
+
 function refreshCredStatus() {
     els.credStatus.textContent = credentialStatus(bridge.credentialSummary());
 }
@@ -127,9 +163,9 @@ function onUseCredentials() {
     // Clear the secret from the DOM whatever happens next, so it is not kept in
     // the page or restored by back/forward navigation.
     els.credInput.value = "";
-    if (!window.isSecureContext) {
-        setCredMessage("credentials can only be used on https:// or http://localhost; " +
-            "serve over HTTPS or use an SSH tunnel", true);
+    const problem = credentialEnvironmentProblem(windowEnvironment());
+    if (problem !== null) {
+        setCredMessage(problem, true); // fail closed, even if startup's check was bypassed.
         return;
     }
     const parsed = parseCredentials(text);
@@ -154,6 +190,19 @@ function onForgetCredentials() {
     bridge.clearCredentials();
     refreshCredStatus();
     setCredMessage("credentials forgotten", false);
+}
+
+// pagehide fires when the page is put into the back/forward cache (and on
+// unload). Forgetting the credentials then means a restored page never has
+// them; the message tells the user why on return.
+function onPageHide() {
+    els.credInput.value = "";
+    if (bridge.credentialSummary() !== null) {
+        bridge.clearCredentials();
+        refreshCredStatus();
+        setCredMessage("credentials were forgotten when you left the page; paste them again", false);
+        els.credPanel.open = true;
+    }
 }
 
 bridge.onCredentialProblem(({ kind, detail }) => {
@@ -286,6 +335,7 @@ function runFromEditor() {
         return;
     }
     els.editor.value = "";
+    els.toolbarStatus.textContent = "";
     recall.reset();
     submit(text, { addToHistory: true });
 }
@@ -356,16 +406,23 @@ async function start() {
     fillRegionSelect();
     els.runBtn.addEventListener("click", runFromEditor);
     els.clearBtn.addEventListener("click", onClear);
+    els.clearHistoryBtn.addEventListener("click", onClearHistory);
     els.editor.addEventListener("keydown", onEditorKeydown);
     els.editor.addEventListener("input", onEditorInput);
     els.fileInput.addEventListener("change", onFileChosen);
     els.credUseBtn.addEventListener("click", onUseCredentials);
     els.credForgetBtn.addEventListener("click", onForgetCredentials);
     els.regionSelect.addEventListener("change", refreshRegion);
+    window.addEventListener("pagehide", onPageHide);
 
-    if (!window.isSecureContext) {
-        setCredMessage("this page is not in a secure context; credentials can only be used on " +
-            "https:// or http://localhost (serve over HTTPS or use an SSH tunnel)", true);
+    // Refuse credentials up front where they would be at risk (framed, opened
+    // by another page's script, or not a secure context): disable the panel so
+    // nothing is pasted, and say why. onUseCredentials checks again.
+    const problem = credentialEnvironmentProblem(windowEnvironment());
+    if (problem !== null) {
+        els.credInput.disabled = true;
+        els.credUseBtn.disabled = true;
+        setCredMessage(problem, true);
     }
 
     try {

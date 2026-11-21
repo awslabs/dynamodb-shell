@@ -9,7 +9,9 @@
 // P6e logic — the history ring, the prompt builder, the transcript-entry model,
 // the file->submission handoff, and the single-flight run guard — plus the P9
 // additions: ordered RunResult segments, short-term credential parsing and
-// validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9).
+// validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9); and the
+// P10 additions: history clear() (D-P10-6), the framed / opened / insecure
+// credential refusal (G1), and the Trusted Types directives in the CSP.
 
 import { readFileSync } from "node:fs";
 
@@ -17,6 +19,7 @@ import { ALLOWED_HOSTS } from "./vendor/aws-sdk/allowed-hosts.mjs";
 import {
     buildPrompt,
     buildTranscriptEntries,
+    credentialEnvironmentProblem,
     credentialStatus,
     maskAccessKeyId,
     parseCredentials,
@@ -140,6 +143,31 @@ console.log("createHistory");
     h.push("c");  // push resets the cursor to the live draft
     check(h.next() === null, "push resets recall cursor to draft");
     eq(h.previous(), "c", "after reset, previous() recalls the newest");
+}
+{
+    // clear() (the page's "Clear history", D-P10-6) empties the ring and the
+    // cursor; recording starts again with the next push.
+    const h = createHistory({ entries: ["a", "b", "c"] });
+    h.previous(); // mid-recall
+    h.clear();
+    eq(h.list(), [], "clear() empties the ring");
+    check(h.size() === 0, "size 0 after clear()");
+    check(h.previous() === null && h.next() === null, "no recall after clear()");
+    h.push("d");
+    eq(h.list(), ["d"], "push after clear() starts a new history");
+    eq(h.previous(), "d", "recall works again after clear()");
+}
+{
+    // The page clears the ring and resets recall together; a recall in
+    // progress must not resurrect a cleared entry or wipe the live draft.
+    const h = createHistory({ entries: ["a", "b"] });
+    const r = createHistoryRecall(h);
+    eq(r.up("draft"), "b", "recalling before clear()");
+    h.clear();
+    r.reset();
+    check(r.recalling === false, "reset() after clear() ends the recall");
+    check(r.up("typed") === null, "up() after clear() is a no-op (nothing to recall)");
+    check(r.down() === null, "down() after clear() is a no-op");
 }
 
 // ---- createHistoryRecall ---------------------------------------------------
@@ -306,6 +334,29 @@ console.log("credentials");
     eq(credentialStatus({ accessKeyId: KEY }, NOW), "ASIA…DFGH (expiry unknown)", "status: expiry unknown");
 }
 
+// ---- where credentials may be used (P10, G1) -------------------------------
+console.log("credentialEnvironmentProblem");
+{
+    const fine = { secureContext: true, framed: false, opened: false };
+    check(credentialEnvironmentProblem(fine) === null, "secure, top-level, not opened: accepted");
+    const framed = credentialEnvironmentProblem({ ...fine, framed: true });
+    check(/refused/.test(framed) && /inside a frame/.test(framed) && /open the page directly in its own tab/.test(framed),
+        `framed: refused — ${framed}`);
+    const opened = credentialEnvironmentProblem({ ...fine, opened: true });
+    check(/refused/.test(opened) && /opened this window/.test(opened) && /open the page directly/.test(opened),
+        `opened by another page's script: refused — ${opened}`);
+    const insecure = credentialEnvironmentProblem({ ...fine, secureContext: false });
+    check(/https:\/\/ or http:\/\/localhost/.test(insecure), `not a secure context: refused — ${insecure}`);
+    eq(credentialEnvironmentProblem({ secureContext: false, framed: true, opened: true }), framed,
+        "framed is reported first when several apply");
+    eq(credentialEnvironmentProblem({ secureContext: false, framed: false, opened: true }), opened,
+        "opened is reported before the secure-context problem");
+    check(credentialEnvironmentProblem({}) !== null, "unknown facts are refused (fail closed)");
+    check(credentialEnvironmentProblem() !== null, "no facts at all are refused (fail closed)");
+    check(credentialEnvironmentProblem({ secureContext: "yes", framed: 0, opened: "" }) !== null,
+        "only the boolean false/true values count (fail closed)");
+}
+
 // ---- CSP drift check (D-P9-02-9) -------------------------------------------
 console.log("CSP");
 {
@@ -320,6 +371,9 @@ console.log("CSP");
     eq(directives["default-src"], ["'none'"], "default-src 'none'");
     eq(directives["object-src"], ["'none'"], "object-src 'none'");
     eq(directives["base-uri"], ["'none'"], "base-uri 'none'");
+    eq(directives["require-trusted-types-for"], ["'script'"], "require-trusted-types-for 'script' (Trusted Types, D-P10-12)");
+    eq(directives["trusted-types"], ["'none'"], "trusted-types 'none' (no Trusted Types policy may be created)");
+    check(!("frame-ancestors" in directives), "no frame-ancestors in the <meta> (browsers ignore it there; the host sends it)");
     check(!/unsafe-inline|'unsafe-eval'/.test(m ? m[1] : ""), "no 'unsafe-inline' or 'unsafe-eval'");
     check(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "no inline <script> in index.html");
     check(!/\sstyle=/i.test(html) && !/<style/i.test(html), "no inline style in index.html");

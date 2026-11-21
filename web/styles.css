@@ -194,14 +194,24 @@ body {
     cursor: default;
 }
 
-#clear-btn {
+#clear-btn,
+#clear-history-btn {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg);
 }
 
-#clear-btn:hover {
+#clear-btn:hover,
+#clear-history-btn:hover {
     background: rgba(255, 255, 255, 0.06);
+}
+
+.toolbar-status {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    text-align: center;
+    min-height: 1em;
 }
 
 /* ---- credentials panel (P9) ---------------------------------------------- */
