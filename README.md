@@ -43,7 +43,7 @@ Or start the interactive shell and type SQL-like statements terminated by `;`:
 
 ```
 $ ddbsh
-ddbsh - version 0.12.0
+ddbsh - version 0.12
 us-east-1> show tables;
 ```
 

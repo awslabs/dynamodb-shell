@@ -13,7 +13,7 @@ profiles, `AWS_PROFILE`, container/instance roles, and `role_arn` +
 
 ```
 $ ddbsh
-ddbsh - version 0.12.0
+ddbsh - version 0.12
 us-east-1>
 ```
 
