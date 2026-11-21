@@ -54,7 +54,7 @@ endpoint override is set), and which transport the engine is talking through.
 
 ``` SQL
 us-east-1> show connection;
-ddbsh - version 0.11.19
+ddbsh - version 0.12.0
 Region: us-east-1
 Endpoint: (default)
 Backend: aws-sdk-cpp (direct DynamoDB)
