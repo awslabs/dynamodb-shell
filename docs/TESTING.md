@@ -44,12 +44,15 @@ the live parts talk to real DynamoDB.
   the native CLI. The only expectation that differs is the `ishow-connection`
   `Backend:` pattern (`DDBSH_GOLDEN_BACKEND_REGEX`). Artifacts:
   `discussions/test-webgolden-<hash>.{log,txt}`.
-- **`devtools/run-web-smoke`** builds the bundle, runs the offline gates (the
+- **`devtools/run-tests --web-smoke`** (or `devtools/run-web-smoke`) builds the bundle, runs the offline gates (the
   glue has no `eval`/`new Function`; `app-core.test.mjs`; `sdk-bridge.test.mjs`,
   which exercises the real SDK bundle with a stub HTTP handler; a grep that keeps
   browser storage away from credentials), then a short live smoke through the
   page's `DdbshSession.run` path on one `ddbsh_web_smoke_<pid>` table. Artifact:
   `discussions/test-websmoke-<hash>.log`.
+
+Run both through the orchestration repo's `devtools/run-tests` (same flags), which
+copies the artifacts into its `discussions/`.
 
 Both scripts mint short-term credentials with `aws sts get-session-token` (for
 the `default` profile, plus `cross-acct` for the golden suite; lifetime

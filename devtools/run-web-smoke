@@ -86,6 +86,10 @@ export DDBSH_WEB_CREDS_FILE="$CRED_DIR/creds.json"
     echo "  access key id: $(web_creds_field "$DDBSH_WEB_CREDS_FILE" default AccessKeyId) (minted, short-term)"
     echo "  caller arn:    $(web_caller_arn "$DDBSH_WEB_CREDS_FILE" default)"
 } | tee -a "$LOG_FILE"
+if tail -n 3 "$LOG_FILE" | grep -q "(sts unavailable)"; then
+    echo "error: the minted credentials could not be verified with sts get-caller-identity." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
 set +e
 (cd "$WEB_OUT" && "$NODE_BIN" live-smoke.mjs) 2>&1 | tee -a "$LOG_FILE"
 [ "${PIPESTATUS[0]}" -eq 0 ] || RC=1

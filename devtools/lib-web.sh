@@ -107,6 +107,8 @@ web_mint_credentials() {
     local p
     (
         umask 077
+        # The STS JSON holds secrets: remove it however this subshell exits.
+        trap 'rm -f "$dir"/sts-*.json "$dir"/sts-*.err' EXIT
         for p in "$@"; do
             if ! AWS_STS_REGIONAL_ENDPOINTS=regional aws sts get-session-token \
                     --duration-seconds "$seconds" --profile "$p" --region us-east-1 \
@@ -136,9 +138,6 @@ web_mint_credentials() {
             }
             fs.writeFileSync(`${dir}/creds.json`, JSON.stringify(out), { mode: 0o600 });
         ' "$dir" "$@"
-        rc=$?
-        rm -f "$dir"/sts-*.json
-        exit $rc
     )
 }
 

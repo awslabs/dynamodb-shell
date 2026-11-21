@@ -103,7 +103,10 @@ No CDN and no runtime fetch of any third-party script.
 
 `allowed-hosts.mjs` is generated from the pinned SDK's partition data:
 `REGIONS` (the `aws` and `aws-us-gov` partitions) and `ALLOWED_HOSTS`
-(`dynamodb[-fips].<region>.{amazonaws.com,api.aws}`). It is the single source
+(`[search-]dynamodb[-fips].<region>.{amazonaws.com,api.aws}`). The
+`search-dynamodb` hosts are there because the SDK's endpoint rules send
+`SearchVectors` (`SELECT … NEAREST`) to `search-dynamodb.<region>`; they are
+not accepted as a `CONNECT … WITH ENDPOINT` override. It is the single source
 for the bridge's endpoint check and the page CSP's `connect-src`.
 
 ## Content Security Policy

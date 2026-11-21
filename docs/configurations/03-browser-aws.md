@@ -117,8 +117,13 @@ No cross-origin-isolation headers are needed.
 | Credentials outside a secure context (`https://` or `http://localhost`) | A page served over plain HTTP can be modified in transit to read what you paste. |
 | `CONNECT … WITH ENDPOINT` to anything but AWS DynamoDB | The request carries your session token. Only `https://dynamodb.<region>.amazonaws.com`, `https://dynamodb-fips.<region>.amazonaws.com`, `https://dynamodb.<region>.api.aws` and `https://dynamodb-fips.<region>.api.aws` are allowed, for the regions of the `aws` and `aws-us-gov` partitions. |
 
-The page's Content-Security-Policy enforces the same host list for every network
-connection (`connect-src`), and allows scripts only from the page's own origin.
+The page's Content-Security-Policy (`connect-src`) allows those hosts plus
+`search-dynamodb[-fips].<region>.{amazonaws.com,api.aws}`, for the same regions.
+The SDK sends vector search (`SearchVectors`, used by `SELECT … NEAREST`) to the
+`search-dynamodb` host; `CONNECT … WITH ENDPOINT` does not accept it as an
+override. If you send the CSP as a response header for a hosted page, copy the
+full `connect-src` list from `index.html`; dropping the `search-dynamodb` hosts
+breaks vector search. The policy allows scripts only from the page's own origin.
 
 ## CONNECT in the browser
 
