@@ -8,8 +8,9 @@
 // AWS client translates each op through the AWS SDK, WireClient serializes it
 // to AWS-JSON-1.0 (wire::serialize, P6a), sends it through a Transport
 // (transport.hpp), and parses the response (wire::parse_*, P6b). The browser
-// (Emscripten) engine target constructs a WireClient over an in-WASM/fetch
-// Transport and drives a ddbsh::Session with it — no AWS SDK, no terminal.
+// (Emscripten) engine target constructs a WireClient over the JS SDK bridge
+// Transport (web/js_sdk_transport.hpp) and drives a ddbsh::Session with it — no
+// AWS SDK for C++, no terminal.
 //
 // SCOPE (P6c-b). The full IDDBClient surface is implemented SDK-free: the six
 // data-plane ops (P6b), the control plane (create/drop/alter table, the
@@ -18,9 +19,7 @@
 // alternative. ListTables/ListBackups page internally (the AWS adapter's paging
 // loops reproduced over the transport); five ops (the two transactions,
 // UpdateTable, UpdateTimeToLive, UpdateContinuousBackups) re-wrap a mapped Error
-// in the adapter's composed failure message (§4.3). The browser (Emscripten)
-// engine target constructs a WireClient over an in-WASM/fetch Transport and
-// drives a ddbsh::Session with it — no AWS SDK, no terminal.
+// in the adapter's composed failure message (§4.3).
 //
 // Ownership: WireClient borrows the Transport&, exactly as Session borrows
 // IDDBClient& — the embedder guarantees the transport outlives the client. No
@@ -111,8 +110,8 @@ public:
 protected:
     /// The backoff sleep, shared by the two table waiters and the retry path
     /// (D-P6c-6; extended for HT-1 retry). Default: emscripten_sleep under
-    /// Asyncify (so the browser event loop keeps turning so the fetch/ExtendDB
-    /// call makes progress), std::this_thread::sleep_for on the host. The single
+    /// Asyncify (so the browser event loop keeps turning and the transport's
+    /// fetch makes progress), std::this_thread::sleep_for on the host. The single
     /// platform `#if` in WireClient lives in this one method; nothing else is
     /// platform-coupled. A test overrides it to a no-op so the waiter and retry
     /// loops run instantly (no real sleep in CI).

@@ -35,26 +35,25 @@ ddbsh respects the default AWS environment variables, see [How to set environmen
 Used to specify an alternate endpoint, such as when using ExtendDB.
 
 
-## The five configurations
+## The three configurations
 
-ddbsh runs in five configurations, formed by two choices: **which form of ddbsh**
-(the native binary or the browser/WebAssembly build) and **which backend** (real
-Amazon DynamoDB, a self-hosted [ExtendDB](https://github.com/awslabs/extenddb)
-server, or an ExtendDB database bundled into the same browser tab). ExtendDB is a
-local, self-hosted, DynamoDB-compatible server — it is the recommended way to
-experiment with ddbsh without touching a real AWS account or incurring cost.
+ddbsh runs in three configurations, formed by two choices: **which form of
+ddbsh** (the native binary or the browser edition) and **which backend** (real
+Amazon DynamoDB or a self-hosted [ExtendDB](https://github.com/awslabs/extenddb)
+server). ExtendDB is a local, self-hosted, DynamoDB-compatible server; it is the
+recommended way to experiment with ddbsh without touching a real AWS account or
+incurring cost.
 
 | # | ddbsh form | Backend | How it connects |
 |---|---|---|---|
 | [1](01-native-aws.md) | native binary | AWS DynamoDB | default AWS credential chain, standard regional endpoint |
 | [2](02-native-extenddb.md) | native binary | ExtendDB on a host | `DDBSH_ENDPOINT_OVERRIDE` + an ExtendDB-issued key in a dedicated `~/.aws` profile + a CA bundle for the self-signed cert |
-| [3](03-browser-aws.md) | browser (WASM) | AWS DynamoDB | the `ddbsh-web-proxy` SigV4-signs and forwards; credentials never enter the browser |
-| [4](04-browser-extenddb-server.md) | browser (WASM) | ExtendDB on a host | the same proxy, with a per-endpoint profile + CA bundle |
-| [5](05-browser-in-tab-extenddb.md) | browser (WASM) | ExtendDB bundled in the browser | an in-tab ExtendDB WebAssembly adapter; no network, no credentials (**pre-release**) |
+| [3](03-browser-aws.md) | browser (static page, WebAssembly) | AWS DynamoDB | the tab calls DynamoDB directly; the bundled AWS SDK for JavaScript signs with short-term credentials you paste into the page |
 
-Each configuration has its own page (linked from the table above). Configurations
-3–5 (the browser builds and the proxy) are documented in further detail in
-[`web/README.md`](../../web/README.md) and [`proxy/README.md`](../../proxy/README.md).
+Each configuration has its own page (linked from the table above). The browser
+edition against ExtendDB is not available; use the native binary for ExtendDB.
+Developer details for the browser edition are in
+[`web/README.md`](../../web/README.md).
 
 
 ## Cross Account Access

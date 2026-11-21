@@ -150,7 +150,7 @@ TEST(WireClientRetry, ConditionalCheckFailedNotRetried) {
 TEST(WireClientRetry, TransportFailureNotRetried) {
     CannedTransport transport;
     transport.push_error(
-        ddbsh::Error{Errc::service_error, "proxy fetch failed", std::nullopt, std::nullopt});
+        ddbsh::Error{Errc::service_error, "transport send failed", std::nullopt, std::nullopt});
     transport.push_response(kDescribeOkBody);  // must NOT be consumed
     TestWireClient client(transport);
 
@@ -159,7 +159,7 @@ TEST(WireClientRetry, TransportFailureNotRetried) {
     auto out = client.describe_table(describe_t());
     ASSERT_FALSE(out.has_value());
     EXPECT_EQ(out.error().code, Errc::service_error);
-    EXPECT_EQ(out.error().message, "proxy fetch failed");
+    EXPECT_EQ(out.error().message, "transport send failed");
     EXPECT_EQ(transport.calls().size(), 1u);
     EXPECT_FALSE(transport.drained());
 }

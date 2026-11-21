@@ -122,6 +122,35 @@ package and its headers resolve to the same install. Do not silence
 would be compiling against one SDK's headers while linking another's libraries.
 
 
+## Build the browser edition
+
+The browser edition (see [configuration 3](configurations/03-browser-aws.md))
+compiles the engine to WebAssembly with Emscripten. It needs no AWS SDK for C++.
+
+- **emsdk 3.1.61** (the version CI pins), installed per
+  [`web/README.md`](../web/README.md); its scripts need Python 3.10 or newer.
+- **Node.js 20 or newer** for the Node-side tests and gates (the bundled AWS SDK
+  for JavaScript requires it). emsdk ships one; the devtools scripts use it.
+
+```sh
+emcmake cmake --preset wasm-release
+cmake --build build-preset/wasm-release
+```
+
+The build stages the complete static bundle in
+`build-preset/wasm-release/web/`: `index.html`, the JavaScript modules,
+`ddbsh.js`/`ddbsh.wasm`, and `vendor/aws-sdk/` (the pinned SDK bundle). Serve
+that directory with `devtools/serve-web` (loopback only).
+
+The AWS SDK for JavaScript bundle (`web/vendor/aws-sdk/aws-sdk-dynamodb.mjs`) is
+committed, built from exact version pins and a committed lockfile.
+`devtools/vendor-aws-sdk-js` rebuilds it (needs npm registry access);
+`devtools/vendor-aws-sdk-js --check` rebuilds it in a temporary directory and
+fails if the result differs from the committed files, which CI runs. To bump the
+SDK, change the pin in `web/vendor/aws-sdk/package.json`, run
+`devtools/vendor-aws-sdk-js --lock`, and commit every changed file under
+`web/vendor/aws-sdk/` plus `web/index.html` (its CSP host list is generated).
+
 ## Install a release
 
 Instead of building from source, you can install a pre-built binary.

@@ -129,6 +129,17 @@ BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Rendere
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
                Terminator& term, bool abort_on_error);
 
+// The output-channel-agnostic core of run_source (above): the same isql
+// assembly loop, terminator handling, stop-on-quit, abort-on-error, and
+// last-executed-statement exit code, but each batch's result fragments go to
+// `sink` and each rendered error to `report_error` (exactly as run_batch). The
+// FD-writing overload delegates here with the CLI's stdout/stderr sink, so the
+// CLI bytes are unchanged; the browser embedding (web/bindings.cpp runScript,
+// P9 D-P9-02-11) buffers them into ordered segments instead.
+int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
+               Terminator& term, bool abort_on_error, ddbsh::OutcomeSink& sink,
+               const std::function<void(const std::string&)>& report_error);
+
 }  // namespace ddbsh::cli
 
 #endif  // DDBSH_CLI_REPL_HPP

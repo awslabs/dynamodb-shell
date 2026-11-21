@@ -62,58 +62,13 @@ jobs:
           path: |
                 build/ddbsh
 
-  # ddbsh-web-proxy — the native companion for the real-backend web UI (phase
-  # 6f). A portable Rust single binary (D-P6f-3); this matrix proves it builds +
-  # tests clean on Linux, macOS, and Windows (D-P6f-11 cross-platform). The proxy
-  # is self-contained (no AWS SDK for C++, no flex/bison), so the job is fast.
-  build-proxy:
-    name: build-proxy (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: proxy
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Rust toolchain info
-        run: |
-          rustc --version
-          cargo --version
-
-      - name: Build (release)
-        run: cargo build --release
-
-      - name: Test
-        run: cargo test
-
-      - name: Format check (Linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo fmt --check
-
-      - name: Clippy (Linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Upload proxy binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ddbsh-web-proxy-${{ matrix.os }}
-          path: |
-            proxy/target/release/ddbsh-web-proxy
-            proxy/target/release/ddbsh-web-proxy.exe
-          if-no-files-found: ignore
-
-  # The browser/WASM editions (phase 6d/6e/6f). The whole SDK-free engine +
-  # ddbsh-wire codec + UI compile to WebAssembly via the pinned emsdk; this job
-  # proves both editions (ddbsh.js fetch + ddbsh-extenddb.js in-tab) build. It is
-  # Linux-only (one portable artifact serves every browser) and needs no AWS SDK
+  # The browser edition (P9): the SDK-free engine + ddbsh-wire codec compile to
+  # WebAssembly via the pinned emsdk, and the page calls DynamoDB directly with
+  # the vendored, pinned AWS SDK for JavaScript v3. Linux-only (one portable
+  # bundle serves every browser); needs no AWS SDK for C++ and no AWS account
   # (the wasm-release preset sets DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_WEB=ON).
+  # The live gates (run-web-smoke, run-web-golden) need credentials and run
+  # outside CI.
   build-wasm:
     runs-on: ubuntu-latest
 
@@ -126,29 +81,45 @@ jobs:
           sudo apt-get -y update
           sudo apt-get -y install cmake flex bison
 
+      - name: Set up Node (>= 20, the AWS SDK for JavaScript floor)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Set up Emscripten (pinned)
         uses: mymindstorm/setup-emsdk@v14
         with:
           version: 3.1.61
 
-      - name: Configure + build the wasm editions
+      - name: Vendored AWS SDK bundle is a reproducible build
+        run: devtools/vendor-aws-sdk-js --check
+
+      - name: Configure + build the wasm module and stage the bundle
         run: |
           emcmake cmake --preset wasm-release
           cmake --build build-preset/wasm-release
 
-      - name: Verify both editions were emitted
+      - name: Glue has no eval / new Function (page CSP has no 'unsafe-eval')
         run: |
-          test -f build-preset/wasm-release/web/ddbsh.js
-          test -f build-preset/wasm-release/web/ddbsh.wasm
-          test -f build-preset/wasm-release/web/ddbsh-extenddb.js
-          test -f build-preset/wasm-release/web/ddbsh-extenddb.wasm
+          ! grep -nE 'newFunc\(Function|new Function|[^A-Za-z_.]eval\(' build-preset/wasm-release/web/ddbsh.js
 
-      - name: Upload wasm bundle
+      - name: Offline web unit tests
+        working-directory: build-preset/wasm-release/web
+        run: |
+          node app-core.test.mjs
+          node sdk-bridge.test.mjs
+
+      - name: Upload the static browser bundle
         uses: actions/upload-artifact@v4
         with:
-          name: ddbsh-wasm-bundle
+          name: ddbsh-web-bundle
           path: |
+            build-preset/wasm-release/web/index.html
+            build-preset/wasm-release/web/app.js
+            build-preset/wasm-release/web/app-core.mjs
+            build-preset/wasm-release/web/sdk-bridge.mjs
+            build-preset/wasm-release/web/styles.css
+            build-preset/wasm-release/web/package.json
             build-preset/wasm-release/web/ddbsh.js
             build-preset/wasm-release/web/ddbsh.wasm
-            build-preset/wasm-release/web/ddbsh-extenddb.js
-            build-preset/wasm-release/web/ddbsh-extenddb.wasm
+            build-preset/wasm-release/web/vendor/aws-sdk/

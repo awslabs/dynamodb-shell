@@ -11,12 +11,14 @@
 // What lives here:
 //   - buildPrompt:            the shell prompt string (mirrors the CLI prompt).
 //   - buildTranscriptEntries: a RunResult + echoed input -> ordered render blocks.
+//   - parseCredentials / validateCredentials / credentialStatus /
+//     maskAccessKeyId:        short-term credential handling (P9, D-P9-3).
 //   - fileToSubmission:       file text -> one submission (the `-f`/source path).
 //   - createHistory:          the command-history ring (push/cap/dedup/traverse).
 //   - createRunGuard:         the one-submission-in-flight re-entrancy guard.
 //
 // No engine logic crosses into JS (tenet 3): the faithful shell text is produced
-// by the engine's Renderer and arrives verbatim in RunResult.stdout/stderr; this
+// by the engine's Renderer and arrives verbatim in RunResult.segments; this
 // module only arranges, prefixes, and bounds it for presentation.
 
 /**
@@ -48,8 +50,11 @@ export function buildPrompt(region, endpointOverridden, continuation = false) {
  * Produces, in order:
  *   1. a `prompt` block: every line of `input` prefixed with `prompt`
  *      (so a multi-line statement reads like it would in the CLI);
- *   2. a `stdout` block: RunResult.stdout verbatim (the faithful shell text);
- *   3. a `stderr` block: RunResult.stderr verbatim (diagnostics/errors).
+ *   2. the result text in EMISSION order: one `stdout` / `stderr` block per
+ *      entry of RunResult.segments (P9, D-P9-02-11), so an error between two
+ *      results appears between them, as it does in the CLI. A RunResult
+ *      without `segments` falls back to a `stdout` block (RunResult.stdout)
+ *      followed by a `stderr` block (RunResult.stderr).
  * Empty strings produce no block (a quiet success appends only the prompt echo;
  * a blank submission appends nothing).
  *
@@ -58,7 +63,9 @@ export function buildPrompt(region, endpointOverridden, continuation = false) {
  *
  * @param {string} prompt    the prompt string from buildPrompt.
  * @param {string} input     the raw submission text (may be multi-line).
- * @param {{stdout?: string, stderr?: string}} runResult  the engine result.
+ * @param {{stdout?: string, stderr?: string,
+ *          segments?: Array<{stream: string, text: string}>}} runResult
+ *        the engine result.
  * @returns {Array<{text: string, kind: "prompt"|"stdout"|"stderr"}>}
  */
 export function buildTranscriptEntries(prompt, input, runResult) {
@@ -73,6 +80,24 @@ export function buildTranscriptEntries(prompt, input, runResult) {
         entries.push({ text: echoed, kind: "prompt" });
     }
 
+    const segments = segmentList(result.segments);
+    if (segments !== null) {
+        for (const seg of segments) {
+            const text = seg && typeof seg.text === "string" ? seg.text : "";
+            if (text.length === 0) {
+                continue;
+            }
+            const kind = seg.stream === "stderr" ? "stderr" : "stdout";
+            const last = entries[entries.length - 1];
+            if (last && last.kind === kind) {
+                last.text += text; // coalesce adjacent same-stream segments.
+            } else {
+                entries.push({ text, kind });
+            }
+        }
+        return entries;
+    }
+
     const out = typeof result.stdout === "string" ? result.stdout : "";
     if (out.length > 0) {
         entries.push({ text: out, kind: "stdout" });
@@ -84,6 +109,199 @@ export function buildTranscriptEntries(prompt, input, runResult) {
     }
 
     return entries;
+}
+
+// Normalize RunResult.segments to a plain array, or null when absent. Embind
+// returns a registered std::vector as a handle with size()/get(i); a plain
+// array (tests, or a caller that already converted it) is used as-is.
+function segmentList(segments) {
+    if (Array.isArray(segments)) {
+        return segments;
+    }
+    if (segments && typeof segments.size === "function" && typeof segments.get === "function") {
+        const n = segments.size();
+        const list = [];
+        for (let i = 0; i < n; i += 1) {
+            list.push(segments.get(i));
+        }
+        return list;
+    }
+    return null;
+}
+
+// ---- short-term credentials (P9, D-P9-3 / D-P9-4) --------------------------
+
+const LONG_TERM_KEY = /^AKIA/;
+const SHORT_TERM_KEY = /^ASIA[A-Z0-9]{12,124}$/;
+
+/**
+ * Show an access key id without revealing it: the 4-character prefix and the
+ * last four characters (e.g. "ASIA…WXYZ"). Never used on a secret or token.
+ *
+ * @param {string} accessKeyId
+ * @returns {string}
+ */
+export function maskAccessKeyId(accessKeyId) {
+    const id = typeof accessKeyId === "string" ? accessKeyId : "";
+    if (id.length <= 8) {
+        return "…";
+    }
+    return `${id.slice(0, 4)}…${id.slice(-4)}`;
+}
+
+/**
+ * Parse pasted credential text into a credential set. Accepts the outputs of
+ * the three commands the page recommends:
+ *   1. STS JSON — `{"Credentials": {"AccessKeyId", "SecretAccessKey",
+ *      "SessionToken", "Expiration"}, ...}` (get-session-token, assume-role);
+ *   2. credential-process JSON — `{"Version": 1, "AccessKeyId", ...}`
+ *      (`aws configure export-credentials --format process`);
+ *   3. environment lines — `[export ]AWS_ACCESS_KEY_ID=…` (bash, `--format
+ *      env` / `env-no-export`), `$Env:AWS_ACCESS_KEY_ID="…"` (PowerShell) or
+ *      `set AWS_ACCESS_KEY_ID=…` (cmd); values optionally quoted.
+ * The result is then validated with validateCredentials. No message ever
+ * contains the secret or the token; the key id appears only masked.
+ *
+ * @param {string} text  the pasted text.
+ * @param {number} [nowMs]  the current time (ms since epoch), for expiry.
+ * @returns {{ok: true, credentials: {accessKeyId: string, secretAccessKey: string,
+ *            sessionToken: string, expiration?: Date}} | {ok: false, message: string}}
+ */
+export function parseCredentials(text, nowMs = Date.now()) {
+    if (typeof text !== "string" || text.trim() === "") {
+        return { ok: false, message: "no credentials were pasted" };
+    }
+    const trimmed = text.trim();
+    let raw = null;
+    if (trimmed.startsWith("{")) {
+        let obj;
+        try {
+            obj = JSON.parse(trimmed);
+        } catch {
+            return { ok: false, message: "the pasted text looks like JSON but does not parse" };
+        }
+        const src = obj && typeof obj.Credentials === "object" && obj.Credentials !== null
+            ? obj.Credentials : obj;
+        raw = {
+            accessKeyId: src.AccessKeyId,
+            secretAccessKey: src.SecretAccessKey,
+            sessionToken: src.SessionToken,
+            expiration: src.Expiration,
+        };
+    } else {
+        raw = {};
+        const names = {
+            AWS_ACCESS_KEY_ID: "accessKeyId",
+            AWS_SECRET_ACCESS_KEY: "secretAccessKey",
+            AWS_SESSION_TOKEN: "sessionToken",
+            AWS_CREDENTIAL_EXPIRATION: "expiration",
+        };
+        const lineRe = /^(?:export\s+|set\s+|\$Env:)?(AWS_[A-Z_]+)\s*=\s*(.*)$/i;
+        for (const line of trimmed.split(/\r?\n/)) {
+            const l = line.trim();
+            if (l === "" || l.startsWith("#")) {
+                continue;
+            }
+            const m = l.match(lineRe);
+            if (!m) {
+                continue;
+            }
+            const field = names[m[1].toUpperCase()];
+            if (!field) {
+                continue;
+            }
+            let value = m[2].trim();
+            if (value.length >= 2 && (value[0] === '"' || value[0] === "'") &&
+                value[value.length - 1] === value[0]) {
+                value = value.slice(1, -1);
+            }
+            raw[field] = value;
+        }
+        if (Object.keys(raw).length === 0) {
+            return { ok: false, message: "no AWS credentials found in the pasted text" };
+        }
+    }
+    const credentials = {
+        accessKeyId: typeof raw.accessKeyId === "string" ? raw.accessKeyId.trim() : "",
+        secretAccessKey: typeof raw.secretAccessKey === "string" ? raw.secretAccessKey : "",
+        sessionToken: typeof raw.sessionToken === "string" ? raw.sessionToken.trim() : "",
+    };
+    if (raw.expiration !== undefined && raw.expiration !== null && raw.expiration !== "") {
+        const d = raw.expiration instanceof Date ? raw.expiration : new Date(raw.expiration);
+        credentials.expiration = d;
+    }
+    const problem = validateCredentials(credentials, nowMs);
+    if (problem !== null) {
+        return { ok: false, message: problem };
+    }
+    return { ok: true, credentials };
+}
+
+/**
+ * Check a credential set against the browser edition's rules (D-P9-3): an
+ * `ASIA…` short-term access key id, a secret, a session token, and (when
+ * given) an expiration in the future.
+ *
+ * @param {{accessKeyId?: string, secretAccessKey?: string, sessionToken?: string,
+ *          expiration?: Date}} c
+ * @param {number} [nowMs]
+ * @returns {string|null} null when acceptable, else the reason.
+ */
+export function validateCredentials(c, nowMs = Date.now()) {
+    const cred = c || {};
+    const id = typeof cred.accessKeyId === "string" ? cred.accessKeyId : "";
+    if (id === "") {
+        return "no access key id found";
+    }
+    if (LONG_TERM_KEY.test(id)) {
+        return "long-term access keys (AKIA…) are not accepted; use one of the commands " +
+            "below to get short-term credentials";
+    }
+    if (!SHORT_TERM_KEY.test(id)) {
+        return "not an AWS short-term access key id";
+    }
+    const secret = typeof cred.secretAccessKey === "string" ? cred.secretAccessKey : "";
+    if (secret === "" || /\s/.test(secret)) {
+        return "the secret access key is missing or malformed";
+    }
+    const token = typeof cred.sessionToken === "string" ? cred.sessionToken : "";
+    if (token === "") {
+        return "a session token is required (short-term credentials only)";
+    }
+    if (cred.expiration !== undefined) {
+        if (!(cred.expiration instanceof Date) || Number.isNaN(cred.expiration.getTime())) {
+            return "the credential expiration is not a valid date";
+        }
+        if (cred.expiration.getTime() <= nowMs) {
+            return `these credentials expired at ${cred.expiration.toISOString()}`;
+        }
+    }
+    return null;
+}
+
+/**
+ * The credentials status line: "none", "ASIA…WXYZ, expires 23:03Z (in 58 min)",
+ * "ASIA…WXYZ (expiry unknown)" or "expired".
+ *
+ * @param {{accessKeyId: string, expiration?: Date} | null} c
+ * @param {number} [nowMs]
+ * @returns {string}
+ */
+export function credentialStatus(c, nowMs = Date.now()) {
+    if (!c) {
+        return "none";
+    }
+    const masked = maskAccessKeyId(c.accessKeyId);
+    if (!(c.expiration instanceof Date)) {
+        return `${masked} (expiry unknown)`;
+    }
+    const left = c.expiration.getTime() - nowMs;
+    if (left <= 0) {
+        return "expired";
+    }
+    const hhmm = c.expiration.toISOString().slice(11, 16);
+    const minutes = Math.floor(left / 60000);
+    return `${masked}, expires ${hhmm}Z (in ${minutes} min)`;
 }
 
 /**

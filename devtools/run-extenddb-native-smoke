@@ -6,8 +6,6 @@
 # the NATIVE ddbsh binary against a REAL local ExtendDB server (SQLite, HTTPS),
 # exercising the human-ratified --ca-bundle / AWS_CA_BUNDLE TLS-trust path (D1).
 #
-# This is the native-CLI companion to devtools/run-extenddb-smoke (which proves
-# the browser/WASM fetch edition over the proxy against ExtendDB — config 4).
 # THIS script proves config 2 end-to-end: the shipped `ddbsh` executable, an
 # endpoint override, an ExtendDB-issued SigV4 key in a dedicated AWS profile,
 # and the self-signed TLS cert supplied via --ca-bundle.

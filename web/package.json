@@ -3,5 +3,5 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Marks the ddbsh web build output as ES modules so Node (and bundlers) load the Emscripten glue (`ddbsh.js` fetch edition / `ddbsh-extenddb.js` in-tab edition) and the dropped-in ExtendDB adapter as ESM. Staged beside the build output by web/CMakeLists.txt; not published."
+  "description": "Marks the ddbsh browser-edition build output as ES modules so Node loads the Emscripten glue (ddbsh.js), the SDK bridge, the vendored AWS SDK bundle and the Node shim/tests as ESM. Staged beside the build output by web/CMakeLists.txt; not published."
 }

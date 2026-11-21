@@ -38,6 +38,10 @@
 #   devtools/run-tests -R isel             # ctest regex filter (label derived)
 #   devtools/run-tests --suite select -R isel
 #   devtools/run-tests --full-engine       # route EVERY family to the new engine
+#   devtools/run-tests --web-golden        # the golden suite through the
+#                                          # browser edition (devtools/run-web-golden)
+#   devtools/run-tests --web-smoke         # the browser edition's quick gates
+#                                          # (devtools/run-web-smoke)
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
 #
 # Modes:
@@ -77,6 +81,16 @@ FULL_ENGINE=0
 # configures the native build with -DDDBSH_TEST_LIVE_SAMPLE=ON so the sample is
 # registered and runs alongside the native suite (D8).
 LIVE_SAMPLE=0
+# --web-golden: run the browser edition's fidelity gate instead (P9,
+# D-P9-02-4): the whole golden suite through ddbsh.wasm + the AWS SDK for
+# JavaScript, via devtools/run-web-golden. Remaining args go to ctest. Its
+# artifacts are discussions/test-webgolden-<hash>.{log,txt}.
+WEB_GOLDEN=0
+# --web-smoke: run the browser edition's quick gates instead (P9 §4.5): wasm
+# build, offline web gates, storage grep gate and the live UI-path smoke, via
+# devtools/run-web-smoke. Takes no further args. Its artifact is
+# discussions/test-websmoke-<hash>.log.
+WEB_SMOKE=0
 CTEST_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -92,12 +106,41 @@ while [ $# -gt 0 ]; do
             LIVE_SAMPLE=1
             shift
             ;;
+        --web-golden)
+            WEB_GOLDEN=1
+            shift
+            ;;
+        --web-smoke)
+            WEB_SMOKE=1
+            shift
+            ;;
         *)
             CTEST_ARGS+=("$1")
             shift
             ;;
     esac
 done
+
+if [ "$WEB_GOLDEN" -eq 1 ] && [ "$WEB_SMOKE" -eq 1 ]; then
+    echo "error: --web-golden and --web-smoke are separate runs; pass one." >&2
+    exit 2
+fi
+if [ "$WEB_SMOKE" -eq 1 ]; then
+    if [ "${#CTEST_ARGS[@]}" -gt 0 ]; then
+        echo "error: --web-smoke takes no further arguments (got: ${CTEST_ARGS[*]})." >&2
+        exit 2
+    fi
+    exec "$REPO_DIR/devtools/run-web-smoke"
+fi
+if [ "$WEB_GOLDEN" -eq 1 ]; then
+    exec "$REPO_DIR/devtools/run-web-golden" ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"}
+fi
+
+# The native and web golden suites share the ddbsh_test_* tables in one
+# account; hold the shared lock so they never overlap (devtools/lib-web.sh).
+# shellcheck source=devtools/lib-web.sh
+. "$REPO_DIR/devtools/lib-web.sh"
+web_golden_lock "$REPO_DIR"
 
 # Derive a suite label if not given: use the -R regex if present, else "all"
 # ("full-engine" in exposure mode).

@@ -1,42 +1,22 @@
 # Copyright 2026 ddbsh reimplementation contributors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# web/CMakeLists.txt — the Emscripten/WASM web target (P6d; two editions P6f).
+# web/CMakeLists.txt — the Emscripten/WASM browser edition (P6d; P9).
 #
-# Builds the browser WebAssembly module(s) that run the SDK-free engine. The
-# whole hard-to-port stack (lexer, parser, planner, executor, renderer,
-# ddbsh-wire codec, WireClient) ships as ONE portable artifact; the only thing
-# that differs between editions is the linked wire Transport (D-P6f-2):
+# Builds ONE WebAssembly module, `ddbsh-wasm` (OUTPUT_NAME ddbsh ->
+# ddbsh.js/ddbsh.wasm), that runs the SDK-free engine — lexer, parser,
+# planner, executor, renderer, ddbsh-wire codec, WireClient and the
+# terminal-free CLI driver (ddbsh-cli-core) — over JsSdkTransport, which hands
+# each serialized request to the page's vendored AWS SDK for JavaScript v3
+# bridge (web/sdk-bridge.mjs). The SDK signs (SigV4) and sends it straight to
+# Amazon DynamoDB; there is no server-side component (P9, D-P9-1).
 #
-#   ddbsh-wasm                FetchTransport   -> ddbsh-web-proxy (Module.fetchDdb)
-#                             OUTPUT_NAME ddbsh (ddbsh.js/ddbsh.wasm) — the
-#                             PRIMARY, production real-backend edition (real
-#                             DynamoDB / real ExtendDB via the local signing
-#                             proxy). This is the default the UI loads when
-#                             served by ddbsh-web-proxy.
-#
-#   ddbsh-wasm-extenddb-wasm  SubmitTransport  -> in-tab ExtendDB (Module.submit)
-#                             OUTPUT_NAME ddbsh-extenddb
-#                             (ddbsh-extenddb.js/ddbsh-extenddb.wasm) — the
-#                             zero-install, no-credential, no-network, PRE-RELEASE
-#                             in-browser edition (safe to host publicly). The UI
-#                             loads it when served statically (no proxy present).
-#
-# (The `ddbsh` vs `ddbsh-extenddb` output-filename convention is ratified at
-# P6f-e: the production proxy edition owns the clean `ddbsh` name; the in-browser
-# ExtendDB edition is suffixed. The UI (web/app.js) auto-selects the edition by
-# probing the proxy's /healthz, so the SAME index.html bundle drives both.)
-#
-# Both editions link only the portable libraries — ddbsh::ddbsh (engine),
-# ddbsh::wire (codec + WireClient), ddbsh-cli-core (the terminal-free batch
-# policy) — plus the edition's Asyncify transport bridge and the shared embind
-# surface (bindings.cpp). They link NO AWS SDK, NO readline, NO CLI. The fetch
-# edition handles no credentials itself (the proxy signs); the submit edition
-# makes no network call at all.
+# The module links NO AWS SDK for C++, NO readline, NO CLI binary. It handles
+# no credentials itself: the user's short-term credentials stay in the JS
+# bridge's closure.
 #
 # Configured only under the Emscripten toolchain (emcmake). Guarded by
-# DDBSH_BUILD_WEB (default OFF, §4.1) so the normal CI matrix needs no
-# Emscripten.
+# DDBSH_BUILD_WEB (default OFF) so the normal CI matrix needs no Emscripten.
 
 if(NOT EMSCRIPTEN)
     message(FATAL_ERROR
@@ -45,13 +25,16 @@ if(NOT EMSCRIPTEN)
         "(see web/README.md for the pinned emsdk setup).")
 endif()
 
-# The shared Emscripten link flags (D-P6-12 Asyncify + embind + ES6 module):
-#   -sASYNCIFY            suspend/resume the C++ stack across the submit/fetch await
+# Emscripten link flags:
+#   -sASYNCIFY            suspend/resume the C++ stack across the SDK bridge await
 #   --bind               embind (the DdbshSession class + RunResult value_object)
 #   -sMODULARIZE/ES6     emit an ES6 module exporting a factory (createDdbsh)
-#   -sEXPORT_NAME        the factory name the harness/UI imports
+#   -sEXPORT_NAME        the factory name the page and the Node shim import
 #   -sALLOW_MEMORY_GROWTH the engine's working set is input-dependent
-#   -sEXPORTED_RUNTIME_METHODS  the UTF8 helpers the Asyncify bridges' JS uses
+#   -sDYNAMIC_EXECUTION=0 no eval / new Function in the emitted glue, so the page
+#                        runs under `script-src 'self' 'wasm-unsafe-eval'`
+#                        (D-P9-02-9, F10); run-web-smoke and CI grep the glue
+#   -sEXPORTED_RUNTIME_METHODS  the UTF8 helpers the Asyncify bridge's JS uses
 # Pinned to the emsdk documented in web/README.md; revisit flags on an emsdk bump.
 set(DDBSH_WEB_LINK_OPTIONS
     "-sASYNCIFY"
@@ -60,71 +43,45 @@ set(DDBSH_WEB_LINK_OPTIONS
     "-sEXPORT_ES6=1"
     "-sEXPORT_NAME=createDdbsh"
     "-sALLOW_MEMORY_GROWTH=1"
+    "-sDYNAMIC_EXECUTION=0"
     "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8','lengthBytesUTF8']")
 
-# One edition = the shared embind surface (bindings.cpp) + exactly one transport
-# bridge TU. `fetch_edition` toggles DDBSH_WEB_FETCH (bindings.cpp picks the
-# transport type) and the transport bridge compiled in.
-function(ddbsh_add_web_edition target output_name transport_src fetch_edition)
-    add_executable(${target} bindings.cpp ${transport_src})
-    set_target_properties(${target} PROPERTIES OUTPUT_NAME ${output_name})
-    # bindings.cpp includes "repl.hpp" (the shared batch runner) from cli/.
-    target_include_directories(${target} PRIVATE "${CMAKE_SOURCE_DIR}/cli")
-    target_link_libraries(${target}
-        PRIVATE ddbsh::ddbsh ddbsh::wire ddbsh-cli-core ddbsh_warnings)
-    target_link_options(${target} PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
-    if(fetch_edition)
-        target_compile_definitions(${target} PRIVATE DDBSH_WEB_FETCH)
-    endif()
-endfunction()
+add_executable(ddbsh-wasm bindings.cpp js_sdk_transport.cpp)
+set_target_properties(ddbsh-wasm PROPERTIES OUTPUT_NAME ddbsh)
+# bindings.cpp includes "repl.hpp" (the shared CLI driver) from cli/.
+target_include_directories(ddbsh-wasm PRIVATE "${CMAKE_SOURCE_DIR}/cli" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(ddbsh-wasm
+    PRIVATE ddbsh::ddbsh ddbsh::wire ddbsh-cli-core ddbsh_warnings)
+target_link_options(ddbsh-wasm PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
 
-# The real-backend proxy edition (PRIMARY; OUTPUT_NAME ddbsh -> ddbsh.js/ddbsh.wasm).
-ddbsh_add_web_edition(ddbsh-wasm ddbsh transport_fetch.cpp ON)
-# The in-tab ExtendDB edition (OUTPUT_NAME ddbsh-extenddb -> ddbsh-extenddb.js/.wasm).
-ddbsh_add_web_edition(ddbsh-wasm-extenddb-wasm ddbsh-extenddb transport_browser.cpp OFF)
-
-# Stage ddbsh's OWN files beside the emitted modules so the output dir is BOTH
-# (a) a Node-smoke environment and (b) a directly-servable static web bundle.
-#
-# The in-browser ExtendDB adapter (vendor/extenddb/) is DELIBERATELY NOT staged
-# here (D-P6f-8): ddbsh never ships/commits the adapter blob, and the build
-# stages only ddbsh's own files. The adapter is a third-party drop-in for the
-# in-tab edition only — dropped into <bundle>/vendor/extenddb/ by
-# devtools/stage-extenddb-webasm (run-web-smoke / serve-web) or by the
-# user/deploy (see web/vendor/extenddb/PROVENANCE.md). This makes an adapter
-# upgrade a swap-the-dir-and-relaunch, with no ddbsh rebuild.
-#
-# Staged files:
-#   - harness.mjs  the P6d Node end-to-end smoke (SubmitTransport, in-tab ExtendDB),
-#   - harness-fetch.mjs  the P6f-a Node smoke (FetchTransport over a stub proxy),
-#   - harness-proxy.mjs  the P6f-b Node smoke (FetchTransport over the REAL
-#                        ddbsh-web-proxy against real DynamoDB; run by
-#                        devtools/run-proxy-smoke),
-#   - harness-extenddb.mjs  the P6f-c Node smoke (FetchTransport over the REAL
-#                        ddbsh-web-proxy against a REAL local ExtendDB server;
-#                        run by devtools/run-extenddb-smoke),
-#   - harness-proxy-lib.mjs  the shared handshake + corpus both proxy smokes use,
-#   - package.json marks the output as ES modules for Node,
-#   - index.html / app.js / app-core.mjs / styles.css  the P6e product UI (O-5),
-#   - app-core.test.mjs  the DOM-free app-core Node unit tests (D-P6e-3).
-# Staging is attached to the in-tab edition and ordered AFTER the fetch edition
-# (add_dependencies) so both modules exist in the dir before the bundle is
-# considered complete. After `cmake --build`, this dir holds ddbsh's complete
-# static bundle; dropping the ExtendDB adapter into vendor/extenddb/
-# (devtools/stage-extenddb-webasm) completes the in-tab edition (README).
-add_dependencies(ddbsh-wasm-extenddb-wasm ddbsh-wasm)
-add_custom_command(TARGET ddbsh-wasm-extenddb-wasm POST_BUILD
+# Stage ddbsh's static bundle beside the emitted module, so the output dir is
+# BOTH directly servable (any static server) and the environment the Node
+# gates run in:
+#   index.html app.js app-core.mjs sdk-bridge.mjs styles.css   the page
+#   vendor/aws-sdk/{aws-sdk-dynamodb.mjs, allowed-hosts.mjs,
+#                   PROVENANCE.json, THIRD-PARTY-NOTICES.txt}    the pinned SDK
+#   ddbsh-node.mjs        the CLI-shaped Node shim the web golden gate drives
+#   live-smoke.mjs        the live UI-path smoke devtools/run-web-smoke runs
+#   app-core.test.mjs sdk-bridge.test.mjs   the offline Node unit tests
+#   package.json          marks the dir as ES modules for Node
+add_custom_command(TARGET ddbsh-wasm POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
-            "${CMAKE_CURRENT_SOURCE_DIR}/harness.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/harness-fetch.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/harness-proxy.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/harness-extenddb.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/harness-proxy-lib.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
             "${CMAKE_CURRENT_SOURCE_DIR}/index.html"
             "${CMAKE_CURRENT_SOURCE_DIR}/app.js"
             "${CMAKE_CURRENT_SOURCE_DIR}/app-core.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/app-core.test.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/sdk-bridge.mjs"
             "${CMAKE_CURRENT_SOURCE_DIR}/styles.css"
-            "$<TARGET_FILE_DIR:ddbsh-wasm-extenddb-wasm>/"
-    COMMENT "Staging ddbsh's own Node smokes + P6e web UI bundle beside the wasm modules (the ExtendDB adapter is a drop-in; see web/vendor/extenddb/PROVENANCE.md)")
+            "${CMAKE_CURRENT_SOURCE_DIR}/ddbsh-node.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/live-smoke.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/app-core.test.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/sdk-bridge.test.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
+            "$<TARGET_FILE_DIR:ddbsh-wasm>/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:ddbsh-wasm>/vendor/aws-sdk"
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/aws-sdk-dynamodb.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/allowed-hosts.mjs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/PROVENANCE.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/THIRD-PARTY-NOTICES.txt"
+            "$<TARGET_FILE_DIR:ddbsh-wasm>/vendor/aws-sdk/"
+    COMMENT "Staging the ddbsh browser bundle (page, pinned AWS SDK, Node shim + tests) beside ddbsh.js/ddbsh.wasm")
