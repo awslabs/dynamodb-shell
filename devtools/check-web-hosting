@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/check-web-hosting — verify a deployed ddbsh-web-hosting.yaml stack
+# (P10 T1 checks a-e) and record the result.
+#
+# Usage:
+#   AWS_PROFILE=<hosting profile> devtools/check-web-hosting <stack-name> [label]
+#
+# Checks, all anonymous over the public internet except (e)'s bucket reads:
+#   a. HTTPS 200 on / and on every file in web/bundle-files.txt; plain HTTP
+#      answers 301 with an https:// Location.
+#   b. each file's Content-Type (the upload's per-type value).
+#   c. every response carries the eight headers of the template's response
+#      headers policy.
+#   d. the sha256 of every served file matches the packaged SHA256SUMS
+#      (build-preset/wasm-release/dist/, or DDBSH_WEB_DIST_DIR).
+#   e. the bucket is private: an anonymous GET straight from S3 is 403; Block
+#      Public Access is fully on; S3 rates the policy not public; the policy
+#      grants only cloudfront.amazonaws.com for this distribution; ownership is
+#      BucketOwnerEnforced; the objects are exactly the allowlist.
+#
+# Output: discussions/test-<label>-<HEAD-short>.log (label default: s3host).
+# Needs curl, sha256sum, the AWS CLI, and credentials that can read the
+# stack's outputs and the bucket's configuration (s3:GetBucket*, ListBucket).
+
+set -uo pipefail
+
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+    echo "usage: $0 <stack-name> [label]" >&2
+    exit 2
+fi
+STACK="$1"
+LABEL="${2:-s3host}"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+mkdir -p "$REPO_DIR/discussions"
+LOG="$REPO_DIR/discussions/test-${LABEL}-${HASH}.log"
+REGION="${AWS_REGION:-us-east-1}"
+DIST_DIR="${DDBSH_WEB_DIST_DIR:-$REPO_DIR/build-preset/wasm-release/dist}"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+FAIL=0
+log() { echo "$*" | tee -a "$LOG"; }
+ok() { log "  ok   $*"; }
+bad() { log "  FAIL $*"; FAIL=$((FAIL + 1)); }
+expect() { # expect <actual> <expected> <label>
+    if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 — expected '$2', got '$1'"; fi
+}
+
+: >"$LOG"
+log "=== ddbsh web hosting check ($HASH) ==="
+log "  stack:     $STACK ($REGION)"
+log "  caller:    $(aws sts get-caller-identity --query Arn --output text 2>&1)"
+log "  timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text
+}
+STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" --query 'Stacks[0].StackStatus' --output text 2>&1)"
+DOMAIN="$(output DistributionDomainName)"
+DIST_ID="$(output DistributionId)"
+BUCKET="$(output BucketName)"
+SITE="$(output SiteUrl)"
+log "  status:    $STATUS"
+log "  url:       $SITE"
+log "  dist id:   $DIST_ID"
+log "  bucket:    $BUCKET"
+if [ "$STATUS" != "CREATE_COMPLETE" ] && [ "$STATUS" != "UPDATE_COMPLETE" ]; then
+    log "error: stack is not in a complete state"
+    exit 1
+fi
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+DIST_ARN="arn:aws:cloudfront::${ACCOUNT}:distribution/${DIST_ID}"
+
+mapfile -t FILES < <(grep -vE '^\s*(#|$)' "$REPO_DIR/web/bundle-files.txt" | tr -d '\r' | sed 's/[[:space:]]*$//')
+BUNDLE="$(cd "$DIST_DIR" 2>/dev/null && ls -d ddbsh-web-*/ 2>/dev/null | head -1 | tr -d /)"
+log "  bundle:    $DIST_DIR/$BUNDLE (${#FILES[@]} allowlisted files)"
+
+content_type_for() {
+    case "$1" in
+        *.html) echo "text/html; charset=utf-8" ;;
+        *.js | *.mjs) echo "text/javascript" ;;
+        *.wasm) echo "application/wasm" ;;
+        *.css) echo "text/css; charset=utf-8" ;;
+        *.json) echo "application/json" ;;
+        *.txt) echo "text/plain; charset=utf-8" ;;
+        *) echo "(no upload rule)" ;;
+    esac
+}
+header() { # header <headers-file> <name> -> value of the last occurrence (CR stripped)
+    grep -i "^$2:" "$1" | tail -1 | cut -d: -f2- | sed 's/^ *//' | tr -d '\r'
+}
+check_security_headers() { # check_security_headers <headers-file> <what>
+    local h="$1" what="$2" pp
+    expect "$(header "$h" content-security-policy)" "frame-ancestors 'none'" "c. $what: Content-Security-Policy"
+    expect "$(header "$h" x-frame-options)" "DENY" "c. $what: X-Frame-Options"
+    expect "$(header "$h" strict-transport-security)" "max-age=31536000" "c. $what: Strict-Transport-Security"
+    expect "$(header "$h" x-content-type-options)" "nosniff" "c. $what: X-Content-Type-Options"
+    expect "$(header "$h" referrer-policy)" "no-referrer" "c. $what: Referrer-Policy"
+    expect "$(header "$h" cross-origin-opener-policy)" "same-origin" "c. $what: Cross-Origin-Opener-Policy"
+    expect "$(header "$h" cross-origin-resource-policy)" "same-origin" "c. $what: Cross-Origin-Resource-Policy"
+    pp="$(header "$h" permissions-policy)"
+    if [[ "$pp" == *"camera=()"* && "$pp" == *"microphone=()"* && "$pp" == *"geolocation=()"* &&
+          "$pp" == *"payment=()"* && "$pp" == *"usb=()"* ]]; then
+        ok "c. $what: Permissions-Policy denies camera, microphone, geolocation, payment, usb"
+    else
+        bad "c. $what: Permissions-Policy — got '$pp'"
+    fi
+}
+
+log ""
+log "--- a/b/c/d: anonymous fetches through https://$DOMAIN/ ---"
+code="$(curl -sS -o "$WORK/root.body" -D "$WORK/root.h" -w '%{http_code}' "https://$DOMAIN/")"
+expect "$code" "200" "a. GET / over HTTPS"
+expect "$(header "$WORK/root.h" content-type)" "text/html; charset=utf-8" "b. / Content-Type"
+check_security_headers "$WORK/root.h" "/"
+if cmp -s "$WORK/root.body" "$DIST_DIR/$BUNDLE/index.html"; then ok "d. / serves index.html"; else bad "d. / does not serve index.html"; fi
+code="$(curl -sS -o /dev/null -D "$WORK/http.h" -w '%{http_code}' "http://$DOMAIN/index.html")"
+expect "$code" "301" "a. GET over plain HTTP redirects (301)"
+expect "$(header "$WORK/http.h" location)" "https://$DOMAIN/index.html" "a. the redirect goes to https://"
+
+for f in "${FILES[@]}"; do
+    safe="${f//\//_}"
+    code="$(curl -sS -o "$WORK/$safe.body" -D "$WORK/$safe.h" -w '%{http_code}' "https://$DOMAIN/$f")"
+    expect "$code" "200" "a. GET /$f"
+    expect "$(header "$WORK/$safe.h" content-type)" "$(content_type_for "$f")" "b. /$f Content-Type"
+    check_security_headers "$WORK/$safe.h" "/$f"
+    want="$(grep "  $BUNDLE/$f\$" "$DIST_DIR/SHA256SUMS" | cut -d' ' -f1)"
+    got="$(sha256sum "$WORK/$safe.body" | cut -d' ' -f1)"
+    expect "$got" "$want" "d. /$f sha256 matches SHA256SUMS"
+done
+
+log ""
+log "--- e: the bucket is private ---"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET.s3.$REGION.amazonaws.com/index.html")"
+expect "$code" "403" "e. anonymous GET straight from S3 is denied"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET.s3.$REGION.amazonaws.com/")"
+expect "$code" "403" "e. anonymous bucket listing is denied"
+expect "$(aws s3api get-public-access-block --bucket "$BUCKET" --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text)" \
+    "True	True	True	True" "e. Block Public Access: all four settings on"
+expect "$(aws s3api get-bucket-policy-status --bucket "$BUCKET" --query 'PolicyStatus.IsPublic' --output text)" "False" "e. S3 rates the bucket policy not public"
+expect "$(aws s3api get-bucket-ownership-controls --bucket "$BUCKET" --query 'OwnershipControls.Rules[0].ObjectOwnership' --output text)" \
+    "BucketOwnerEnforced" "e. object ownership BucketOwnerEnforced"
+aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text >"$WORK/policy.json"
+expect "$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[s for s in p["Statement"] if s["Effect"]=="Allow"]; print(len(a), json.dumps(a[0]["Principal"],sort_keys=True), a[0]["Action"], a[0]["Condition"]["StringEquals"]["AWS:SourceArn"])' "$WORK/policy.json")" \
+    "1 {\"Service\": \"cloudfront.amazonaws.com\"} s3:GetObject $DIST_ARN" \
+    "e. the only Allow is s3:GetObject for cloudfront.amazonaws.com from this distribution"
+expect "$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); d=[s for s in p["Statement"] if s["Effect"]=="Deny"]; print(len(d), d[0]["Condition"]["Bool"]["aws:SecureTransport"])' "$WORK/policy.json")" \
+    "1 false" "e. requests without TLS are denied"
+expect "$(aws s3api get-bucket-encryption --bucket "$BUCKET" --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' --output text)" \
+    "AES256" "e. default encryption SSE-S3"
+expect "$(aws s3api get-bucket-versioning --bucket "$BUCKET" --query Status --output text)" "Enabled" "e. versioning enabled"
+objects="$(aws s3api list-objects-v2 --bucket "$BUCKET" --query 'Contents[].Key' --output text | tr '\t' '\n' | sort | tr '\n' ' ')"
+allow="$(printf '%s\n' "${FILES[@]}" | sort | tr '\n' ' ')"
+expect "$objects" "$allow" "e. the bucket holds exactly the allowlisted files"
+
+log ""
+if [ "$FAIL" -eq 0 ]; then
+    log "=== hosting check: all passed ==="
+else
+    log "=== hosting check: $FAIL FAILED ==="
+fi
+log "  artifact: $LOG"
+[ "$FAIL" -eq 0 ]
