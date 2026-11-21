@@ -46,10 +46,12 @@ set_property(TEST ishow-version PROPERTY PASS_REGULAR_EXPRESSION "ddbsh - versio
 # version-agnostically with a PASS_REGULAR_EXPRESSION asserting the report
 # STRUCTURE. Driven through the CLI (ddbshtest), the client is AwsDDBClient, so
 # the Backend line reports the direct AWS SDK binding. Region/Endpoint come from
-# the standard AWS resolution chain, so they are matched loosely.
+# the standard AWS resolution chain, so they are matched loosely. The Backend
+# pattern is DDBSH_GOLDEN_BACKEND_REGEX (tests/golden/CMakeLists.txt): the native
+# default, or the browser edition's descriptor under devtools/run-web-golden.
 add_test(NAME ishow-connection COMMAND ddbshtest -q -c "show connection")
 set_property(TEST ishow-connection PROPERTY PASS_REGULAR_EXPRESSION
-    "ddbsh - version [0-9]+\\.[0-9]+(\\.[0-9]+)*\nRegion: .*\nEndpoint: .*\nBackend: aws-sdk-cpp \\(direct DynamoDB\\)")
+    "ddbsh - version [0-9]+\\.[0-9]+(\\.[0-9]+)*\nRegion: .*\nEndpoint: .*\n${DDBSH_GOLDEN_BACKEND_REGEX}")
 
 add_test(NAME iconnect COMMAND ddbshtest -q -T ${RD}/iconnect.exp -c "connect \"us-east-1\";")
 

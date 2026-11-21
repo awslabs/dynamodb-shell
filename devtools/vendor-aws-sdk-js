@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/vendor-aws-sdk-js — rebuild (or verify) the vendored, pinned AWS SDK
+# for JavaScript v3 bundle the browser edition loads (P9, D-P9-5 / D-P9-02-8).
+#
+# Inputs (committed, web/vendor/aws-sdk/):
+#   package.json        exact pins: @aws-sdk/client-dynamodb, esbuild
+#   package-lock.json   the reproducible install
+#   entry.mjs           the exported client + command classes
+#   generate.mjs        writes allowed-hosts.mjs + THIRD-PARTY-NOTICES.txt and
+#                       rewrites the CSP in web/index.html
+#
+# Outputs (committed):
+#   web/vendor/aws-sdk/aws-sdk-dynamodb.mjs     the bundle the page loads
+#   web/vendor/aws-sdk/allowed-hosts.mjs        REGIONS / ALLOWED_HOSTS / SDK_VERSION
+#   web/vendor/aws-sdk/THIRD-PARTY-NOTICES.txt  bundled packages + licenses
+#   web/vendor/aws-sdk/PROVENANCE.json          versions, build command, sha256s
+#   web/index.html                              CSP connect-src (between markers)
+#
+# Modes:
+#   (none)    npm ci from the lockfile, bundle, generate, copy outputs in place.
+#   --lock    first regenerate package-lock.json from package.json (use after
+#             changing a pin), then build as above.
+#   --check   build into a temp dir from the lockfile and compare the sha256 of
+#             every output with the committed files (and the CSP in
+#             index.html). Exit 1 on any difference. Used by CI so the committed
+#             bundle is a reproducible build, not an opaque blob.
+#
+# Needs Node >= 20 (SDK >= 3.950); emsdk's bundled Node is used when present.
+# Network access to the npm registry is needed for npm ci. No AWS access.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+VENDOR_DIR="$REPO_DIR/web/vendor/aws-sdk"
+INDEX_HTML="$REPO_DIR/web/index.html"
+
+MODE="build"
+case "${1:-}" in
+    "") ;;
+    --lock) MODE="lock" ;;
+    --check) MODE="check" ;;
+    *) echo "usage: $0 [--lock|--check]" >&2; exit 2 ;;
+esac
+
+# --- Node >= 20 -------------------------------------------------------------
+EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
+EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | sort -V | tail -1)" 2>/dev/null || true)"
+if [ -n "$EMSDK_NODE_BIN" ] && [ -x "$EMSDK_NODE_BIN/node" ]; then
+    export PATH="$EMSDK_NODE_BIN:$PATH"
+fi
+if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
+    echo "error: Node >= 20 required (found $(node --version)); install emsdk per web/README.md or put Node 20+ on PATH." >&2
+    exit 1
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+cp "$VENDOR_DIR/package.json" "$VENDOR_DIR/entry.mjs" "$VENDOR_DIR/generate.mjs" "$WORK/"
+cp "$INDEX_HTML" "$WORK/index.html"
+if [ "$MODE" = "lock" ]; then
+    (cd "$WORK" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund >/dev/null)
+    cp "$WORK/package-lock.json" "$VENDOR_DIR/package-lock.json"
+    echo "regenerated $VENDOR_DIR/package-lock.json"
+else
+    if [ ! -f "$VENDOR_DIR/package-lock.json" ]; then
+        echo "error: $VENDOR_DIR/package-lock.json missing; run '$0 --lock' first." >&2
+        exit 1
+    fi
+    cp "$VENDOR_DIR/package-lock.json" "$WORK/"
+fi
+
+(cd "$WORK" && npm ci --ignore-scripts --no-audit --no-fund >/dev/null)
+
+ESBUILD_ARGS=(entry.mjs --bundle --format=esm --platform=browser --target=es2022
+              --minify --legal-comments=none --outfile=aws-sdk-dynamodb.mjs)
+(cd "$WORK" && ./node_modules/.bin/esbuild "${ESBUILD_ARGS[@]}" --metafile=meta.json --log-level=warning)
+(cd "$WORK" && node generate.mjs "$WORK" "$WORK/index.html")
+
+SDK_VERSION="$(cd "$WORK" && node -p 'require("./node_modules/@aws-sdk/client-dynamodb/package.json").version')"
+ESBUILD_VERSION="$(cd "$WORK" && ./node_modules/.bin/esbuild --version)"
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+OUTPUTS=(aws-sdk-dynamodb.mjs allowed-hosts.mjs THIRD-PARTY-NOTICES.txt)
+
+if [ "$MODE" = "check" ]; then
+    rc=0
+    for f in "${OUTPUTS[@]}"; do
+        want="$(sha "$VENDOR_DIR/$f" 2>/dev/null || echo missing)"
+        got="$(sha "$WORK/$f")"
+        if [ "$want" != "$got" ]; then
+            echo "DRIFT: web/vendor/aws-sdk/$f (committed $want, rebuilt $got)" >&2
+            rc=1
+        fi
+        recorded="$(node -e 'const p=require(process.argv[1]); process.stdout.write((p.sha256||{})[process.argv[2]]||"")' "$VENDOR_DIR/PROVENANCE.json" "$f")"
+        if [ "$recorded" != "$got" ]; then
+            echo "DRIFT: PROVENANCE.json sha256 for $f ($recorded) != rebuilt ($got)" >&2
+            rc=1
+        fi
+    done
+    if ! cmp -s "$INDEX_HTML" "$WORK/index.html"; then
+        echo "DRIFT: web/index.html CSP differs from the generated host list" >&2
+        rc=1
+    fi
+    if [ "$rc" -eq 0 ]; then
+        echo "vendor check OK: @aws-sdk/client-dynamodb $SDK_VERSION, esbuild $ESBUILD_VERSION, outputs match PROVENANCE.json"
+    fi
+    exit "$rc"
+fi
+
+for f in "${OUTPUTS[@]}"; do
+    cp "$WORK/$f" "$VENDOR_DIR/$f"
+done
+cp "$WORK/index.html" "$INDEX_HTML"
+
+node -e '
+const [sdk, esb, a, h, n] = process.argv.slice(1);
+const out = {
+  package: "@aws-sdk/client-dynamodb",
+  sdk_version: sdk,
+  esbuild_version: esb,
+  build_command: "esbuild entry.mjs --bundle --format=esm --platform=browser --target=es2022 --minify --legal-comments=none --outfile=aws-sdk-dynamodb.mjs",
+  rebuild: "devtools/vendor-aws-sdk-js (verify: devtools/vendor-aws-sdk-js --check)",
+  built_utc: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+  sha256: { "aws-sdk-dynamodb.mjs": a, "allowed-hosts.mjs": h, "THIRD-PARTY-NOTICES.txt": n },
+};
+process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+' "$SDK_VERSION" "$ESBUILD_VERSION" "$(sha "$WORK/aws-sdk-dynamodb.mjs")" \
+  "$(sha "$WORK/allowed-hosts.mjs")" "$(sha "$WORK/THIRD-PARTY-NOTICES.txt")" > "$VENDOR_DIR/PROVENANCE.json"
+
+echo "vendored @aws-sdk/client-dynamodb $SDK_VERSION (esbuild $ESBUILD_VERSION) into web/vendor/aws-sdk/"
+ls -l "$VENDOR_DIR"

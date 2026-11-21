@@ -7,7 +7,7 @@ ddbsh presents the user with a simple command line interface. Here the user can 
 It is also an embeddable **C++23 library** with an SDK-free, terminal-free engine
 (lexer, parser, command model, expression engine, SQL→API planner, execution,
 and output/EXPLAIN formatting), a thin `ddbsh` command that wraps it, and a
-browser/WebAssembly build with a web UI. Current version: **0.11.18**. The engine
+browser/WebAssembly build with a web UI. Current version: **0.12.0**. The engine
 drives the full standard `ddbsh` command surface end to end against real
 DynamoDB; global tables are the sole deferred family.
 
@@ -43,27 +43,42 @@ Or start the interactive shell and type SQL-like statements terminated by `;`:
 
 ```
 $ ddbsh
-ddbsh - version 0.11.18
+ddbsh - version 0.12
 us-east-1> show tables;
 ```
 
-## The five configurations at a glance
+## The three configurations at a glance
 
-ddbsh runs in five configurations, formed by two choices: **which form of ddbsh**
-(the native binary or the browser/WebAssembly build) and **which backend** (real
-Amazon DynamoDB, a self-hosted [ExtendDB](https://github.com/awslabs/extenddb)
-server, or an ExtendDB database bundled into the same browser tab).
+ddbsh runs in three configurations, formed by two choices: **which form of
+ddbsh** (the native binary or the browser edition) and **which backend** (real
+Amazon DynamoDB or a self-hosted [ExtendDB](https://github.com/awslabs/extenddb)
+server).
 
 | # | ddbsh form | Backend | Page |
 |---|---|---|---|
 | 1 | native binary | AWS DynamoDB | [docs/configurations/01-native-aws.md](docs/configurations/01-native-aws.md) |
 | 2 | native binary | ExtendDB on a host | [docs/configurations/02-native-extenddb.md](docs/configurations/02-native-extenddb.md) |
-| 3 | browser (WASM) | AWS DynamoDB | [docs/configurations/03-browser-aws.md](docs/configurations/03-browser-aws.md) |
-| 4 | browser (WASM) | ExtendDB on a host | [docs/configurations/04-browser-extenddb-server.md](docs/configurations/04-browser-extenddb-server.md) |
-| 5 | browser (WASM) | ExtendDB in the browser | [docs/configurations/05-browser-in-tab-extenddb.md](docs/configurations/05-browser-in-tab-extenddb.md) (pre-release) |
+| 3 | browser edition | AWS DynamoDB | [docs/configurations/03-browser-aws.md](docs/configurations/03-browser-aws.md) |
 
 See the [configurations index](docs/configurations/README.md) for getting
 started, environment variables, and cross-account access.
+
+## Browser edition
+
+The browser edition is a static web page: the same engine compiled to
+WebAssembly, plus a pinned copy of the AWS SDK for JavaScript that signs each
+request and sends it from the tab straight to DynamoDB. There is no server-side
+component. You paste short-term credentials (`aws sts get-session-token`,
+`aws sts assume-role`, or SSO `export-credentials`); they stay in the tab's
+memory. Long-term `AKIA…` keys and non-AWS endpoints are refused. Build and
+serve it locally with:
+
+```sh
+emcmake cmake --preset wasm-release && cmake --build build-preset/wasm-release
+devtools/serve-web 8080        # loopback only; open http://localhost:8080/
+```
+
+Details: [docs/configurations/03-browser-aws.md](docs/configurations/03-browser-aws.md).
 
 ## Documentation
 
@@ -75,15 +90,15 @@ started, environment variables, and cross-account access.
   direction.
 - **[Embedding the library](docs/EMBEDDING.md)** — the `Connection`/`Database`
   API, `ddbsh::aws::open`, the offline `MemoryClient`, and `find_package(ddbsh)`.
-- **[Running ddbsh: configurations](docs/configurations/README.md)** — the five
+- **[Running ddbsh: configurations](docs/configurations/README.md)** — the three
   run configurations, one page each.
 - **[Command reference](docs/reference/README.md)** — the full SQL-like command
   surface: [control](docs/reference/control.md),
   [DDL](docs/reference/ddl.md), [DML](docs/reference/dml.md), and
   [special topics](docs/reference/special-topics.md).
 
-The browser build, the web UI, and the `ddbsh-web-proxy` are documented in
-[`web/README.md`](web/README.md) and [`proxy/README.md`](proxy/README.md).
+Developer notes for the browser edition (layout, rebuilding the bundled AWS SDK
+for JavaScript, the web gates) are in [`web/README.md`](web/README.md).
 
 ## Direction
 

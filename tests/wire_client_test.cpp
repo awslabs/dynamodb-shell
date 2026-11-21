@@ -250,17 +250,17 @@ TEST(WireClient, ConnectForwardsToTransportOnConnect) {
 }
 
 TEST(WireClient, ConnectPropagatesTransportControlError) {
-    // A failing on_connect (e.g. the proxy rejected the control request) is
+    // A failing on_connect (e.g. the transport refused the new target) is
     // returned by connect(). The Session treats this as non-fatal, but the
     // client surfaces it faithfully (D-P6f-4).
     CannedTransport transport;
     transport.set_connect_error(
-        Error{Errc::service_error, "proxy rejected connect", std::nullopt, std::nullopt});
+        Error{Errc::service_error, "transport rejected connect", std::nullopt, std::nullopt});
     WireClient client(transport);
     auto r = client.connect("us-east-1", "");
     ASSERT_FALSE(r.has_value());
     EXPECT_EQ(r.error().code, Errc::service_error);
-    EXPECT_EQ(r.error().message, "proxy rejected connect");
+    EXPECT_EQ(r.error().message, "transport rejected connect");
     ASSERT_EQ(transport.connects().size(), 1u);
 }
 
@@ -268,9 +268,9 @@ TEST(WireClient, ConnectionDescriptorDelegatesToTransport) {
     // SHOW CONNECTION (D-P6f-9): WireClient reports its Transport's descriptor
     // verbatim. Contacts no backend.
     CannedTransport transport;
-    transport.set_descriptor("wire/fetch -> POST /ddb (proxy)");
+    transport.set_descriptor("wire/test -> canned backend");
     WireClient client(transport);
-    EXPECT_EQ(client.connection_descriptor(), "wire/fetch -> POST /ddb (proxy)");
+    EXPECT_EQ(client.connection_descriptor(), "wire/test -> canned backend");
     EXPECT_TRUE(transport.calls().empty());
 }
 

@@ -2,7 +2,8 @@
  * Copyright 2026 ddbsh reimplementation contributors.
  * SPDX-License-Identifier: Apache-2.0
  *
- * styles.css — minimal styling for the P6e ddbsh web UI.
+ * styles.css — minimal styling for the ddbsh browser edition (P6e UI; P9
+ * credentials panel).
  *
  * Monospace throughout so the engine Renderer's byte-exact alignment survives
  * (O-2). Zero runtime dependencies (O-4): plain CSS, no framework.
@@ -58,12 +59,19 @@ body {
 
 .panel {
     display: flex;
-    gap: 20px;
-    align-items: center;
+    flex-direction: column;
+    gap: 6px;
     padding: 8px 12px;
     background: var(--panel-bg);
     border-bottom: 1px solid var(--border);
     flex: 0 0 auto;
+}
+
+.panel-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: center;
 }
 
 .panel .title {
@@ -194,4 +202,93 @@ body {
 
 #clear-btn:hover {
     background: rgba(255, 255, 255, 0.06);
+}
+
+/* ---- credentials panel (P9) ---------------------------------------------- */
+.cred-panel summary {
+    cursor: pointer;
+    color: var(--muted);
+}
+
+.cred-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 6px;
+}
+
+.cred-input {
+    width: 100%;
+    resize: vertical;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.cred-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.cred-actions button,
+.cred-actions select {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.cred-actions select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+
+.cred-actions select:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+#cred-forget-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+}
+
+.cred-message {
+    min-height: 1.2em;
+    color: var(--muted);
+}
+
+.cred-message.error {
+    color: var(--stderr);
+}
+
+.cred-howto pre {
+    margin: 2px 0 6px 0;
+    padding: 4px 6px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 3px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.cred-howto p {
+    margin: 4px 0;
+}
+
+.cred-label code,
+.cred-howto code {
+    background: rgba(0, 0, 0, 0.35);
+    padding: 1px 4px;
+    border-radius: 3px;
 }

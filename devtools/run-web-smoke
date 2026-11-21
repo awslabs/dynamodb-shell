@@ -2,146 +2,98 @@
 # Copyright 2026 ddbsh reimplementation contributors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# devtools/run-web-smoke — build the Emscripten/WASM web target and run the
-# Node end-to-end smoke (P6d, D-P6d-2).
+# devtools/run-web-smoke — build the browser edition and run its quick gates
+# (P9 §4.5).
 #
-# This is the WASM-specific companion to devtools/run-tests. It is SEPARATE from
-# the default phase gate on purpose: the normal gate (real-DDB golden + native
-# GoogleTest) needs no Emscripten, and DDBSH_BUILD_WEB defaults OFF. This script
-# is the only thing that needs the emsdk toolchain, and it proves the one thing
-# the host build cannot: that the Asyncify bridge carries a real op round-trip
-# through the engine against in-browser ExtendDB.
+# The browser edition is ddbsh.wasm + the vendored AWS SDK for JavaScript v3,
+# calling DynamoDB directly from the tab with user-supplied short-term
+# credentials. This script is the quick companion to devtools/run-web-golden
+# (which runs the whole golden suite through the same path):
 #
-# What it does:
-#   1. locate + activate the pinned emsdk (web/README.md documents the install),
-#   2. configure + build the `wasm-release` preset (engine + wire + cli-core ->
-#      ddbsh.js/ddbsh.wasm (fetch) + ddbsh-extenddb.js (in-tab), with harnesses + UI
-#      staged; the in-browser ExtendDB adapter is a drop-in, NOT shipped by
-#      ddbsh — this script stages it from DDBSH_EXTENDDB_WEBASM_PKG, D-P6f-8),
-#   3. run `node web/harness.mjs` from the build output dir,
-#   4. run `node web/app-core.test.mjs` (the DOM-free P6e UI unit tests),
-#   5. capture the output into discussions/test-websmoke-<HEAD-short>.log.
+#   1. locate emsdk + Node >= 20, build the wasm-release preset (stages the
+#      static bundle into build-preset/wasm-release/web/);
+#   2. offline gates: glue no-eval check (the page CSP has no 'unsafe-eval'),
+#      app-core.test.mjs, sdk-bridge.test.mjs (real SDK, stub HTTP handler);
+#   3. a source grep gate: no browser storage API in sdk-bridge.mjs, and in
+#      app.js only the command-history key (D-P9-4);
+#   4. a LIVE UI-path smoke (web/live-smoke.mjs, DdbshSession.run) against real
+#      DynamoDB with STS-minted short-term credentials for the default profile:
+#      creates and drops one ddbsh_web_smoke_<pid> table.
 #
-# No AWS account, no credentials, no network: the smoke runs entirely in-process
-# (in-browser ExtendDB, in-memory SQLite). Safe to run anywhere emsdk + Node are
-# present.
+# Output: discussions/test-websmoke-<HEAD-short>.log.
 #
-# Env overrides: EMSDK (emsdk root; default $HOME/emsdk), EMSDK_PYTHON (a
-# python >= 3.10 for the emsdk scripts; auto-detected), DDBSH_WASM_BUILD_DIR.
+# Env: AWS_REGION (default us-east-1), DDBSH_WEB_CRED_SECONDS, plus
+# devtools/lib-web.sh's (EMSDK, EMSDK_PYTHON, DDBSH_WASM_BUILD_DIR).
+#
+# WARNING: step 4 talks to a real AWS account (one small table, dropped).
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=devtools/lib-web.sh
+. "$REPO_DIR/devtools/lib-web.sh"
+
 HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 DISCUSSIONS_DIR="$REPO_DIR/discussions"
 mkdir -p "$DISCUSSIONS_DIR"
 LOG_FILE="$DISCUSSIONS_DIR/test-websmoke-${HASH}.log"
+export AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 
-# --- Locate the emsdk toolchain ---------------------------------------------
-EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
-if [ ! -f "$EMSDK_ROOT/emsdk_env.sh" ]; then
-    echo "error: emsdk not found at '$EMSDK_ROOT' (set EMSDK or install per web/README.md)." >&2
-    exit 1
-fi
-
-# emsdk's python scripts and the emcc wrapper need python >= 3.10. Pick a
-# suitable interpreter if the default python3 is too old (as on this host, where
-# /usr/bin/python3 is 3.9 but /usr/bin/python3.12 exists).
-if [ -z "${EMSDK_PYTHON:-}" ]; then
-    if python3 -c 'import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
-        EMSDK_PYTHON="$(command -v python3)"
-    else
-        for cand in python3.13 python3.12 python3.11 python3.10; do
-            if command -v "$cand" >/dev/null 2>&1; then
-                EMSDK_PYTHON="$(command -v "$cand")"
-                break
-            fi
-        done
-    fi
-fi
-if [ -z "${EMSDK_PYTHON:-}" ]; then
-    echo "error: no python >= 3.10 found for the emsdk scripts (set EMSDK_PYTHON)." >&2
-    exit 1
-fi
-export EMSDK_PYTHON
-
-# Put emcc/emcmake + the emsdk node on PATH. We set PATH directly rather than
-# sourcing emsdk_env.sh in a pipeline (the env must survive into this script).
-export EMSDK="$EMSDK_ROOT"
-EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | head -1)" 2>/dev/null || true)"
-export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten${EMSDK_NODE_BIN:+:$EMSDK_NODE_BIN}:$PATH"
-
-if ! command -v emcmake >/dev/null 2>&1; then
-    echo "error: emcmake not on PATH after emsdk setup (EMSDK=$EMSDK_ROOT)." >&2
-    exit 1
-fi
-NODE_BIN="$(command -v node)"
-
-echo "=== Web smoke: emsdk + toolchain ===" | tee "$LOG_FILE"
+web_setup_emsdk
 {
-    echo "  commit:   $HASH"
-    echo "  emsdk:    $EMSDK_ROOT"
-    echo "  emcc:     $(emcc --version 2>/dev/null | head -1)"
-    echo "  node:     $NODE_BIN ($("$NODE_BIN" --version 2>/dev/null))"
-    echo "  python:   $EMSDK_PYTHON"
-} | tee -a "$LOG_FILE"
+    echo "=== Web smoke ($HASH) ==="
+    echo "  emcc:   $(emcc --version 2>/dev/null | head -1)"
+    echo "  node:   $NODE_BIN ($("$NODE_BIN" --version))"
+    echo "  region: $AWS_REGION"
+} | tee "$LOG_FILE"
 
-# --- Configure + build the wasm-release preset ------------------------------
-WASM_BUILD="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}"
-echo "=== Configuring wasm-release (emcmake) ===" | tee -a "$LOG_FILE"
-if [ ! -f "$WASM_BUILD/CMakeCache.txt" ]; then
-    emcmake cmake --preset wasm-release 2>&1 | tee -a "$LOG_FILE"
+echo "=== Building wasm-release ===" | tee -a "$LOG_FILE"
+web_build_bundle "$REPO_DIR" 2>&1 | tee -a "$LOG_FILE"
+[ "${PIPESTATUS[0]}" -eq 0 ] || exit 1
+WEB_OUT="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}/web"
+
+RC=0
+echo "=== Offline web gates ===" | tee -a "$LOG_FILE"
+set +e
+web_offline_gates 2>&1 | tee -a "$LOG_FILE"
+[ "${PIPESTATUS[0]}" -eq 0 ] || RC=1
+set -e
+
+echo "=== Storage grep gate (D-P9-4) ===" | tee -a "$LOG_FILE"
+STORAGE_RE='localStorage|sessionStorage|indexedDB|document\.cookie'
+if grep -nE "$STORAGE_RE" "$REPO_DIR/web/sdk-bridge.mjs" | tee -a "$LOG_FILE" | grep -q .; then
+    echo "FAIL: sdk-bridge.mjs touches browser storage" | tee -a "$LOG_FILE"
+    RC=1
 fi
-echo "=== Building web editions (ddbsh-wasm + ddbsh-wasm-extenddb-wasm) ===" | tee -a "$LOG_FILE"
-cmake --build "$WASM_BUILD" 2>&1 | tee -a "$LOG_FILE"
+# app.js: only the history key's two calls may mention localStorage.
+BAD="$(grep -nE "$STORAGE_RE" "$REPO_DIR/web/app.js" | grep -vE 'localStorage\.(getItem|setItem)\(HISTORY_KEY' | grep -vE '^[0-9]+:\s*//' || true)"
+if [ -n "$BAD" ]; then
+    echo "$BAD" | tee -a "$LOG_FILE"
+    echo "FAIL: app.js uses browser storage beyond the command history" | tee -a "$LOG_FILE"
+    RC=1
+else
+    echo "ok: no credential-capable storage use" | tee -a "$LOG_FILE"
+fi
 
-# --- Run the Node smoke from the build output dir ---------------------------
-WEB_OUT="$WASM_BUILD/web"
-if [ ! -f "$WEB_OUT/ddbsh.js" ] || [ ! -f "$WEB_OUT/ddbsh-extenddb.js" ] \
-   || [ ! -f "$WEB_OUT/harness.mjs" ] || [ ! -f "$WEB_OUT/harness-fetch.mjs" ]; then
-    echo "error: web build output not found at $WEB_OUT" >&2 | tee -a "$LOG_FILE"
+echo "=== Live UI-path smoke (real DynamoDB) ===" | tee -a "$LOG_FILE"
+CRED_DIR="$(mktemp -d)"
+chmod 700 "$CRED_DIR"
+trap 'rm -rf "$CRED_DIR"' EXIT
+web_mint_credentials "$CRED_DIR" default
+export DDBSH_WEB_CREDS_FILE="$CRED_DIR/creds.json"
+{
+    echo "  endpoint:      dynamodb.${AWS_REGION}.amazonaws.com (real DynamoDB)"
+    echo "  access key id: $(web_creds_field "$DDBSH_WEB_CREDS_FILE" default AccessKeyId) (minted, short-term)"
+    echo "  caller arn:    $(web_caller_arn "$DDBSH_WEB_CREDS_FILE" default)"
+} | tee -a "$LOG_FILE"
+if tail -n 3 "$LOG_FILE" | grep -q "(sts unavailable)"; then
+    echo "error: the minted credentials could not be verified with sts get-caller-identity." | tee -a "$LOG_FILE" >&2
     exit 1
 fi
-echo "=== Running Node WASM smoke ($HASH) ===" | tee -a "$LOG_FILE"
-
-# Drop the in-browser ExtendDB adapter into the bundle's vendor/extenddb/
-# (D-P6f-8): ddbsh does not ship it, so the in-tab smokes (harness.mjs,
-# harness-fetch.mjs) stage it here from the upstream package. A missing/incomplete
-# upstream package is an INFRASTRUCTURE FAILURE, not a skip.
-echo "=== Staging in-browser ExtendDB adapter (drop-in) ===" | tee -a "$LOG_FILE"
-"$REPO_DIR/devtools/stage-extenddb-webasm" "$WEB_OUT" 2>&1 | tee -a "$LOG_FILE"
-
 set +e
-( cd "$WEB_OUT" && "$NODE_BIN" harness.mjs ) 2>&1 | tee -a "$LOG_FILE"
-RC=${PIPESTATUS[0]}
+(cd "$WEB_OUT" && "$NODE_BIN" live-smoke.mjs) 2>&1 | tee -a "$LOG_FILE"
+[ "${PIPESTATUS[0]}" -eq 0 ] || RC=1
 set -e
-
-# --- Run the FETCH-edition Node smoke (P6f-a) -------------------------------
-# The real-backend `ddbsh-wasm` edition (FetchTransport) over a stubbed proxy
-# (in-browser ExtendDB), proving the Module.fetchDdb bridge carries a real op
-# round-trip. Separate module (ddbsh.js, the fetch edition) from the in-tab
-# edition (ddbsh-extenddb.js) above.
-echo "=== Running Node WASM FETCH smoke ($HASH) ===" | tee -a "$LOG_FILE"
-set +e
-( cd "$WEB_OUT" && "$NODE_BIN" harness-fetch.mjs ) 2>&1 | tee -a "$LOG_FILE"
-RC_FETCH=${PIPESTATUS[0]}
-set -e
-if [ "$RC" -eq 0 ]; then
-    RC=$RC_FETCH
-fi
-
-# --- Run the DOM-free app-core unit tests (P6e, D-P6e-3) --------------------
-# Pure JavaScript: no WASM, no DOM, no backend. Covers the new P6e UI logic
-# (history ring, prompt builder, transcript model, file->submission, run guard).
-# Run from the staged bundle so it imports the same app-core.mjs that ships.
-echo "=== Running app-core unit tests ($HASH) ===" | tee -a "$LOG_FILE"
-set +e
-( cd "$WEB_OUT" && "$NODE_BIN" app-core.test.mjs ) 2>&1 | tee -a "$LOG_FILE"
-RC_CORE=${PIPESTATUS[0]}
-set -e
-if [ "$RC" -eq 0 ]; then
-    RC=$RC_CORE
-fi
 
 echo "=== Web smoke exit: $RC ===" | tee -a "$LOG_FILE"
 echo "  artifact: $LOG_FILE"

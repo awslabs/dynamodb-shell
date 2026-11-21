@@ -3,15 +3,24 @@
 //
 // app-core.test.mjs — Node unit tests for the DOM-free P6e UI logic (D-P6e-3).
 //
-// Zero dependencies (plain asserts + an exit code, like web/harness.mjs), no
+// Zero dependencies (plain asserts + an exit code, like web/sdk-bridge.test.mjs), no
 // DOM, no WASM: run directly with `node web/app-core.test.mjs`, or via
 // devtools/run-web-smoke alongside the engine smoke. Covers the genuinely new
 // P6e logic — the history ring, the prompt builder, the transcript-entry model,
-// the file->submission handoff, and the single-flight run guard.
+// the file->submission handoff, and the single-flight run guard — plus the P9
+// additions: ordered RunResult segments, short-term credential parsing and
+// validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9).
 
+import { readFileSync } from "node:fs";
+
+import { ALLOWED_HOSTS } from "./vendor/aws-sdk/allowed-hosts.mjs";
 import {
     buildPrompt,
     buildTranscriptEntries,
+    credentialStatus,
+    maskAccessKeyId,
+    parseCredentials,
+    validateCredentials,
     fileToSubmission,
     createHistory,
     createHistoryRecall,
@@ -197,6 +206,118 @@ console.log("createRunGuard");
     check(g.busy === false, "guard idle after end");
     check(g.begin() === true, "begin() works again after end");
     g.end();
+}
+
+// ---- buildTranscriptEntries with ordered segments (P9, D-P9-02-11) ---------
+console.log("buildTranscriptEntries: segments");
+eq(buildTranscriptEntries("r> ", "x", {
+    stdout: "A\nB\n", stderr: "E\n",
+    segments: [{ stream: "stdout", text: "A\n" }, { stream: "stderr", text: "E\n" },
+        { stream: "stdout", text: "B\n" }],
+}), [{ text: "r> x", kind: "prompt" }, { text: "A\n", kind: "stdout" },
+    { text: "E\n", kind: "stderr" }, { text: "B\n", kind: "stdout" }],
+"segments render in emission order (stderr between two results)");
+eq(buildTranscriptEntries("r> ", "x", {
+    segments: [{ stream: "stdout", text: "A\n" }, { stream: "stdout", text: "B\n" },
+        { stream: "stderr", text: "" }],
+}), [{ text: "r> x", kind: "prompt" }, { text: "A\nB\n", kind: "stdout" }],
+"adjacent same-stream segments coalesce; empty segments dropped");
+{
+    const handle = { size: () => 1, get: () => ({ stream: "stderr", text: "E\n" }) };
+    eq(buildTranscriptEntries("r> ", "", { segments: handle }), [{ text: "E\n", kind: "stderr" }],
+        "an embind vector-like segments handle is accepted");
+}
+
+// ---- credentials (P9, D-P9-3 / D-P9-4) -------------------------------------
+console.log("credentials");
+{
+    const NOW = Date.parse("2026-11-20T12:00:00Z");
+    const KEY = "ASIAQWERTYUIOPASDFGH";
+    const SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const TOKEN = "IQoJb3JpZ2luX2VjEXAMPLETOKEN==";
+    const EXP = "2026-11-20T13:00:00Z";
+
+    const sts = JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET,
+        SessionToken: TOKEN, Expiration: EXP }, AssumedRoleUser: { Arn: "arn:x" } });
+    let r = parseCredentials(sts, NOW);
+    check(r.ok && r.credentials.accessKeyId === KEY && r.credentials.sessionToken === TOKEN &&
+        r.credentials.expiration.toISOString() === "2026-11-20T13:00:00.000Z", "STS JSON accepted");
+
+    r = parseCredentials(JSON.stringify({ Version: 1, AccessKeyId: KEY, SecretAccessKey: SECRET,
+        SessionToken: TOKEN, Expiration: EXP }), NOW);
+    check(r.ok && r.credentials.secretAccessKey === SECRET, "credential-process JSON accepted");
+
+    r = parseCredentials(`export AWS_ACCESS_KEY_ID=${KEY}\nexport AWS_SECRET_ACCESS_KEY=${SECRET}\n` +
+        `export AWS_SESSION_TOKEN=${TOKEN}\nexport AWS_CREDENTIAL_EXPIRATION=${EXP}\n`, NOW);
+    check(r.ok && r.credentials.expiration instanceof Date, "bash export lines accepted");
+
+    r = parseCredentials(`AWS_ACCESS_KEY_ID="${KEY}"\r\nAWS_SECRET_ACCESS_KEY='${SECRET}'\r\n` +
+        `AWS_SESSION_TOKEN=${TOKEN}\r\n# comment\r\nAWS_REGION=us-east-1\r\n`, NOW);
+    check(r.ok && r.credentials.accessKeyId === KEY && r.credentials.secretAccessKey === SECRET &&
+        r.credentials.expiration === undefined, "env-no-export lines, quotes, CRLF, unknown keys ignored");
+
+    r = parseCredentials(`$Env:AWS_ACCESS_KEY_ID="${KEY}"\n$Env:AWS_SECRET_ACCESS_KEY="${SECRET}"\n` +
+        `$Env:AWS_SESSION_TOKEN="${TOKEN}"`, NOW);
+    check(r.ok, "PowerShell $Env: lines accepted");
+
+    r = parseCredentials(`set AWS_ACCESS_KEY_ID=${KEY}\nset AWS_SECRET_ACCESS_KEY=${SECRET}\n` +
+        `set AWS_SESSION_TOKEN=${TOKEN}`, NOW);
+    check(r.ok, "cmd set lines accepted");
+
+    const refused = [
+        [JSON.stringify({ AccessKeyId: "AKIAQWERTYUIOPASDFGH", SecretAccessKey: SECRET }), /long-term access keys \(AKIA…\)/],
+        [`AWS_ACCESS_KEY_ID=AKIAQWERTYUIOPASDFGH\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /long-term/],
+        [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}`, /a session token is required/],
+        [`AWS_ACCESS_KEY_ID=XXXXQWERTYUIOPASDFGH\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /not an AWS short-term access key id/],
+        [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SESSION_TOKEN=${TOKEN}`, /secret access key is missing/],
+        [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SECRET_ACCESS_KEY=a b\nAWS_SESSION_TOKEN=${TOKEN}`, /secret access key is missing or malformed/],
+        [JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET, SessionToken: TOKEN,
+            Expiration: "2026-11-20T11:00:00Z" } }), /these credentials expired at 2026-11-20T11:00:00.000Z/],
+        [JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET, SessionToken: TOKEN,
+            Expiration: "soon" } }), /not a valid date/],
+        ["{not json", /does not parse/],
+        ["hello world", /no AWS credentials found/],
+        ["   ", /no credentials were pasted/],
+    ];
+    for (const [text, re] of refused) {
+        const out = parseCredentials(text, NOW);
+        check(!out.ok && re.test(out.message), `refused: ${out.message}`);
+        check(out.ok || (!out.message.includes(SECRET) && !out.message.includes(TOKEN)),
+            "  refusal message reveals no secret or token");
+    }
+
+    check(validateCredentials({ accessKeyId: KEY, secretAccessKey: SECRET, sessionToken: TOKEN }, NOW) === null,
+        "validateCredentials accepts a complete set without expiration");
+    eq(maskAccessKeyId(KEY), "ASIA…DFGH", "maskAccessKeyId shows prefix + last 4");
+    eq(credentialStatus(null, NOW), "none", "status: none");
+    eq(credentialStatus({ accessKeyId: KEY, expiration: new Date(EXP) }, NOW),
+        "ASIA…DFGH, expires 13:00Z (in 60 min)", "status: expires");
+    eq(credentialStatus({ accessKeyId: KEY, expiration: new Date(EXP) }, Date.parse(EXP) + 1), "expired",
+        "status: expired");
+    eq(credentialStatus({ accessKeyId: KEY }, NOW), "ASIA…DFGH (expiry unknown)", "status: expiry unknown");
+}
+
+// ---- CSP drift check (D-P9-02-9) -------------------------------------------
+console.log("CSP");
+{
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    const m = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/);
+    check(m !== null, "index.html carries a CSP meta");
+    const directives = Object.fromEntries((m ? m[1] : "").split(";").map((d) => d.trim())
+        .filter(Boolean).map((d) => { const [k, ...v] = d.split(/\s+/); return [k, v]; }));
+    eq(directives["script-src"], ["'self'", "'wasm-unsafe-eval'"], "script-src is exactly 'self' 'wasm-unsafe-eval'");
+    eq(directives["connect-src"], ["'self'", ...ALLOWED_HOSTS.map((h) => `https://${h}`)],
+        "connect-src is exactly 'self' + ALLOWED_HOSTS");
+    eq(directives["default-src"], ["'none'"], "default-src 'none'");
+    eq(directives["object-src"], ["'none'"], "object-src 'none'");
+    eq(directives["base-uri"], ["'none'"], "base-uri 'none'");
+    check(!/unsafe-inline|'unsafe-eval'/.test(m ? m[1] : ""), "no 'unsafe-inline' or 'unsafe-eval'");
+    check(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "no inline <script> in index.html");
+    check(!/\sstyle=/i.test(html) && !/<style/i.test(html), "no inline style in index.html");
+    check(ALLOWED_HOSTS.every((h) => /^(search-)?dynamodb(-fips)?\.[a-z0-9-]+\.(amazonaws\.com|api\.aws)$/.test(h)),
+        "every allowed host is [search-]dynamodb[-fips].<region>.{amazonaws.com,api.aws}");
+    check(ALLOWED_HOSTS.includes("search-dynamodb.us-east-1.amazonaws.com"),
+        "the SearchVectors host is allowed");
 }
 
 // ---- summary ---------------------------------------------------------------

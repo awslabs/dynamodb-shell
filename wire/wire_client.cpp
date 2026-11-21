@@ -132,11 +132,12 @@ Result<void> WireClient::connect(const std::string& region, const std::string& e
     region_ = region;
     endpoint_ = endpoint;
     // Forward the new target to the transport so a backend-bound transport (the
-    // wire/fetch proxy path) can re-target before the next send() (D-P6f-4). The
-    // default Transport::on_connect is a no-op success, so the in-tab submit path
-    // and the host test doubles are unaffected. CONNECT is best-effort: the
-    // Session ignores this result (the original's reconnect() was non-fatal), so
-    // a failed proxy reconnect still records the new region/endpoint locally.
+    // browser edition's JS SDK bridge) can re-target before the next send()
+    // (D-P6f-4). The default Transport::on_connect is a no-op success, so the
+    // host test doubles are unaffected. CONNECT is best-effort: the Session
+    // ignores this result (the original's reconnect() was non-fatal), so a
+    // refused reconnect still records the new region/endpoint locally (the
+    // browser transport then fails closed, P9 D-P9-02-6).
     return transport_.on_connect(region, endpoint);
 }
 
@@ -361,8 +362,8 @@ Result<TableReplicaAutoScalingOut> WireClient::describe_table_replica_auto_scali
 
 void WireClient::backoff_sleep(std::chrono::milliseconds interval) {
 #if defined(__EMSCRIPTEN__)
-    // Asyncify yields to the browser event loop so the transport's fetch/
-    // ExtendDB call can make progress between polls (P6d).
+    // Asyncify yields to the browser event loop so the transport's fetch can
+    // make progress between polls (P6d).
     emscripten_sleep(static_cast<unsigned int>(interval.count()));
 #else
     std::this_thread::sleep_for(interval);

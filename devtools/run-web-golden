@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/run-web-golden — the browser edition's fidelity gate (P9 §4,
+# D-P9-02-4).
+#
+# Runs the WHOLE golden suite (tests/golden, every family) through the browser
+# code path — ddbsh.wasm + web/sdk-bridge.mjs + the vendored AWS SDK for
+# JavaScript v3, driven by web/ddbsh-node.mjs — against REAL DynamoDB, and
+# diffs the rendered output against the same .exp files the native CLI is held
+# to. The golden runner (tests/golden/golden-runner.sh) is unchanged; only
+# DDBSH_SHELL_BIN differs.
+#
+# Steps:
+#   1. emsdk + Node >= 20 (devtools/lib-web.sh), build wasm-release, run the
+#      offline web gates (glue no-eval, app-core + sdk-bridge tests).
+#   2. Mint short-term STS session credentials for every profile the goldens
+#      use (default, cross-acct) into a private temp dir (0700/0600, removed on
+#      exit). Long-term keys never reach the browser path; ddbsh-node.mjs runs
+#      them through the page's own validation.
+#   3. Echo + verify the target: endpoint, the minted access key id (ASIA…),
+#      and sts get-caller-identity run WITH the minted credentials.
+#   4. Configure the golden project in its own build dir with DDBSH_SHELL_BIN
+#      pointing at a wrapper that execs `node ddbsh-node.mjs`, and run ctest.
+#
+# The one golden whose expectation is backend-specific, ishow-connection (the
+# SHOW CONNECTION Backend line), is configured with the browser edition's
+# descriptor pattern via DDBSH_GOLDEN_BACKEND_REGEX; the native default is
+# unchanged (tests/golden/CMakeLists.txt).
+#
+# Artifacts (discussions/, named by HEAD short hash; the orchestration repo's
+# devtools/run-tests copies them back):
+#   test-webgolden-<hash>.log   full ctest output + offline gate output
+#   test-webgolden-<hash>.txt   target echo + counts
+#
+# Usage:
+#   devtools/run-web-golden [ctest args, e.g. -R isel]
+#   devtools/run-tests --web-golden [ctest args]      (same, via the gate entry)
+#
+# Env: AWS_REGION (default us-east-1), DDBSH_WEB_CRED_SECONDS (STS lifetime,
+# default 7200), DDBSH_WEB_GOLDEN_BUILD_DIR, plus devtools/lib-web.sh's.
+#
+# Must not run concurrently with devtools/run-tests (shared lock): both suites
+# create and drop the same ddbsh_test_* tables.
+#
+# WARNING: this talks to a real AWS account. create/insert/update/delete/drop
+# operate on real tables and data, incur real cost, and are irreversible. Use a
+# dedicated test account/region.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=devtools/lib-web.sh
+. "$REPO_DIR/devtools/lib-web.sh"
+
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DISCUSSIONS_DIR="$REPO_DIR/discussions"
+mkdir -p "$DISCUSSIONS_DIR"
+LOG_FILE="$DISCUSSIONS_DIR/test-webgolden-${HASH}.log"
+SUMMARY_FILE="$DISCUSSIONS_DIR/test-webgolden-${HASH}.txt"
+GOLDEN_BUILD="${DDBSH_WEB_GOLDEN_BUILD_DIR:-$REPO_DIR/build-golden-web}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+export AWS_REGION="$REGION"
+export AWS_STS_REGIONAL_ENDPOINTS="${AWS_STS_REGIONAL_ENDPOINTS:-regional}"
+
+web_golden_lock "$REPO_DIR"
+
+# A stray config file would make the native and web suites differ: the native
+# CLI executes ~/.ddbsh_config at startup, the shim never does (A4).
+if [ -n "${DDBSH_CONFIG_FILE:-}" ] || [ -e "$HOME/.ddbsh_config" ]; then
+    echo "error: DDBSH_CONFIG_FILE is set or ~/.ddbsh_config exists; the golden suites assume no config file." >&2
+    exit 1
+fi
+if [ -n "${DDBSH_ENDPOINT_OVERRIDE:-}" ]; then
+    echo "error: DDBSH_ENDPOINT_OVERRIDE is set; the web golden gate targets real DynamoDB only." >&2
+    exit 1
+fi
+
+# --- 1. toolchain, build, offline gates --------------------------------------
+web_setup_emsdk
+{
+    echo "=== Web golden: toolchain ($HASH) ==="
+    echo "  emcc:  $(emcc --version 2>/dev/null | head -1)"
+    echo "  node:  $NODE_BIN ($("$NODE_BIN" --version))"
+} | tee "$LOG_FILE"
+echo "=== Building wasm-release ===" | tee -a "$LOG_FILE"
+web_build_bundle "$REPO_DIR" 2>&1 | tee -a "$LOG_FILE"
+[ "${PIPESTATUS[0]}" -eq 0 ] || exit 1
+WEB_OUT="${DDBSH_WASM_BUILD_DIR:-$REPO_DIR/build-preset/wasm-release}/web"
+echo "=== Offline web gates ===" | tee -a "$LOG_FILE"
+set +e
+web_offline_gates 2>&1 | tee -a "$LOG_FILE"
+RC_OFFLINE=${PIPESTATUS[0]}
+set -e
+
+# --- 2. short-term credentials -----------------------------------------------
+CRED_DIR="$(mktemp -d)"
+chmod 700 "$CRED_DIR"
+trap 'rm -rf "$CRED_DIR"' EXIT
+PROFILES=(default cross-acct)
+web_mint_credentials "$CRED_DIR" "${PROFILES[@]}"
+export DDBSH_WEB_CREDS_FILE="$CRED_DIR/creds.json"
+
+# --- 3. target echo + verification -------------------------------------------
+{
+    echo "ddbsh web golden run (browser edition: ddbsh.wasm + AWS SDK for JavaScript)"
+    echo "  commit:        $HASH"
+    echo "  suite:         webgolden"
+    echo "  timestamp:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "  region:        $REGION"
+    echo "  endpoint:      dynamodb.${REGION}.amazonaws.com (real DynamoDB, SDK default resolution)"
+    echo "  sdk:           @aws-sdk/client-dynamodb $(sed -n 's/.*"sdk_version": "\(.*\)".*/\1/p' "$REPO_DIR/web/vendor/aws-sdk/PROVENANCE.json")"
+    echo "  node:          $("$NODE_BIN" --version)"
+    for p in "${PROFILES[@]}"; do
+        echo "  profile $p:"
+        echo "    access key id: $(web_creds_field "$DDBSH_WEB_CREDS_FILE" "$p" AccessKeyId) (minted, short-term)"
+        echo "    expires:       $(web_creds_field "$DDBSH_WEB_CREDS_FILE" "$p" Expiration)"
+        echo "    caller arn:    $(web_caller_arn "$DDBSH_WEB_CREDS_FILE" "$p")"
+    done
+} | tee "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+if grep -q "(sts unavailable)" "$SUMMARY_FILE"; then
+    echo "error: a minted credential set could not be verified with sts get-caller-identity." | tee -a "$SUMMARY_FILE" >&2
+    exit 1
+fi
+
+# --- 4. golden suite through the browser path -----------------------------------
+SHELL_WRAPPER="$CRED_DIR/ddbsh-web"
+cat >"$SHELL_WRAPPER" <<EOF
+#!/usr/bin/env bash
+exec "$NODE_BIN" "$WEB_OUT/ddbsh-node.mjs" "\$@"
+EOF
+chmod 700 "$SHELL_WRAPPER"
+
+echo "=== Configuring golden project (shell = browser edition) ===" | tee -a "$LOG_FILE"
+cmake -S "$REPO_DIR/tests/golden" -B "$GOLDEN_BUILD" \
+    -DDDBSH_SHELL_BIN="$SHELL_WRAPPER" \
+    -DDDBSH_SDK_LIB="" \
+    -DGOLDEN_DIR="$REPO_DIR/tests/golden" \
+    "-DDDBSH_GOLDEN_BACKEND_REGEX=Backend: wire/aws-sdk-js [0-9.]+ -> https://dynamodb[.][a-z0-9-]+[.]amazonaws[.]com [(]default[)]; credentials ASIA" \
+    2>&1 | tee -a "$LOG_FILE"
+
+echo "=== Running golden families through the browser edition ===" | tee -a "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+CTEST_LOG="$CRED_DIR/ctest.log"
+set +e
+ctest --test-dir "$GOLDEN_BUILD" --output-on-failure "$@" 2>&1 | tee "$CTEST_LOG"
+RC_GOLDEN=${PIPESTATUS[0]}
+set -e
+cat "$CTEST_LOG" >>"$LOG_FILE"
+
+line="$(grep -E "tests passed|tests failed" "$CTEST_LOG" | tail -1 || true)"
+total="$(grep -oE "out of [0-9]+" <<<"$line" | grep -oE "[0-9]+" || echo 0)"
+failed="$(grep -oE "[0-9]+ tests failed" <<<"$line" | grep -oE "[0-9]+" || echo 0)"
+total=${total:-0}
+failed=${failed:-0}
+
+RC=0
+[ "$RC_GOLDEN" -eq 0 ] || RC=$RC_GOLDEN
+[ "$RC_OFFLINE" -eq 0 ] || RC=1
+{
+    echo ""
+    echo "=== summary ==="
+    echo "  offline web gates:              $([ "$RC_OFFLINE" -eq 0 ] && echo passed || echo FAILED)"
+    echo "  golden (browser edition):       $((total - failed))/${total} passed"
+    grep -E "Total Test time" "$CTEST_LOG" || true
+    echo "  exit codes: golden=$RC_GOLDEN offline=$RC_OFFLINE (combined=$RC)"
+} | tee -a "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+
+echo "=== Artifacts ==="
+echo "  $LOG_FILE"
+echo "  $SUMMARY_FILE"
+exit $RC

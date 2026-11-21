@@ -25,6 +25,13 @@ us-west-1>
 
 The prompt shows the region name, and the additional (*) if you are connected to a non-standard endpoint.
 
+*Browser edition:* `WITH ENDPOINT` accepts only AWS DynamoDB endpoints —
+`https://dynamodb[-fips].<region>.amazonaws.com` or
+`https://dynamodb[-fips].<region>.api.aws`, with the same region as the
+`CONNECT` names. Any other endpoint prints `CONNECT` followed by
+`browser: CONNECT rejected: <reason>`, and later statements fail until a valid
+`CONNECT`. See [configuration 3](../configurations/03-browser-aws.md#connect-in-the-browser).
+
 ## SHOW VERSION
 
 **Purpose:** The SHOW VERSION command displays the version of DynamoDB Shell.
@@ -47,7 +54,7 @@ endpoint override is set), and which transport the engine is talking through.
 
 ``` SQL
 us-east-1> show connection;
-ddbsh - version 0.11.18
+ddbsh - version 0.12
 Region: us-east-1
 Endpoint: (default)
 Backend: aws-sdk-cpp (direct DynamoDB)
@@ -55,9 +62,11 @@ us-east-1>
 ```
 
 The `Backend` line names the active transport. The native binary reports
-`aws-sdk-cpp (direct DynamoDB)`; the browser/WebAssembly builds report their
-respective transports (the HTTP fetch bridge to `ddbsh-web-proxy`, or the in-tab
-ExtendDB submit transport). The `Endpoint` line shows the overridden endpoint when
+`aws-sdk-cpp (direct DynamoDB)`. The browser edition reports
+`wire/aws-sdk-js <sdk-version> -> <target>; credentials <ASIA…last4> expires <time>`
+(or `credentials none`), where `<target>` is the endpoint override, the default
+regional endpoint followed by `(default)`, or `blocked: <reason>` after a refused
+`CONNECT`; it never shows the secret or the session token. The `Endpoint` line shows the overridden endpoint when
 one is set (the same condition that adds the `(*)` suffix to the prompt).
 
 *Note:* The SHOW CONNECTION command was added in DynamoDB Shell version 0.11.10.
