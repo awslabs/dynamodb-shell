@@ -64,6 +64,8 @@ target_link_options(ddbsh-wasm PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
 #   live-smoke.mjs        the live UI-path smoke devtools/run-web-smoke runs
 #   app-core.test.mjs sdk-bridge.test.mjs package.test.mjs   the offline Node tests
 #   bundle-files.txt      the publish allowlist (read by package.test.mjs)
+#   package.cmake         the packaging script (package.test.mjs runs it on
+#                         bad input to check that it refuses each case)
 #   package.json          marks the dir as ES modules for Node
 # One copy rule per file, each depending on its source, so an edit to any of
 # them is re-staged by the next build. (Before P10 this was a POST_BUILD step
@@ -73,7 +75,7 @@ set(DDBSH_WEB_STAGED_FILES
     index.html app.js app-core.mjs sdk-bridge.mjs styles.css
     ddbsh-node.mjs live-smoke.mjs
     app-core.test.mjs sdk-bridge.test.mjs package.test.mjs
-    bundle-files.txt package.json
+    bundle-files.txt package.cmake package.json
     vendor/aws-sdk/aws-sdk-dynamodb.mjs vendor/aws-sdk/allowed-hosts.mjs
     vendor/aws-sdk/PROVENANCE.json vendor/aws-sdk/THIRD-PARTY-NOTICES.txt)
 set(ddbsh_web_staged_outputs "")

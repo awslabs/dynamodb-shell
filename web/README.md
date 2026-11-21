@@ -53,14 +53,14 @@ unchanged, and service errors arrive as their verbatim `__type` document.
 | `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus` |
 | `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the editor (textContent only) |
 | `index.html`, `styles.css` | the page; the CSP `<meta>` between the `csp:begin`/`csp:end` markers is generated |
-| `bundle-files.txt` | the publish allowlist: the 11 files the page loads plus the SDK notices |
+| `bundle-files.txt` | the publish allowlist: the 9 files the page loads plus the 2 SDK notices, 11 in all |
 | `package.cmake` | the packaging step (target `ddbsh-web-package`): copies the allowlist into `dist/ddbsh-web-<version>/`, zips it, writes `SHA256SUMS` |
 | `hosting/aws/` | `ddbsh-web-hosting.yaml` (private S3 bucket + CloudFront with Origin Access Control and security headers) and `deploy.sh` (the upload); see `docs/HOSTING.md` |
 | `vendor/aws-sdk/` | the pinned SDK: `package.json` + `package-lock.json` + `entry.mjs` + `generate.mjs` (inputs), `aws-sdk-dynamodb.mjs` + `allowed-hosts.mjs` + `THIRD-PARTY-NOTICES.txt` + `PROVENANCE.json` (outputs) |
 | `ddbsh-node.mjs` | CLI-shaped Node front end over the same files (the web golden gate's `DDBSH_SHELL_BIN`) |
 | `live-smoke.mjs` | live UI-path smoke (`DdbshSession.run`) against real DynamoDB |
 | `app-core.test.mjs`, `sdk-bridge.test.mjs` | offline Node unit tests (the bridge tests run the real SDK bundle with a stub HTTP handler) |
-| `package.test.mjs` | offline check of the packaging step: the allowlist matches the page's load graph, and the packaged folder, zip and `SHA256SUMS` match the allowlist and the build |
+| `package.test.mjs` | offline check of the packaging step: the allowlist matches the page's load graph, the packaged folder, zip and `SHA256SUMS` match the allowlist and the build, and `package.cmake` refuses bad input |
 | `package.json` | marks the bundle dir as ES modules for Node |
 
 ## Prerequisites
@@ -143,11 +143,13 @@ script or style. `app-core.test.mjs` fails if the CSP drifts from
 
 | Command | What it proves |
 |---|---|
-| `devtools/run-web-smoke` | build and package; offline gates (no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `package.test.mjs`, storage grep); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
-| `devtools/check-web-hosting <stack>` | a deployed `hosting/aws` stack: status, content types, security headers and hashes of every file over HTTPS, the HTTP redirect, and that the bucket is private (`discussions/test-s3host-<hash>.log`) |
+| `devtools/run-web-smoke` | build and package; offline gates (no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `package.test.mjs`, storage grep, upload commands of `deploy.sh` = `docs/HOSTING.md`); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
+| `devtools/check-web-hosting <stack>` | a deployed `hosting/aws` stack: status, content type, `Cache-Control`, security headers and hash of every file over HTTPS, the HTTP redirect, and that the bucket is private (`discussions/test-s3host-<hash>.log`) |
 | `devtools/run-tests --web-golden` | the whole golden suite through `ddbsh-node.mjs` against real DynamoDB |
 
-Both mint short-term STS credentials; see [`docs/TESTING.md`](../docs/TESTING.md).
+`run-web-smoke` and `run-tests --web-golden` mint short-term STS credentials;
+`check-web-hosting` uses the caller's AWS CLI credentials only to read the
+stack and the bucket's settings. See [`docs/TESTING.md`](../docs/TESTING.md).
 
 ## Boundaries
 

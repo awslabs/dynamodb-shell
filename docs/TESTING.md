@@ -48,15 +48,18 @@ the live parts talk to real DynamoDB.
   glue has no `eval`/`new Function`; `app-core.test.mjs`; `sdk-bridge.test.mjs`,
   which exercises the real SDK bundle with a stub HTTP handler;
   `package.test.mjs`, which checks the packaged folder, zip and `SHA256SUMS`
-  against the publish allowlist; a grep that keeps
-  browser storage away from credentials), then a short live smoke through the
+  against the publish allowlist and that `package.cmake` refuses bad input; a
+  grep that keeps browser storage away from credentials; a check that
+  `web/hosting/aws/deploy.sh` and [HOSTING](HOSTING.md) carry the same upload
+  commands), then a short live smoke through the
   page's `DdbshSession.run` path on one `ddbsh_web_smoke_<pid>` table. Artifact:
   `discussions/test-websmoke-<hash>.log`.
 - **`devtools/check-web-hosting <stack> [label]`** checks a deployed
   [hosting](HOSTING.md) stack from outside: every published file over HTTPS
-  (status, content type, the eight security headers, sha256 against
-  `SHA256SUMS`), the HTTP-to-HTTPS redirect, and that the bucket is private.
-  Run it with credentials that can read the stack and the bucket's settings.
+  (status, content type, `Cache-Control`, the eight security headers, sha256
+  against `SHA256SUMS`), the HTTP-to-HTTPS redirect, and that the bucket is
+  private. Run it with credentials that can read the stack and the bucket's
+  settings.
   Artifact: `discussions/test-<label>-<hash>.log` (label default `s3host`).
 
 Run both through the orchestration repo's `devtools/run-tests` (same flags), which

@@ -11,7 +11,9 @@
 # Checks, all anonymous over the public internet except (e)'s bucket reads:
 #   a. HTTPS 200 on / and on every file in web/bundle-files.txt; plain HTTP
 #      answers 301 with an https:// Location.
-#   b. each file's Content-Type (the upload's per-type value).
+#   b. each file's Content-Type and Cache-Control (the upload's per-type
+#      values: no-cache on HTML, so a new version is seen on the next visit,
+#      and max-age=300 on everything else).
 #   c. every response carries the eight headers of the template's response
 #      headers policy.
 #   d. the sha256 of every served file matches the packaged SHA256SUMS
@@ -22,8 +24,13 @@
 #      BucketOwnerEnforced; the objects are exactly the allowlist.
 #
 # Output: discussions/test-<label>-<HEAD-short>.log (label default: s3host).
-# Needs curl, sha256sum, the AWS CLI, and credentials that can read the
-# stack's outputs and the bucket's configuration (s3:GetBucket*, ListBucket).
+# Needs curl, sha256sum, python3, the AWS CLI, and credentials that can read
+# the stack's outputs and the bucket's configuration (s3:GetBucket*,
+# ListBucket).
+#
+# TODO(portability): Linux as written. It needs bash 4 or later (mapfile; macOS
+# ships bash 3.2), GNU grep (\s) and sha256sum (macOS has shasum); on Windows
+# run it under WSL.
 
 set -uo pipefail
 
@@ -91,6 +98,12 @@ content_type_for() {
         *) echo "(no upload rule)" ;;
     esac
 }
+cache_control_for() {
+    case "$1" in
+        *.html) echo "no-cache" ;;
+        *) echo "max-age=300" ;;
+    esac
+}
 header() { # header <headers-file> <name> -> value of the last occurrence (CR stripped)
     grep -i "^$2:" "$1" | tail -1 | cut -d: -f2- | sed 's/^ *//' | tr -d '\r'
 }
@@ -117,6 +130,7 @@ log "--- a/b/c/d: anonymous fetches through https://$DOMAIN/ ---"
 code="$(curl -sS -o "$WORK/root.body" -D "$WORK/root.h" -w '%{http_code}' "https://$DOMAIN/")"
 expect "$code" "200" "a. GET / over HTTPS"
 expect "$(header "$WORK/root.h" content-type)" "text/html; charset=utf-8" "b. / Content-Type"
+expect "$(header "$WORK/root.h" cache-control)" "no-cache" "b. / Cache-Control"
 check_security_headers "$WORK/root.h" "/"
 if cmp -s "$WORK/root.body" "$DIST_DIR/$BUNDLE/index.html"; then ok "d. / serves index.html"; else bad "d. / does not serve index.html"; fi
 code="$(curl -sS -o /dev/null -D "$WORK/http.h" -w '%{http_code}' "http://$DOMAIN/index.html")"
@@ -128,6 +142,7 @@ for f in "${FILES[@]}"; do
     code="$(curl -sS -o "$WORK/$safe.body" -D "$WORK/$safe.h" -w '%{http_code}' "https://$DOMAIN/$f")"
     expect "$code" "200" "a. GET /$f"
     expect "$(header "$WORK/$safe.h" content-type)" "$(content_type_for "$f")" "b. /$f Content-Type"
+    expect "$(header "$WORK/$safe.h" cache-control)" "$(cache_control_for "$f")" "b. /$f Cache-Control"
     check_security_headers "$WORK/$safe.h" "/$f"
     want="$(grep "  $BUNDLE/$f\$" "$DIST_DIR/SHA256SUMS" | cut -d' ' -f1)"
     got="$(sha256sum "$WORK/$safe.body" | cut -d' ' -f1)"

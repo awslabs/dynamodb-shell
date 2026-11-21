@@ -14,8 +14,9 @@
 #      static bundle into build-preset/wasm-release/web/);
 #   2. offline gates: glue no-eval check (the page CSP has no 'unsafe-eval'),
 #      app-core.test.mjs, sdk-bridge.test.mjs (real SDK, stub HTTP handler);
-#   3. a source grep gate: no browser storage API in sdk-bridge.mjs, and in
-#      app.js only the command-history key (D-P9-4);
+#   3. source grep gates: no browser storage API in sdk-bridge.mjs, and in
+#      app.js only the command-history key (D-P9-4); deploy.sh and
+#      docs/HOSTING.md carry the same seven upload commands (P10);
 #   4. a LIVE UI-path smoke (web/live-smoke.mjs, DdbshSession.run) against real
 #      DynamoDB with STS-minted short-term credentials for the default profile:
 #      creates and drops one ddbsh_web_smoke_<pid> table.
@@ -74,6 +75,21 @@ if [ -n "$BAD" ]; then
     RC=1
 else
     echo "ok: no credential-capable storage use" | tee -a "$LOG_FILE"
+fi
+
+# The upload commands exist twice by design: web/hosting/aws/deploy.sh runs
+# them and docs/HOSTING.md shows them for copy-paste (P10). Each sets the
+# Content-Type browsers need, so the two copies must not drift apart.
+echo "=== Upload-command drift gate (deploy.sh vs docs/HOSTING.md) ===" | tee -a "$LOG_FILE"
+upload_commands() { grep -E '^aws (s3 sync|cloudfront create-invalidation) ' "$1" || true; }
+DEPLOY_CMDS="$(upload_commands "$REPO_DIR/web/hosting/aws/deploy.sh")"
+GUIDE_CMDS="$(upload_commands "$REPO_DIR/docs/HOSTING.md")"
+if [ "$(printf '%s\n' "$DEPLOY_CMDS" | grep -c .)" -ne 7 ] || [ "$DEPLOY_CMDS" != "$GUIDE_CMDS" ]; then
+    diff <(printf '%s\n' "$DEPLOY_CMDS") <(printf '%s\n' "$GUIDE_CMDS") | tee -a "$LOG_FILE"
+    echo "FAIL: deploy.sh and docs/HOSTING.md must carry the same seven upload commands" | tee -a "$LOG_FILE"
+    RC=1
+else
+    echo "ok: deploy.sh and docs/HOSTING.md carry the same seven upload commands" | tee -a "$LOG_FILE"
 fi
 
 echo "=== Live UI-path smoke (real DynamoDB) ===" | tee -a "$LOG_FILE"

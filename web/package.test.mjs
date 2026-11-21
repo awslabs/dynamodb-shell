@@ -9,7 +9,7 @@
 //
 //   cd build-preset/wasm-release/web && node package.test.mjs [../dist]
 //
-// It checks two things:
+// It checks three things:
 //   1. bundle-files.txt (the publish allowlist) matches what the page actually
 //      loads: index.html's src/href references, the ES-module import graph
 //      from app.js (static and dynamic imports), and the module glue's
@@ -19,11 +19,18 @@
 //      holds exactly the allowlisted files, byte-identical to the staged build;
 //      SHA256SUMS covers every one of them and the zip; and the zip holds
 //      exactly the folder's files with the same contents.
+//   3. package.cmake (staged beside this file) refuses each kind of bad input
+//      with its error: a missing -D variable, a path that is not plain and
+//      relative, a duplicate, an empty allowlist, a file the build lacks. It
+//      runs in a scratch directory under the OS temp dir and needs cmake on
+//      PATH (or CMAKE_COMMAND).
 //
 // Zero dependencies (plain asserts + an exit code, like the other web tests).
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
@@ -254,6 +261,71 @@ try {
     }
 } catch (e) {
     check(false, `${bundle}.zip is a readable zip (${e.message})`);
+}
+
+// ---- package.cmake refuses bad input -------------------------------------------
+// Each FATAL_ERROR path of the packaging script, run in CMake script mode on a
+// scratch build dir and allowlist under the OS temp dir, never on the real dist
+// dir (package.cmake removes DIST_DIR before it copies). A good allowlist runs
+// first, so a refusal below is the script's, not a broken scratch setup.
+console.log("package.cmake refuses bad input");
+{
+    const cmake = process.env.CMAKE_COMMAND || "cmake";
+    const script = join(HERE, "package.cmake");
+    const scratch = mkdtempSync(join(tmpdir(), "ddbsh-package-test-"));
+    try {
+        const webOut = join(scratch, "web");
+        const distDir = join(scratch, "dist");
+        mkdirSync(join(webOut, "sub"), { recursive: true });
+        writeFileSync(join(webOut, "a.txt"), "a\n");
+        writeFileSync(join(webOut, "sub", "b.txt"), "b\n");
+        const runPackage = (manifestText, omit = "") => {
+            const manifest = join(scratch, "bundle-files.txt");
+            writeFileSync(manifest, manifestText);
+            // CMake takes forward slashes on every platform.
+            const slash = (p) => p.split("\\").join("/");
+            const defs = { WEB_OUT: slash(webOut), MANIFEST: slash(manifest), DIST_DIR: slash(distDir),
+                BUNDLE_NAME: "ddbsh-web-0.0.0" };
+            const args = Object.entries(defs).filter(([k]) => k !== omit).map(([k, v]) => `-D${k}=${v}`);
+            const r = spawnSync(cmake, [...args, "-P", slash(script)], { encoding: "utf8" });
+            // CMake reflows FATAL_ERROR text (wraps lines, two spaces after a
+            // period), so compare with runs of whitespace collapsed.
+            const output = `${r.stdout || ""}${r.stderr || ""}${r.error ? r.error.message : ""}`
+                .replace(/\s+/g, " ");
+            return { status: r.status, output, error: (output.match(/package\.cmake: .*$/) || [output.trim()])[0].slice(0, 160) };
+        };
+
+        const good = runPackage("# comment\na.txt\n\nsub/b.txt\n");
+        check(good.status === 0, `a good allowlist is packaged (exit ${good.status}${good.status === 0 ? "" : `: ${good.output.trim()}`})`);
+        let written = [];
+        try {
+            written = readdirSync(distDir);
+        } catch {
+            // checked below
+        }
+        eq(sorted(written), sorted(["SHA256SUMS", "ddbsh-web-0.0.0", "ddbsh-web-0.0.0.zip"]),
+            "the good run writes the folder, its zip and SHA256SUMS");
+
+        const refusals = [
+            ["a missing -D variable", "a.txt\n", "BUNDLE_NAME", /-DBUNDLE_NAME=\.\.\. is required/],
+            ["an absolute path", "/etc/hosts\n", "", /not a plain relative path: '\/etc\/hosts'/],
+            ["a path through ..", "sub/../../outside.txt\n", "", /not a plain relative path: 'sub\/\.\.\/\.\.\/outside\.txt'/],
+            ["a path through .", "./a.txt\n", "", /not a plain relative path: '\.\/a\.txt'/],
+            ["a backslash", "sub\\b.txt\n", "", /not a plain relative path: 'sub\\b\.txt'/],
+            ["a space", "a b.txt\n", "", /not a plain relative path: 'a b\.txt'/],
+            ["a duplicate entry", "a.txt\nsub/b.txt\na.txt\n", "", /duplicate entry 'a\.txt'/],
+            ["an allowlist with no files", "# only a comment\n\n", "", /lists no files/],
+            ["a file the build lacks", "a.txt\nmissing.txt\n", "", /missing\.txt is missing/],
+            ["a directory", "sub\n", "", /sub is missing/],
+        ];
+        for (const [what, text, omit, expected] of refusals) {
+            const r = runPackage(text, omit);
+            check(r.status !== 0 && r.status !== null && expected.test(r.output),
+                `refuses ${what} (exit ${r.status}: ${r.error})`);
+        }
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
 }
 
 console.log(failures === 0
