@@ -8,8 +8,8 @@
 # Usage:
 #   web/hosting/aws/deploy.sh <bundle-dir> <bucket> <distribution-id>
 #
-#   <bundle-dir>       the packaged folder, e.g.
-#                      build-preset/wasm-release/dist/ddbsh-web-0.12.1
+#   <bundle-dir>       the packaged folder,
+#                      build-preset/wasm-release/dist/ddbsh-web-<version>
 #   <bucket>           the stack's BucketName output
 #   <distribution-id>  the stack's DistributionId output
 #

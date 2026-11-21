@@ -48,7 +48,10 @@ an ordinary static site.
   lets someone serve a modified page that sends visitors' credentials
   elsewhere. Give that access to as few people and roles as possible, and
   protect them as you would the credentials themselves. The template can
-  create a narrow deployer policy for this (see step 2).
+  create a narrow deployer policy for this (see step 2). With your own domain
+  name, the same holds for whoever controls the name's DNS records or your
+  account at the DNS provider: they can point the name at a server of their
+  own, get a certificate for it, and serve a modified page there.
 - **No sign-in is needed.** The page is public, open-source content and holds
   no secrets. What a visitor can do is decided by the AWS credentials they
   paste, so they should paste short-term credentials scoped to the tables they
@@ -105,7 +108,10 @@ Every line must say `OK`.
 aws cloudformation deploy --stack-name ddbsh-web --template-file web/hosting/aws/ddbsh-web-hosting.yaml
 ```
 
-Pick any stack name; the template derives its resource names from it. The
+Pick a stack name of up to 60 characters; the template derives its resource
+names from it, and the origin access control's name (`<stack name>-oac`) may
+have at most 64. CloudFront and IAM names are unique across the whole account,
+so do not use the same stack name for this template in two regions. The
 command waits until the stack is ready, which takes several minutes because
 CloudFront deploys the distribution worldwide. The stack can be in any
 region.
@@ -140,15 +146,16 @@ Options, passed as `--parameter-overrides Name=value`:
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `CreateDeployerPolicy` | `false` | `true` also creates an IAM managed policy, `<stack name>-deployer`, attached to no one. It allows only the upload in step 3: list the bucket, put and delete its objects, and invalidate the distribution. Attach it to the role or user that publishes the page, and give them the bucket name and distribution id (the policy does not allow reading the stack). Add `--capabilities CAPABILITY_NAMED_IAM` to the deploy command when you set it. |
+| `CreateDeployerPolicy` | `false` | `true` also creates an IAM managed policy, `<stack name>-deployer`, attached to no one. It allows only the upload in step 3: list the bucket, put and delete its objects, and invalidate the distribution. Attach it to the role or user that publishes the page, and give them the bucket name and distribution id (the policy does not allow reading the stack). Add `--capabilities CAPABILITY_NAMED_IAM` to the deploy command when you set it, and to every later deploy of the stack. The policy has been checked by the CloudFormation linter and IAM Access Analyzer but not yet deployed by this project's tests. |
 | `DomainName`, `AcmCertificateArn` | empty | your own domain name; see [Use your own domain name](#use-your-own-domain-name) |
 | `Purpose` | `hosting` | the value of the `purpose` tag on the bucket and the distribution (they also carry `project=ddbsh-web`) |
 
 Access logging is off. Add it to the distribution in the template if you need
 it.
 
-Now read the stack's outputs into variables. Set `DIR` to the folder from
-step 1.
+Now read the stack's outputs into variables. `DIR` is the packaged folder from
+step 1, `build-preset/wasm-release/dist/ddbsh-web-<version>`; the last line
+finds it (the packaging step leaves exactly one there).
 
 ```sh
 STACK=ddbsh-web
@@ -156,7 +163,7 @@ BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stack
 DIST_ID=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)
 DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" --output text)
 BUCKET_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='BucketRegionalDomainName'].OutputValue" --output text)
-DIR=build-preset/wasm-release/dist/ddbsh-web-0.12.1
+DIR=$(ls -d build-preset/wasm-release/dist/ddbsh-web-*/)
 ```
 
 ```powershell
@@ -165,7 +172,7 @@ $BUCKET = aws cloudformation describe-stacks --stack-name "$STACK" --query "Stac
 $DIST_ID = aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text
 $DOMAIN = aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" --output text
 $BUCKET_DOMAIN = aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='BucketRegionalDomainName'].OutputValue" --output text
-$DIR = "build-preset/wasm-release/dist/ddbsh-web-0.12.1"
+$DIR = (Get-ChildItem -Directory -Path build-preset/wasm-release/dist -Filter "ddbsh-web-*").FullName
 ```
 
 ## 3. Upload the page
@@ -215,8 +222,10 @@ curl -sSI "http://$DOMAIN/" | grep -iE "^(HTTP|location)"
 curl -sSI "https://$BUCKET_DOMAIN/index.html" | grep -i "^HTTP"
 ```
 
-In PowerShell, call `curl.exe` (not the `curl` alias) and replace
-`| grep -iE "<pattern>"` with `| Select-String -Pattern "<pattern>"`:
+In PowerShell, replace `| grep -iE "<pattern>"` with
+`| Select-String -Pattern "<pattern>"`. On Windows, write `curl.exe`, as
+below, so that Windows PowerShell's `curl` alias for `Invoke-WebRequest` is
+never used; on macOS and Linux, write `curl`.
 
 ```powershell
 curl.exe -sSI "https://$DOMAIN/" | Select-String -Pattern "^(HTTP|content-type|content-security-policy|x-frame-options|strict-transport-security|x-content-type-options|referrer-policy|cross-origin-opener-policy|cross-origin-resource-policy|permissions-policy)"
@@ -230,13 +239,20 @@ Then open `https://$DOMAIN/` in a browser. The header shows
 `backend: Amazon DynamoDB (AWS SDK for JavaScript …)` once the page has
 loaded. Paste short-term credentials and run `show connection;`.
 
+The distribution answers 403, not 404, for a file that is not in the bundle:
+CloudFront may not list the bucket, so S3 does not reveal whether a name
+exists. A browser's developer tools may show one such 403 for `/favicon.ico`,
+which the bundle does not include. Both are expected.
+
 ## Use your own domain name
 
 A name such as `ddbsh.example.com` works with any DNS provider. It must be a
 name that serves nothing else (see [where the page may
-live](#before-you-start-where-the-page-may-live)). The template's domain
-parameters have been checked by the CloudFormation linter but not yet deployed
-by this project's tests.
+live](#before-you-start-where-the-page-may-live)). Whoever can change its DNS
+records can point it at a server of their own and serve a modified page with a
+valid certificate, so protect your DNS provider account as you protect the
+bucket. The template's domain parameters have been checked by the
+CloudFormation linter but not yet deployed by this project's tests.
 
 1. Request a certificate. CloudFront accepts only certificates issued in
    us-east-1, whatever region your stack is in:
@@ -254,6 +270,9 @@ by this project's tests.
    aws acm describe-certificate --certificate-arn <certificate-arn> --region us-east-1 --query "Certificate.DomainValidationOptions[0].ResourceRecord"
    ```
 
+   Right after the request, this can print `null` for a few seconds; repeat it
+   until it prints the record's `Name` and `Value`.
+
 3. Wait until the certificate is issued:
 
    ```sh
@@ -266,7 +285,10 @@ by this project's tests.
    aws cloudformation deploy --stack-name ddbsh-web --template-file web/hosting/aws/ddbsh-web-hosting.yaml --parameter-overrides DomainName=ddbsh.example.com AcmCertificateArn=<certificate-arn>
    ```
 
-   With a domain name, viewers must use TLS 1.2 or later.
+   With a domain name, viewers must use TLS 1.2 or later. If the stack was
+   created with `CreateDeployerPolicy=true`, add
+   `--capabilities CAPABILITY_NAMED_IAM` to this command: a later deploy keeps
+   the parameters you do not repeat, so the stack still has the policy.
 
 5. At your DNS provider, add a CNAME from `ddbsh.example.com` to the
    distribution's name (`$DOMAIN`, the `DistributionDomainName` output). A DNS
@@ -281,16 +303,18 @@ by this project's tests.
 1. Update the source (for example `git pull`), then build and package again
    with the two commands in step 1. The folder name carries the new version.
 2. Check `SHA256SUMS` as in step 1.
-3. Set `DIR` to the new folder and run the seven commands in step 3. They
-   upload the changed files, delete files the new version no longer has, and
-   clear CloudFront's cache.
+3. Set `DIR` again with the last line of the step 2 variables (it finds the
+   new folder), then run the seven commands in step 3. They upload the changed
+   files, delete files the new version no longer has, and clear CloudFront's
+   cache.
 4. Run the checks in step 4.
 
 If the template itself changed, run the `aws cloudformation deploy` command
-from step 2 again first (with the same parameters); it updates the stack in
-place. Earlier versions of each file stay in the bucket for 90 days, so you
-can restore one with the S3 console or `aws s3api copy-object` if a release
-goes wrong.
+from step 2 again first; it updates the stack in place and keeps the
+parameters you set before. Add `--capabilities CAPABILITY_NAMED_IAM` if the
+stack has the deployer policy. Earlier versions of each file stay in the
+bucket for 90 days, so you can restore one with the S3 console or
+`aws s3api copy-object` if a release goes wrong.
 
 ## Command history in the browser
 
@@ -300,7 +324,9 @@ after a reload. Statements loaded from a file are not saved. Credentials are
 never saved anywhere.
 
 Saved statements include any values you typed into them. To delete them,
-press **Clear history** under the editor. **Clear** only empties the
+press **Clear history** in the toolbar to the right of the editor, below
+**Clear**. It also empties the history of the page's other open tabs, so none
+of them saves the deleted statements again. **Clear** only empties the
 transcript. Anything that runs on the page's origin can read local storage,
 which is one more reason to give the page its own origin.
 
@@ -308,23 +334,34 @@ which is one more reason to give the page its own origin.
 
 CloudFormation cannot delete a bucket that still holds objects, so empty it
 first, including the earlier versions that versioning keeps. With the
-variables from step 2 set:
+variables from step 2 set, list the object versions and delete them:
 
 ```sh
-aws s3api list-object-versions --bucket "$BUCKET" --query "{Objects: [Versions, DeleteMarkers][].{Key: Key, VersionId: VersionId}}" --output json > versions.json
+aws s3api list-object-versions --bucket "$BUCKET" --no-paginate --query "{Objects: [Versions, DeleteMarkers][].{Key: Key, VersionId: VersionId}}" --output json > versions.json
 aws s3api delete-objects --bucket "$BUCKET" --delete file://versions.json
-aws cloudformation delete-stack --stack-name "$STACK"
-aws cloudformation wait stack-delete-complete --stack-name "$STACK"
 ```
 
-These are the same in PowerShell 7. `delete-objects` takes at most 1000
-entries; if `versions.json` lists more, run the first two commands until the
-bucket is empty. If the bucket is already empty, `delete-objects` reports an
-error that you can ignore. Deleting the stack takes several minutes while
-CloudFront removes the distribution. If you requested a certificate for your
-own domain name, delete it afterwards with `aws acm delete-certificate
---certificate-arn <certificate-arn> --region us-east-1`, and remove the DNS
-records.
+Each pass lists and deletes up to 1000 entries (object versions and delete
+markers together), which is the most one `delete-objects` call accepts. A
+bucket that has held a few releases empties in one pass; with more entries,
+run both commands again until `versions.json` reads `"Objects": []`. When the
+list is empty, `delete-objects` reports a `MalformedXML` error, which you can
+ignore. (The S3 console's **Empty** button also empties a bucket.)
+
+Then delete the stack and the list file:
+
+```sh
+aws cloudformation delete-stack --stack-name "$STACK"
+aws cloudformation wait stack-delete-complete --stack-name "$STACK"
+rm versions.json
+```
+
+All the commands in this section are the same in PowerShell 7, except
+`rm versions.json`, which is `Remove-Item versions.json` there. Deleting the
+stack takes several minutes while CloudFront removes the distribution. If you
+requested a certificate for your own domain name, delete it afterwards with
+`aws acm delete-certificate --certificate-arn <certificate-arn> --region
+us-east-1`, and remove the DNS records.
 
 ## Cost
 
@@ -371,11 +408,10 @@ Any host can serve the page if it meets these requirements:
    apply the `<meta>` policy and the header policy together.
 
 **GitHub Pages** serves HTTPS with the right content types, but it cannot send
-custom response headers, so a page there has no `frame-ancestors`,
-`X-Frame-Options`, `Cross-Origin-Opener-Policy`,
-`Cross-Origin-Resource-Policy` or `Permissions-Policy` header. The page itself
-refuses credentials when it is framed or opened by another page's script,
-which covers the main risk those headers address. Two cautions apply:
+custom response headers, so a page there gets none of the eight headers from
+step 2. The most important of them, `frame-ancestors`, stops other sites from
+framing the page; the page itself refuses credentials when it is framed or
+opened by another page's script, which covers that risk. Two cautions apply:
 
 - All the project sites of one GitHub user or organization share the origin
   `https://<owner>.github.io`, so pages from that owner's other repositories
