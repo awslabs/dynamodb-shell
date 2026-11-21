@@ -136,9 +136,13 @@ done
 
 log ""
 log "--- e: the bucket is private ---"
-code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET.s3.$REGION.amazonaws.com/index.html")"
-expect "$code" "403" "e. anonymous GET straight from S3 is denied"
-code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET.s3.$REGION.amazonaws.com/")"
+BUCKET_DOMAIN="$(output BucketRegionalDomainName)"
+if [ -z "$BUCKET_DOMAIN" ] || [ "$BUCKET_DOMAIN" = "None" ]; then
+    BUCKET_DOMAIN="$BUCKET.s3.$REGION.amazonaws.com" # stacks from before the output existed
+fi
+code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/index.html")"
+expect "$code" "403" "e. anonymous GET straight from S3 ($BUCKET_DOMAIN) is denied"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/")"
 expect "$code" "403" "e. anonymous bucket listing is denied"
 expect "$(aws s3api get-public-access-block --bucket "$BUCKET" --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text)" \
     "True	True	True	True" "e. Block Public Access: all four settings on"

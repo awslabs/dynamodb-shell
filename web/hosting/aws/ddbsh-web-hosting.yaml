@@ -281,6 +281,9 @@ Outputs:
   BucketName:
     Description: The private bucket the page is uploaded to.
     Value: !Ref SiteBucket
+  BucketRegionalDomainName:
+    Description: The bucket's own S3 endpoint; an anonymous request to it must be refused (403).
+    Value: !GetAtt SiteBucket.RegionalDomainName
   DeployerPolicyArn:
     Condition: CreateDeployer
     Description: The unattached deployer managed policy.
