@@ -18,6 +18,8 @@
 //                             by another page's script; P10, G1).
 //   - fileToSubmission:       file text -> one submission (the `-f`/source path).
 //   - createHistory:          the command-history ring (push/cap/dedup/traverse/clear).
+//   - historyRemovedElsewhere: whether a `storage` event means another tab
+//                             deleted the saved history (P10).
 //   - createRunGuard:         the one-submission-in-flight re-entrancy guard.
 //
 // No engine logic crosses into JS (tenet 3): the faithful shell text is produced
@@ -447,6 +449,27 @@ export function createHistory({ limit = 500, entries = [] } = {}) {
             return items.length;
         },
     };
+}
+
+/**
+ * Decide whether a `storage` event means another tab of this page deleted the
+ * saved command history (P10): its "Clear history" button removed the key, or
+ * the origin's whole storage area was cleared (the event's `key` is null then).
+ * The tab that receives such an event forgets its in-memory copy too; otherwise
+ * its next command would write the deleted statements back. Browsers deliver
+ * storage events only to the origin's other documents, never to the one that
+ * made the change.
+ *
+ * @param {{key?: string|null, newValue?: string|null}} event  the StorageEvent
+ *        (only `key` and `newValue` are read).
+ * @param {string} historyKey  the storage key of the saved history.
+ * @returns {boolean} true when the saved history is gone.
+ */
+export function historyRemovedElsewhere({ key, newValue } = {}, historyKey) {
+    if (key === null) {
+        return true; // the whole storage area was cleared.
+    }
+    return typeof historyKey === "string" && key === historyKey && newValue === null;
 }
 
 /**

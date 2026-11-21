@@ -18,13 +18,16 @@
 //     panel, parsed + validated by app-core, held only inside the bridge;
 //   * the textarea is cleared after every "Use credentials", whatever the
 //     outcome; nothing credential-related is stored, logged or put in the URL;
-//   * refused (the panel is disabled at startup and "Use credentials" fails
-//     closed) outside a secure context (https:// or http://localhost,
-//     D-P9-02-7), inside a frame, or when another page's script opened this
-//     window (P10, G1; app-core credentialEnvironmentProblem);
+//   * the textarea and "Use credentials" ship disabled in index.html, so a
+//     page whose script never runs never invites a paste; start() enables
+//     them only in a secure context (https:// or http://localhost,
+//     D-P9-02-7), outside any frame, and when no other page's script opened
+//     this window (P10, G1; app-core credentialEnvironmentProblem).
+//     "Use credentials" checks again and fails closed;
 //   * wiped on pagehide, so the back/forward cache never restores them (P10).
 // The only localStorage use is the command history (editor submissions only),
-// which the "Clear history" button removes (P10, D-P10-6).
+// which the "Clear history" button removes, in this tab and, through the
+// storage event, in the page's other open tabs (P10, D-P10-6).
 
 import {
     buildPrompt,
@@ -35,6 +38,7 @@ import {
     createHistory,
     createHistoryRecall,
     createRunGuard,
+    historyRemovedElsewhere,
     parseCredentials,
 } from "./app-core.mjs";
 import { createSdkBridge, installHooks } from "./sdk-bridge.mjs";
@@ -112,6 +116,18 @@ function onClearHistory() {
     }
     els.toolbarStatus.textContent = "history cleared";
     els.editor.focus();
+}
+
+// Another open tab of this page pressed "Clear history" (or cleared the
+// origin's storage). Forget this tab's copy too: persistHistory writes the
+// whole ring back after every command, so this tab's next command would
+// otherwise restore the deleted statements.
+function onStorageChanged(ev) {
+    if (historyRemovedElsewhere(ev, HISTORY_KEY)) {
+        history.clear();
+        recall.reset();
+        els.toolbarStatus.textContent = "history cleared in another tab";
+    }
 }
 
 // ---- transcript painting (textContent only — D-P6e-6) ----------------------
@@ -414,14 +430,17 @@ async function start() {
     els.credForgetBtn.addEventListener("click", onForgetCredentials);
     els.regionSelect.addEventListener("change", refreshRegion);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("storage", onStorageChanged);
 
-    // Refuse credentials up front where they would be at risk (framed, opened
-    // by another page's script, or not a secure context): disable the panel so
-    // nothing is pasted, and say why. onUseCredentials checks again.
+    // The credentials controls ship disabled (index.html). Enable them only
+    // where credentials are safe to use; where they would be at risk (framed,
+    // opened by another page's script, or not a secure context) leave them
+    // disabled and say why. onUseCredentials checks again.
     const problem = credentialEnvironmentProblem(windowEnvironment());
-    if (problem !== null) {
-        els.credInput.disabled = true;
-        els.credUseBtn.disabled = true;
+    if (problem === null) {
+        els.credInput.disabled = false;
+        els.credUseBtn.disabled = false;
+    } else {
         setCredMessage(problem, true);
     }
 
@@ -431,6 +450,10 @@ async function start() {
         installHooks(Module, bridge);
         setReady();
     } catch (e) {
+        // Without the engine nothing can use credentials: disable the panel
+        // again so it does not invite a paste.
+        els.credInput.disabled = true;
+        els.credUseBtn.disabled = true;
         els.backendLabel.textContent = "failed to load";
         els.backendDot.className = "dot";
         appendEntries([{ text: `failed to initialize ddbsh: ${e && e.message ? e.message : e}\n`,

@@ -80,8 +80,10 @@ panel opens again so you can paste new credentials.
 The page saves the statements you run from the editor (up to 500) in the
 browser's `localStorage`, so the up arrow recalls them after a reload.
 Statements loaded from a file are not saved, and credentials never are. Saved
-statements include any values typed into them: press **Clear history** under
-the editor to delete them (**Clear** only empties the transcript).
+statements include any values typed into them: press **Clear history** (in the
+toolbar to the right of the editor, below **Clear**) to delete them. It also
+empties the history of the page's other open tabs. **Clear** only empties the
+transcript.
 
 ## Serving the page
 
@@ -137,6 +139,11 @@ headers are needed.
 | Credentials when another page's script opened the window | A same-origin opener can read everything in the page. The credentials panel is disabled; open the page by typing or pasting its address. |
 | `CONNECT … WITH ENDPOINT` to anything but AWS DynamoDB | The request carries your session token. Only `https://dynamodb.<region>.amazonaws.com`, `https://dynamodb-fips.<region>.amazonaws.com`, `https://dynamodb.<region>.api.aws` and `https://dynamodb-fips.<region>.api.aws` are allowed, for the regions of the `aws` and `aws-us-gov` partitions. |
 
+The credentials text box and **Use credentials** stay disabled until the
+page's script has checked the secure context, the frame and the opener (rows
+two to four above), so a copy of the page whose script cannot run (scripts
+blocked, or a file served with the wrong type) never asks for credentials.
+
 The page's Content-Security-Policy (`connect-src`) allows those hosts plus
 `search-dynamodb[-fips].<region>.{amazonaws.com,api.aws}`, for the same regions.
 The SDK sends vector search (`SearchVectors`, used by `SELECT … NEAREST`) to the
@@ -179,7 +186,7 @@ or the session token.
   native binary for that ([configuration 2](02-native-extenddb.md)).
 - No profile, SSO or `~/.aws` resolution in the page; paste credentials from the
   CLI commands above.
-- Reloading the page forgets the credentials.
+- Reloading or leaving the page forgets the credentials.
 - Service errors carry no request id (the native binary prints one).
 
 Developer details (layout, rebuilding the SDK bundle, the gates) are in

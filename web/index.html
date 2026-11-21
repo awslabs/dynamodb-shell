@@ -58,14 +58,19 @@
                 <label class="cred-label" for="cred-input">Paste short-term AWS credentials
                     (STS JSON, <code>export-credentials</code> JSON, or
                     <code>AWS_*=</code> environment lines):</label>
+                <!-- The textarea and "Use credentials" ship disabled; app.js
+                     enables them once it has checked that credentials are safe
+                     to use here (not framed, not opened by another page's
+                     script, a secure context). A page whose script never runs
+                     never invites a paste. -->
                 <textarea id="cred-input" class="cred-input" rows="4"
                           spellcheck="false" autocomplete="off" autocapitalize="off"
                           autocorrect="off" data-1p-ignore data-lpignore="true"
-                          aria-label="short-term AWS credentials"></textarea>
+                          aria-label="short-term AWS credentials" disabled></textarea>
                 <div class="cred-actions">
                     <label for="region-select">initial region:</label>
                     <select id="region-select" aria-label="initial region"></select>
-                    <button id="cred-use-btn" type="button">Use credentials</button>
+                    <button id="cred-use-btn" type="button" disabled>Use credentials</button>
                     <button id="cred-forget-btn" type="button">Forget</button>
                 </div>
                 <div id="cred-message" class="cred-message" role="status"></div>
@@ -80,7 +85,7 @@
                     <pre>aws sso login --profile &lt;p&gt; &amp;&amp; aws configure export-credentials --profile &lt;p&gt; --format env</pre>
                     <p>Recommended: a role scoped to the tables you intend to use.
                         Long-term <code>AKIA…</code> keys are refused. Credentials stay in
-                        this tab's memory and are gone on reload.</p>
+                        this tab's memory and are gone when you reload or leave the page.</p>
                 </details>
             </div>
         </details>

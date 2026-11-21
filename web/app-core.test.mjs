@@ -11,7 +11,9 @@
 // additions: ordered RunResult segments, short-term credential parsing and
 // validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9); and the
 // P10 additions: history clear() (D-P10-6), the framed / opened / insecure
-// credential refusal (G1), and the Trusted Types directives in the CSP.
+// credential refusal (G1), the Trusted Types directives in the CSP, the
+// cross-tab history removal (historyRemovedElsewhere), and the credentials
+// controls shipping disabled in index.html.
 
 import { readFileSync } from "node:fs";
 
@@ -28,6 +30,7 @@ import {
     createHistory,
     createHistoryRecall,
     createRunGuard,
+    historyRemovedElsewhere,
 } from "./app-core.mjs";
 
 let failures = 0;
@@ -168,6 +171,40 @@ console.log("createHistory");
     check(r.recalling === false, "reset() after clear() ends the recall");
     check(r.up("typed") === null, "up() after clear() is a no-op (nothing to recall)");
     check(r.down() === null, "down() after clear() is a no-op");
+}
+
+// ---- historyRemovedElsewhere (P10) -----------------------------------------
+// The page's storage-event handler: another tab's "Clear history" must clear
+// this tab's in-memory copy too, or this tab's next save writes it back.
+console.log("historyRemovedElsewhere");
+{
+    const KEY = "ddbsh.history";
+    check(historyRemovedElsewhere({ key: KEY, newValue: null }, KEY) === true,
+        "the history key removed in another tab (Clear history): removed");
+    check(historyRemovedElsewhere({ key: null, newValue: null }, KEY) === true,
+        "the whole storage area cleared in another tab (key null): removed");
+    check(historyRemovedElsewhere({ key: KEY, newValue: JSON.stringify(["show tables;"]) }, KEY) === false,
+        "another tab saved its history (a new value): not removed");
+    check(historyRemovedElsewhere({ key: KEY, newValue: "" }, KEY) === false,
+        "an empty-string value is a value, not a removal");
+    check(historyRemovedElsewhere({ key: "other.key", newValue: null }, KEY) === false,
+        "another key removed: not removed");
+    check(historyRemovedElsewhere({}, KEY) === false, "an event without a key: not removed");
+    check(historyRemovedElsewhere(undefined, KEY) === false, "no event at all: not removed");
+    check(historyRemovedElsewhere({ key: undefined, newValue: null }, undefined) === false,
+        "no history key given: not removed");
+    // The handler's whole effect, on the modules app.js uses: this tab's ring
+    // and recall are emptied, so its next command saves only itself.
+    const h = createHistory({ entries: ["cmd1", "cmd2"] });
+    const r = createHistoryRecall(h);
+    eq(r.up(""), "cmd2", "this tab is recalling an entry when the event arrives");
+    if (historyRemovedElsewhere({ key: KEY, newValue: null }, KEY)) {
+        h.clear();
+        r.reset();
+    }
+    check(r.up("") === null, "after the event, nothing is recalled");
+    h.push("cmd3");
+    eq(h.list(), ["cmd3"], "after the event, this tab saves only its new command");
 }
 
 // ---- createHistoryRecall ---------------------------------------------------
@@ -381,6 +418,28 @@ console.log("CSP");
         "every allowed host is [search-]dynamodb[-fips].<region>.{amazonaws.com,api.aws}");
     check(ALLOWED_HOSTS.includes("search-dynamodb.us-east-1.amazonaws.com"),
         "the SearchVectors host is allowed");
+}
+
+// ---- controls that ship disabled (P10) -------------------------------------
+// The credentials text box and "Use credentials" stay disabled until app.js has
+// run and found the environment safe (credentialEnvironmentProblem), so a page
+// whose script never runs (scripts blocked, a sandboxed frame, modules served
+// with the wrong type) never invites a paste. The editor and Run wait for the
+// engine the same way. Forget stays enabled: forgetting is always safe.
+console.log("controls that ship disabled");
+{
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    const openingTag = (id) => {
+        const m = html.match(new RegExp(`<[a-z]+\\s[^>]*\\bid="${id}"[^>]*>`));
+        return m ? m[0] : "";
+    };
+    const shipsDisabled = (id) => /\sdisabled(?=[\s>=])/.test(openingTag(id));
+    for (const id of ["cred-input", "cred-use-btn", "editor", "run-btn", "file-input"]) {
+        check(openingTag(id) !== "", `index.html has #${id}`);
+        check(shipsDisabled(id), `#${id} ships disabled`);
+    }
+    check(openingTag("cred-forget-btn") !== "" && !shipsDisabled("cred-forget-btn"),
+        "#cred-forget-btn ships enabled");
 }
 
 // ---- summary ---------------------------------------------------------------

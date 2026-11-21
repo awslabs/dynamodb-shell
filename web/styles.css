@@ -263,7 +263,9 @@ body {
     border: 1px solid var(--border);
 }
 
-.cred-actions select:disabled {
+.cred-actions button:disabled,
+.cred-actions select:disabled,
+.cred-input:disabled {
     opacity: 0.5;
     cursor: default;
 }
