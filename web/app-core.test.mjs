@@ -231,17 +231,26 @@ eq(buildTranscriptEntries("r> ", "x", {
 // ---- credentials (P9, D-P9-3 / D-P9-4) -------------------------------------
 console.log("credentials");
 {
-    const NOW = Date.parse("2026-11-20T12:00:00Z");
-    const KEY = "ASIAQWERTYUIOPASDFGH";
+    // Test fixtures. Every value below is fictitious: none was ever issued by
+    // AWS and none was ever a valid credential. The key ids are a keyboard row
+    // (QWERTYUIOPASDFGH) behind the ASIA/AKIA/XXXX prefixes, SECRET is the
+    // example secret from the AWS documentation, and TOKEN is invented. Every
+    // expiry, and the clock (NOW) the tests inject, is in 2025, so a value
+    // mistaken for a real one would be long expired.
+    const NOW = Date.parse("2025-01-15T12:00:00Z");
+    const KEY = "ASIAQWERTYUIOPASDFGH";           // short-term shape (accepted)
+    const LONG_TERM_KEY = "AKIAQWERTYUIOPASDFGH"; // long-term shape (refused)
+    const MALFORMED_KEY = "XXXXQWERTYUIOPASDFGH"; // neither prefix (refused)
     const SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const TOKEN = "IQoJb3JpZ2luX2VjEXAMPLETOKEN==";
-    const EXP = "2026-11-20T13:00:00Z";
+    const EXP = "2025-01-15T13:00:00Z";     // one hour after NOW
+    const EXPIRED = "2025-01-15T11:00:00Z"; // one hour before NOW
 
     const sts = JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET,
         SessionToken: TOKEN, Expiration: EXP }, AssumedRoleUser: { Arn: "arn:x" } });
     let r = parseCredentials(sts, NOW);
     check(r.ok && r.credentials.accessKeyId === KEY && r.credentials.sessionToken === TOKEN &&
-        r.credentials.expiration.toISOString() === "2026-11-20T13:00:00.000Z", "STS JSON accepted");
+        r.credentials.expiration.toISOString() === "2025-01-15T13:00:00.000Z", "STS JSON accepted");
 
     r = parseCredentials(JSON.stringify({ Version: 1, AccessKeyId: KEY, SecretAccessKey: SECRET,
         SessionToken: TOKEN, Expiration: EXP }), NOW);
@@ -265,14 +274,14 @@ console.log("credentials");
     check(r.ok, "cmd set lines accepted");
 
     const refused = [
-        [JSON.stringify({ AccessKeyId: "AKIAQWERTYUIOPASDFGH", SecretAccessKey: SECRET }), /long-term access keys \(AKIA…\)/],
-        [`AWS_ACCESS_KEY_ID=AKIAQWERTYUIOPASDFGH\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /long-term/],
+        [JSON.stringify({ AccessKeyId: LONG_TERM_KEY, SecretAccessKey: SECRET }), /long-term access keys \(AKIA…\)/],
+        [`AWS_ACCESS_KEY_ID=${LONG_TERM_KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /long-term/],
         [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}`, /a session token is required/],
-        [`AWS_ACCESS_KEY_ID=XXXXQWERTYUIOPASDFGH\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /not an AWS short-term access key id/],
+        [`AWS_ACCESS_KEY_ID=${MALFORMED_KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /not an AWS short-term access key id/],
         [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SESSION_TOKEN=${TOKEN}`, /secret access key is missing/],
         [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SECRET_ACCESS_KEY=a b\nAWS_SESSION_TOKEN=${TOKEN}`, /secret access key is missing or malformed/],
         [JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET, SessionToken: TOKEN,
-            Expiration: "2026-11-20T11:00:00Z" } }), /these credentials expired at 2026-11-20T11:00:00.000Z/],
+            Expiration: EXPIRED } }), /these credentials expired at 2025-01-15T11:00:00.000Z/],
         [JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET, SessionToken: TOKEN,
             Expiration: "soon" } }), /not a valid date/],
         ["{not json", /does not parse/],
