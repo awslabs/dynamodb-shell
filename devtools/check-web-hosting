@@ -47,7 +47,7 @@ log() { echo "$*" | tee -a "$LOG"; }
 ok() { log "  ok   $*"; }
 bad() { log "  FAIL $*"; FAIL=$((FAIL + 1)); }
 expect() { # expect <actual> <expected> <label>
-    if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 — expected '$2', got '$1'"; fi
+    if [ "$1" = "$2" ]; then ok "$3: $1"; else bad "$3 — expected '$2', got '$1'"; fi
 }
 
 : >"$LOG"
