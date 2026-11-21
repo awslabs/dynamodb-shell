@@ -11,8 +11,10 @@ WebAssembly. A vendored, pinned AWS SDK for JavaScript v3 bundle signs each
 request and sends it from the tab straight to Amazon DynamoDB. There is no
 server-side component.
 
-User documentation (credentials, serving, hosting, what is refused):
+User documentation (credentials, serving, what is refused):
 [`docs/configurations/03-browser-aws.md`](../docs/configurations/03-browser-aws.md).
+Publishing the page for others (packaging, the CloudFormation template,
+checks, other hosts): [`docs/HOSTING.md`](../docs/HOSTING.md).
 Design of record: P9-02 (`discussions/2026-11-20-P9-02-browser-js-sdk-design.md`
 in the orchestration repo).
 
@@ -51,10 +53,14 @@ unchanged, and service errors arrive as their verbatim `__type` document.
 | `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus` |
 | `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the editor (textContent only) |
 | `index.html`, `styles.css` | the page; the CSP `<meta>` between the `csp:begin`/`csp:end` markers is generated |
+| `bundle-files.txt` | the publish allowlist: the 11 files the page loads plus the SDK notices |
+| `package.cmake` | the packaging step (target `ddbsh-web-package`): copies the allowlist into `dist/ddbsh-web-<version>/`, zips it, writes `SHA256SUMS` |
+| `hosting/aws/` | `ddbsh-web-hosting.yaml` (private S3 bucket + CloudFront with Origin Access Control and security headers) and `deploy.sh` (the upload); see `docs/HOSTING.md` |
 | `vendor/aws-sdk/` | the pinned SDK: `package.json` + `package-lock.json` + `entry.mjs` + `generate.mjs` (inputs), `aws-sdk-dynamodb.mjs` + `allowed-hosts.mjs` + `THIRD-PARTY-NOTICES.txt` + `PROVENANCE.json` (outputs) |
 | `ddbsh-node.mjs` | CLI-shaped Node front end over the same files (the web golden gate's `DDBSH_SHELL_BIN`) |
 | `live-smoke.mjs` | live UI-path smoke (`DdbshSession.run`) against real DynamoDB |
 | `app-core.test.mjs`, `sdk-bridge.test.mjs` | offline Node unit tests (the bridge tests run the real SDK bundle with a stub HTTP handler) |
+| `package.test.mjs` | offline check of the packaging step: the allowlist matches the page's load graph, and the packaged folder, zip and `SHA256SUMS` match the allowlist and the build |
 | `package.json` | marks the bundle dir as ES modules for Node |
 
 ## Prerequisites
@@ -84,9 +90,13 @@ cmake --build build-preset/wasm-release
 devtools/serve-web 8080          # 127.0.0.1 only; open http://localhost:8080/
 ```
 
-`build-preset/wasm-release/web/` is then the complete static bundle. Remote use
-goes through `ssh -L 8080:localhost:8080 <host>` (the page needs a secure
-context for credentials; `http://localhost` is one).
+`build-preset/wasm-release/web/` is then the complete static bundle, plus the
+Node shim, the tests and build files. Remote use goes through
+`ssh -L 8080:localhost:8080 <host>` (the page needs a secure context for
+credentials; `http://localhost` is one). To publish, package it:
+`cmake --build build-preset/wasm-release --target ddbsh-web-package` writes
+`build-preset/wasm-release/dist/ddbsh-web-<version>/` (only the allowlisted
+files), a zip of it, and `SHA256SUMS`.
 
 ## The vendored SDK
 
@@ -114,10 +124,16 @@ for the bridge's endpoint check and the page CSP's `connect-src`.
 ```
 default-src 'none'; script-src 'self' 'wasm-unsafe-eval';
 connect-src 'self' <every ALLOWED_HOSTS entry>; style-src 'self'; img-src 'self';
-base-uri 'none'; form-action 'none'; object-src 'none'
+base-uri 'none'; form-action 'none'; object-src 'none';
+require-trusted-types-for 'script'; trusted-types 'none'
 ```
 
-`'wasm-unsafe-eval'` permits WebAssembly compilation only. The glue is linked
+`'wasm-unsafe-eval'` permits WebAssembly compilation only. The two Trusted
+Types directives (P10) make every DOM injection sink (`innerHTML`, script URLs)
+refuse plain strings and forbid creating a Trusted Types policy; the page
+writes text with `textContent` only, and a headless Chromium run showed no
+violation. A `<meta>` policy cannot set `frame-ancestors`; a host sends that
+as a response header (`docs/HOSTING.md`). The glue is linked
 with `-sDYNAMIC_EXECUTION=0` so it needs no `'unsafe-eval'`; the gates grep the
 emitted `ddbsh.js` for `eval(` / `new Function`. `index.html` has no inline
 script or style. `app-core.test.mjs` fails if the CSP drifts from
@@ -127,7 +143,8 @@ script or style. `app-core.test.mjs` fails if the CSP drifts from
 
 | Command | What it proves |
 |---|---|
-| `devtools/run-web-smoke` | build; offline gates (no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, storage grep); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
+| `devtools/run-web-smoke` | build and package; offline gates (no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `package.test.mjs`, storage grep); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
+| `devtools/check-web-hosting <stack>` | a deployed `hosting/aws` stack: status, content types, security headers and hashes of every file over HTTPS, the HTTP redirect, and that the bucket is private (`discussions/test-s3host-<hash>.log`) |
 | `devtools/run-tests --web-golden` | the whole golden suite through `ddbsh-node.mjs` against real DynamoDB |
 
 Both mint short-term STS credentials; see [`docs/TESTING.md`](../docs/TESTING.md).

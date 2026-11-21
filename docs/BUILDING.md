@@ -140,7 +140,15 @@ cmake --build build-preset/wasm-release
 The build stages the complete static bundle in
 `build-preset/wasm-release/web/`: `index.html`, the JavaScript modules,
 `ddbsh.js`/`ddbsh.wasm`, and `vendor/aws-sdk/` (the pinned SDK bundle). Serve
-that directory with `devtools/serve-web` (loopback only).
+that directory with `devtools/serve-web` (loopback only). It also holds the
+Node shim, the tests and build files, so do not publish it as it is: the
+packaging step copies only the files the page needs into
+`build-preset/wasm-release/dist/ddbsh-web-<version>/`, with a zip and
+`SHA256SUMS` (see [HOSTING](HOSTING.md#1-build-and-package-the-page)):
+
+```sh
+cmake --build build-preset/wasm-release --target ddbsh-web-package
+```
 
 The AWS SDK for JavaScript bundle (`web/vendor/aws-sdk/aws-sdk-dynamodb.mjs`) is
 committed, built from exact version pins and a committed lockfile.

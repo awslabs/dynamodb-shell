@@ -9,8 +9,8 @@ The browser edition is a static web page. It runs the same ddbsh engine as the
 native binary, compiled to WebAssembly, and sends each request from the browser
 tab straight to Amazon DynamoDB. A pinned copy of the AWS SDK for JavaScript v3
 (bundled with the page) signs each request with SigV4 and handles retries and
-endpoint resolution. There is no server-side component: any static web server
-can host the page.
+endpoint resolution. There is no server-side component: a static web host
+serves the page ([HOSTING](../HOSTING.md) lists what the host must provide).
 
 The engine still builds every request body and parses every response itself,
 so statements map to the same DynamoDB calls, and print the same output, as in
@@ -70,9 +70,18 @@ actions:
 Credentials are kept in the tab's memory only. They are never written to
 `localStorage`, `sessionStorage`, cookies, IndexedDB, or the URL, and never
 logged. The credentials text box is cleared as soon as you press **Use
-credentials**. Reloading the page forgets them. The panel shows the masked key
+credentials**. Reloading or leaving the page forgets them, including when the
+browser keeps the page in its back/forward cache. The panel shows the masked key
 id and the expiry time; when DynamoDB reports the token expired or invalid, the
 panel opens again so you can paste new credentials.
+
+## Command history
+
+The page saves the statements you run from the editor (up to 500) in the
+browser's `localStorage`, so the up arrow recalls them after a reload.
+Statements loaded from a file are not saved, and credentials never are. Saved
+statements include any values typed into them: press **Clear history** under
+the editor to delete them (**Clear** only empties the transcript).
 
 ## Serving the page
 
@@ -93,21 +102,30 @@ ssh -L 8080:localhost:8080 <build-host>     # then open http://localhost:8080/
 `http://localhost` counts as a secure context; plain HTTP on a LAN address does
 not, and the page refuses credentials there.
 
-To host the page (S3 + CloudFront, GitHub Pages, any static host), publish the
-contents of `build-preset/wasm-release/web/` except the Node files
-(`ddbsh-node.mjs`, `live-smoke.mjs`, `*.test.mjs`). The page holds no secrets and
-needs no sign-in gate. Hosting checklist:
+To publish the page for other people, follow [HOSTING](../HOSTING.md). It
+covers a private S3 bucket behind CloudFront, deployed with a CloudFormation
+template, and what any other host has to provide. In short:
 
+- **Its own origin.** Host the page on a host name of its own, never under a
+  path of a blog or another site, and never inside another page's frame.
+  Every script on the same origin can read what visitors paste.
+- **Only the packaged files.** `cmake --build build-preset/wasm-release
+  --target ddbsh-web-package` copies the 11 files the page needs into
+  `build-preset/wasm-release/dist/ddbsh-web-<version>/`, with a zip and
+  `SHA256SUMS`. Publish that folder, not the build folder (which also holds the
+  Node shim, the tests and build files).
 - **HTTPS.** The page accepts credentials only in a secure context.
-- **CSP response header.** `index.html` carries its Content-Security-Policy as a
-  `<meta>` tag, which cannot set `frame-ancestors`. Send the same policy as a
-  response header and add `frame-ancestors 'none'`, so the page cannot be framed
-  (clickjacking) while it holds credentials.
-- **`application/wasm`.** Serve `.wasm` files with this MIME type (set
-  `Content-Type` on upload to S3). Without it the browser falls back to a slower,
-  non-streaming WebAssembly load.
+- **`frame-ancestors 'none'` in a response header.** `index.html` carries its
+  Content-Security-Policy as a `<meta>` tag, which cannot set
+  `frame-ancestors`. Send only that directive as a header; browsers apply it
+  together with the `<meta>` policy. The full policy is about 14,000
+  characters, too long for header settings such as CloudFront's (at most
+  1,783 characters).
+- **Content types**, in particular `application/wasm` for `ddbsh.wasm` and
+  `text/javascript` for the `.js` and `.mjs` modules.
 
-No cross-origin-isolation headers are needed.
+The page holds no secrets and needs no sign-in gate. No cross-origin-isolation
+headers are needed.
 
 ## What the page refuses, and why
 
@@ -115,15 +133,18 @@ No cross-origin-isolation headers are needed.
 |---|---|
 | Long-term `AKIA…` keys, or any set without a session token | A long-term key pasted into a web page is a standing credential at risk; short-term credentials expire. |
 | Credentials outside a secure context (`https://` or `http://localhost`) | A page served over plain HTTP can be modified in transit to read what you paste. |
+| Credentials when the page is inside a frame | The framing page can overlay or restyle it to capture what you type. The credentials panel is disabled; open the page directly in its own tab. |
+| Credentials when another page's script opened the window | A same-origin opener can read everything in the page. The credentials panel is disabled; open the page by typing or pasting its address. |
 | `CONNECT … WITH ENDPOINT` to anything but AWS DynamoDB | The request carries your session token. Only `https://dynamodb.<region>.amazonaws.com`, `https://dynamodb-fips.<region>.amazonaws.com`, `https://dynamodb.<region>.api.aws` and `https://dynamodb-fips.<region>.api.aws` are allowed, for the regions of the `aws` and `aws-us-gov` partitions. |
 
 The page's Content-Security-Policy (`connect-src`) allows those hosts plus
 `search-dynamodb[-fips].<region>.{amazonaws.com,api.aws}`, for the same regions.
 The SDK sends vector search (`SearchVectors`, used by `SELECT … NEAREST`) to the
 `search-dynamodb` host; `CONNECT … WITH ENDPOINT` does not accept it as an
-override. If you send the CSP as a response header for a hosted page, copy the
-full `connect-src` list from `index.html`; dropping the `search-dynamodb` hosts
-breaks vector search. The policy allows scripts only from the page's own origin.
+override. The policy is in the `<meta>` tag of `index.html`, so a host does not
+copy it: the host's header carries only `frame-ancestors`. The policy allows
+scripts only from the page's own origin and enforces Trusted Types (no script
+may pass a string to an HTML or script injection point).
 
 ## CONNECT in the browser
 
