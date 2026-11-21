@@ -62,26 +62,49 @@ target_link_options(ddbsh-wasm PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
 #                   PROVENANCE.json, THIRD-PARTY-NOTICES.txt}    the pinned SDK
 #   ddbsh-node.mjs        the CLI-shaped Node shim the web golden gate drives
 #   live-smoke.mjs        the live UI-path smoke devtools/run-web-smoke runs
-#   app-core.test.mjs sdk-bridge.test.mjs   the offline Node unit tests
+#   app-core.test.mjs sdk-bridge.test.mjs package.test.mjs   the offline Node tests
+#   bundle-files.txt      the publish allowlist (read by package.test.mjs)
 #   package.json          marks the dir as ES modules for Node
-add_custom_command(TARGET ddbsh-wasm POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-            "${CMAKE_CURRENT_SOURCE_DIR}/index.html"
-            "${CMAKE_CURRENT_SOURCE_DIR}/app.js"
-            "${CMAKE_CURRENT_SOURCE_DIR}/app-core.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/sdk-bridge.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/styles.css"
-            "${CMAKE_CURRENT_SOURCE_DIR}/ddbsh-node.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/live-smoke.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/app-core.test.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/sdk-bridge.test.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
-            "$<TARGET_FILE_DIR:ddbsh-wasm>/"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:ddbsh-wasm>/vendor/aws-sdk"
-    COMMAND ${CMAKE_COMMAND} -E copy
-            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/aws-sdk-dynamodb.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/allowed-hosts.mjs"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/PROVENANCE.json"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/aws-sdk/THIRD-PARTY-NOTICES.txt"
-            "$<TARGET_FILE_DIR:ddbsh-wasm>/vendor/aws-sdk/"
-    COMMENT "Staging the ddbsh browser bundle (page, pinned AWS SDK, Node shim + tests) beside ddbsh.js/ddbsh.wasm")
+# One copy rule per file, each depending on its source, so an edit to any of
+# them is re-staged by the next build. (Before P10 this was a POST_BUILD step
+# of ddbsh-wasm, which ran only when the module relinked; an edited page or
+# test file stayed stale in the build folder.)
+set(DDBSH_WEB_STAGED_FILES
+    index.html app.js app-core.mjs sdk-bridge.mjs styles.css
+    ddbsh-node.mjs live-smoke.mjs
+    app-core.test.mjs sdk-bridge.test.mjs package.test.mjs
+    bundle-files.txt package.json
+    vendor/aws-sdk/aws-sdk-dynamodb.mjs vendor/aws-sdk/allowed-hosts.mjs
+    vendor/aws-sdk/PROVENANCE.json vendor/aws-sdk/THIRD-PARTY-NOTICES.txt)
+set(ddbsh_web_staged_outputs "")
+foreach(rel IN LISTS DDBSH_WEB_STAGED_FILES)
+    # CMAKE_CURRENT_BINARY_DIR is the module's output dir (web/ddbsh.js).
+    set(staged_path "${CMAKE_CURRENT_BINARY_DIR}/${rel}")
+    get_filename_component(staged_dir "${staged_path}" DIRECTORY)
+    add_custom_command(
+        OUTPUT "${staged_path}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${staged_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${rel}" "${staged_path}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${rel}"
+        COMMENT "Staging web/${rel}"
+        VERBATIM)
+    list(APPEND ddbsh_web_staged_outputs "${staged_path}")
+endforeach()
+add_custom_target(ddbsh-web-stage ALL DEPENDS ${ddbsh_web_staged_outputs})
+add_dependencies(ddbsh-web-stage ddbsh-wasm)
+
+# The packaging step (P10, D-P10-7): copy exactly the files in bundle-files.txt
+# into build-preset/wasm-release/dist/ddbsh-web-<version>/, plus a zip of that
+# folder and SHA256SUMS (see package.cmake). Not part of ALL; run it with
+#   cmake --build build-preset/wasm-release --target ddbsh-web-package
+set(DDBSH_WEB_BUNDLE_NAME "ddbsh-web-${PROJECT_VERSION}")
+add_custom_target(ddbsh-web-package
+    COMMAND ${CMAKE_COMMAND}
+            "-DWEB_OUT=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/bundle-files.txt"
+            "-DDIST_DIR=${CMAKE_BINARY_DIR}/dist"
+            "-DBUNDLE_NAME=${DDBSH_WEB_BUNDLE_NAME}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/package.cmake"
+    COMMENT "Packaging ${DDBSH_WEB_BUNDLE_NAME} into ${CMAKE_BINARY_DIR}/dist"
+    VERBATIM)
+add_dependencies(ddbsh-web-package ddbsh-web-stage)
