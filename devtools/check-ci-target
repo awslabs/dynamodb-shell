@@ -20,8 +20,12 @@
 #      and AWS_DEFAULT_PROFILE are unset or empty. Credentials in the
 #      environment take precedence over the cross-acct profile in ddbsh, so
 #      the cross-account family would run in the main account without any
-#      test noticing. No endpoint override is set either: DDBSH_ENDPOINT_OVERRIDE
-#      or any AWS_ENDPOINT_URL* variable.
+#      test noticing. AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE are unset or
+#      empty too: together they are a web identity, which the AWS CLI prefers
+#      to the [default] profile, while ddbsh (the AWS SDK for C++'s default
+#      chain) prefers the profile, so check 2 would see a different identity
+#      from the one the suite uses. No endpoint override is set either:
+#      DDBSH_ENDPOINT_OVERRIDE or any AWS_ENDPOINT_URL* variable.
 #   2. `aws sts get-caller-identity` starts with <main-arn-prefix>.
 #   3. `aws sts get-caller-identity --profile cross-acct` starts with
 #      <cross-arn-prefix>.
@@ -71,7 +75,8 @@ echo "  expected main:   $MAIN_PREFIX"
 echo "  expected cross:  $CROSS_PREFIX"
 
 # 1. Nothing in the environment may override the profiles or the endpoint.
-for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE; do
+for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE \
+         AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
     if [ -n "${!v:-}" ]; then
         bad "$v is set; credentials must reach the runner only as profiles"
     fi
