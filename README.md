@@ -1,5 +1,7 @@
 # ddbsh
 
+**Try ddbsh in your browser at <https://www.ddbsh.org/>.** The page runs the latest release; the credentials you paste stay in the tab ([configuration 3](docs/configurations/03-browser-aws.md)).
+
 ddbsh is a simple CLI for DynamoDB modeled on isql, and the MySQL CLIs. ddbsh is open source. For more information about this, see the [Licensing](#licensing) section below.
 
 ddbsh presents the user with a simple command line interface. Here the user can enter SQL-like commands to DynamoDB. The output is presented in the same window. ddbsh supports many Data Definition Language ([DDL](docs/reference/ddl.md)) and Data Manipulation Language ([DML](docs/reference/dml.md)) commands.
@@ -86,8 +88,10 @@ another host), see [docs/HOSTING.md](docs/HOSTING.md).
 
 - **[Building](docs/BUILDING.md)** — toolchain, CMake, platforms, installing a
   release, and building the AWS SDK for C++ from source.
-- **[Testing](docs/TESTING.md)** — `devtools/run-tests`, the golden suite, and
-  the native unit tests.
+- **[Testing](docs/TESTING.md)** — `devtools/run-tests`, the golden suite, the
+  native unit tests, and what CI runs.
+- **[Continuous integration](docs/CI.md)** — the GitHub workflows, their AWS
+  accounts and environments, and the site publish (for maintainers).
 - **[Contributing](docs/CONTRIBUTING.md)** — how to contribute and the project
   direction.
 - **[Embedding the library](docs/EMBEDDING.md)** — the `Connection`/`Database`

@@ -143,13 +143,15 @@ script or style. `app-core.test.mjs` fails if the CSP drifts from
 
 | Command | What it proves |
 |---|---|
-| `devtools/run-web-smoke` | build and package; offline gates (no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `package.test.mjs`, storage grep, upload commands of `deploy.sh` = `docs/HOSTING.md`); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
+| `devtools/run-web-smoke` | build and package; the offline gates (`web_offline_gates` in `devtools/lib-web.sh`: no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `package.test.mjs`, storage grep, upload commands of `deploy.sh` = `docs/HOSTING.md`; CI runs the same set); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
 | `devtools/check-web-hosting <stack>` | a deployed `hosting/aws` stack: status, content type, `Cache-Control`, security headers and hash of every file over HTTPS, the HTTP redirect, and that the bucket is private (`discussions/test-s3host-<hash>.log`) |
-| `devtools/run-tests --web-golden` | the whole golden suite through `ddbsh-node.mjs` against real DynamoDB |
+| `devtools/check-web-hosting --anonymous <url>` | the same checks of the served files by the site's address, with no credentials; `--bucket-domain` adds the anonymous S3 refusals and `--wait` first waits for the site to serve the bundle (the site publish workflow runs it) |
+| `devtools/run-tests --web-golden` | the offline gates, then the whole golden suite through `ddbsh-node.mjs` against real DynamoDB |
 
 `run-web-smoke` and `run-tests --web-golden` mint short-term STS credentials;
 `check-web-hosting` uses the caller's AWS CLI credentials only to read the
-stack and the bucket's settings. See [`docs/TESTING.md`](../docs/TESTING.md).
+stack and the bucket's settings, and none with `--anonymous`. See
+[`docs/TESTING.md`](../docs/TESTING.md).
 
 ## Boundaries
 
