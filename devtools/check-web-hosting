@@ -7,6 +7,8 @@
 #
 # Usage:
 #   AWS_PROFILE=<hosting profile> devtools/check-web-hosting <stack-name> [label]
+#   devtools/check-web-hosting --anonymous <site-url> [--bucket-domain <name>]
+#                              [--wait <seconds>] [label]
 #
 # Checks, all anonymous over the public internet except (e)'s bucket reads:
 #   a. HTTPS 200 on / and on every file in web/bundle-files.txt; plain HTTP
@@ -23,10 +25,19 @@
 #      grants only cloudfront.amazonaws.com for this distribution; ownership is
 #      BucketOwnerEnforced; the objects are exactly the allowlist.
 #
-# Output: discussions/test-<label>-<HEAD-short>.log (label default: s3host).
-# Needs curl, sha256sum, python3, the AWS CLI, and credentials that can read
-# the stack's outputs and the bucket's configuration (s3:GetBucket*,
-# ListBucket).
+# --anonymous (D-P11-31) checks a site by its address with no credentials and
+# no AWS call, for a caller that cannot read the stack or the bucket (the site
+# publish workflow). It runs a-d against <site-url>, which must be the origin
+# root (https://<host>/). With --bucket-domain <bucket>.s3.<region>.amazonaws.com
+# it also runs e's two anonymous 403 checks; the rest of e needs credentials.
+# --wait <seconds> first polls every 15 s until every served file's sha256
+# matches SHA256SUMS or the time runs out, then runs the checks, so an
+# invalidation that has not finished shows up as sha256 failures.
+#
+# Output: discussions/test-<label>-<HEAD-short>.log (label default: s3host,
+# or anonymous with --anonymous). Needs curl and sha256sum; the stack mode also
+# needs python3, the AWS CLI, and credentials that can read the stack's
+# outputs and the bucket's configuration (s3:GetBucket*, ListBucket).
 #
 # TODO(portability): Linux as written. It needs bash 4 or later (mapfile; macOS
 # ships bash 3.2), GNU grep (\s) and sha256sum (macOS has shasum); on Windows
@@ -34,12 +45,69 @@
 
 set -uo pipefail
 
-if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+usage() {
     echo "usage: $0 <stack-name> [label]" >&2
+    echo "       $0 --anonymous <site-url> [--bucket-domain <name>] [--wait <seconds>] [label]" >&2
     exit 2
+}
+
+ANONYMOUS=0
+BUCKET_DOMAIN=""
+WAIT=0
+if [ "${1:-}" = "--anonymous" ]; then
+    ANONYMOUS=1
+    shift
+    [ $# -ge 1 ] || usage
+    SITE_URL="$1"
+    shift
+    LABEL="anonymous"
+    have_label=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --bucket-domain)
+                [ $# -ge 2 ] || usage
+                BUCKET_DOMAIN="$2"
+                shift 2
+                ;;
+            --wait)
+                [ $# -ge 2 ] || usage
+                WAIT="$2"
+                shift 2
+                ;;
+            -*) usage ;;
+            *)
+                [ "$have_label" -eq 0 ] || usage
+                LABEL="$1"
+                have_label=1
+                shift
+                ;;
+        esac
+    done
+    # The page needs its own origin, so the address is the root of one host.
+    if [[ ! "$SITE_URL" =~ ^https://([A-Za-z0-9.-]+)/?$ ]]; then
+        echo "error: <site-url> must be https://<host>/ (got '$SITE_URL')" >&2
+        exit 2
+    fi
+    DOMAIN="${BASH_REMATCH[1]}"
+    if [ -n "$BUCKET_DOMAIN" ] && [[ ! "$BUCKET_DOMAIN" =~ ^[a-z0-9][a-z0-9.-]+$ ]]; then
+        echo "error: --bucket-domain must be a host name (got '$BUCKET_DOMAIN')" >&2
+        exit 2
+    fi
+    if [[ ! "$WAIT" =~ ^[0-9]+$ ]]; then
+        echo "error: --wait takes a number of seconds (got '$WAIT')" >&2
+        exit 2
+    fi
+    if [[ ! "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "error: the label may use only letters, digits, '.', '_' and '-' (got '$LABEL')" >&2
+        exit 2
+    fi
+else
+    if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+        usage
+    fi
+    STACK="$1"
+    LABEL="${2:-s3host}"
 fi
-STACK="$1"
-LABEL="${2:-s3host}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 mkdir -p "$REPO_DIR/discussions"
@@ -57,35 +125,82 @@ expect() { # expect <actual> <expected> <label>
     if [ "$1" = "$2" ]; then ok "$3: $1"; else bad "$3 — expected '$2', got '$1'"; fi
 }
 
-: >"$LOG"
-log "=== ddbsh web hosting check ($HASH) ==="
-log "  stack:     $STACK ($REGION)"
-log "  caller:    $(aws sts get-caller-identity --query Arn --output text 2>&1)"
-log "  timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-output() {
-    aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
-        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text
-}
-STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" --query 'Stacks[0].StackStatus' --output text 2>&1)"
-DOMAIN="$(output DistributionDomainName)"
-DIST_ID="$(output DistributionId)"
-BUCKET="$(output BucketName)"
-SITE="$(output SiteUrl)"
-log "  status:    $STATUS"
-log "  url:       $SITE"
-log "  dist id:   $DIST_ID"
-log "  bucket:    $BUCKET"
-if [ "$STATUS" != "CREATE_COMPLETE" ] && [ "$STATUS" != "UPDATE_COMPLETE" ]; then
-    log "error: stack is not in a complete state"
-    exit 1
-fi
-ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-DIST_ARN="arn:aws:cloudfront::${ACCOUNT}:distribution/${DIST_ID}"
-
 mapfile -t FILES < <(grep -vE '^\s*(#|$)' "$REPO_DIR/web/bundle-files.txt" | tr -d '\r' | sed 's/[[:space:]]*$//')
 BUNDLE="$(cd "$DIST_DIR" 2>/dev/null && ls -d ddbsh-web-*/ 2>/dev/null | head -1 | tr -d /)"
-log "  bundle:    $DIST_DIR/$BUNDLE (${#FILES[@]} allowlisted files)"
+
+: >"$LOG"
+if [ "$ANONYMOUS" -eq 1 ]; then
+    log "=== ddbsh web hosting check, anonymous ($HASH) ==="
+    log "  site:      https://$DOMAIN/"
+    log "  bucket:    ${BUCKET_DOMAIN:-(not given)}"
+    log "  timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    log "  bundle:    $DIST_DIR/$BUNDLE (${#FILES[@]} allowlisted files)"
+    if [ -z "$BUNDLE" ] || [ ! -f "$DIST_DIR/SHA256SUMS" ]; then
+        log "error: no packaged bundle with SHA256SUMS in $DIST_DIR"
+        exit 1
+    fi
+else
+    log "=== ddbsh web hosting check ($HASH) ==="
+    log "  stack:     $STACK ($REGION)"
+    log "  caller:    $(aws sts get-caller-identity --query Arn --output text 2>&1)"
+    log "  timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    output() {
+        aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text
+    }
+    STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" --query 'Stacks[0].StackStatus' --output text 2>&1)"
+    DOMAIN="$(output DistributionDomainName)"
+    DIST_ID="$(output DistributionId)"
+    BUCKET="$(output BucketName)"
+    SITE="$(output SiteUrl)"
+    log "  status:    $STATUS"
+    log "  url:       $SITE"
+    log "  dist id:   $DIST_ID"
+    log "  bucket:    $BUCKET"
+    if [ "$STATUS" != "CREATE_COMPLETE" ] && [ "$STATUS" != "UPDATE_COMPLETE" ]; then
+        log "error: stack is not in a complete state"
+        exit 1
+    fi
+    ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+    DIST_ARN="arn:aws:cloudfront::${ACCOUNT}:distribution/${DIST_ID}"
+    log "  bundle:    $DIST_DIR/$BUNDLE (${#FILES[@]} allowlisted files)"
+fi
+
+want_sum() { # want_sum <bundle-relative path> -> its sha256 in SHA256SUMS
+    grep "  $BUNDLE/$1\$" "$DIST_DIR/SHA256SUMS" | cut -d' ' -f1
+}
+
+# --wait: poll until / and every allowlisted file serve the packaged bytes, or
+# the time runs out. Each round stops at the first file that differs, so a
+# round costs one small request until index.html has changed.
+if [ "$WAIT" -gt 0 ]; then
+    log ""
+    log "--- waiting up to ${WAIT}s for the site to serve this bundle ---"
+    start="$(date +%s)"
+    while :; do
+        pending=""
+        for f in "" "${FILES[@]}"; do
+            if [ -z "$f" ]; then want="$(want_sum index.html)"; else want="$(want_sum "$f")"; fi
+            got="$(curl -sS --max-time 60 "https://$DOMAIN/$f" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+            if [ "$got" != "$want" ]; then
+                pending="/$f"
+                break
+            fi
+        done
+        elapsed=$(($(date +%s) - start))
+        if [ -z "$pending" ]; then
+            log "  every file matches SHA256SUMS after ${elapsed}s"
+            break
+        fi
+        if [ "$elapsed" -ge "$WAIT" ]; then
+            log "  gave up after ${elapsed}s: $pending does not match SHA256SUMS yet"
+            break
+        fi
+        log "  ${elapsed}s: $pending does not match yet"
+        sleep 15
+    done
+fi
 
 content_type_for() {
     case "$1" in
@@ -138,38 +253,50 @@ for f in "${FILES[@]}"; do
     expect "$(header "$WORK/$safe.h" content-type)" "$(content_type_for "$f")" "b. /$f Content-Type"
     expect "$(header "$WORK/$safe.h" cache-control)" "no-cache" "b. /$f Cache-Control"
     check_security_headers "$WORK/$safe.h" "/$f"
-    want="$(grep "  $BUNDLE/$f\$" "$DIST_DIR/SHA256SUMS" | cut -d' ' -f1)"
+    want="$(want_sum "$f")"
     got="$(sha256sum "$WORK/$safe.body" | cut -d' ' -f1)"
     expect "$got" "$want" "d. /$f sha256 matches SHA256SUMS"
 done
 
 log ""
 log "--- e: the bucket is private ---"
-BUCKET_DOMAIN="$(output BucketRegionalDomainName)"
-if [ -z "$BUCKET_DOMAIN" ] || [ "$BUCKET_DOMAIN" = "None" ]; then
-    BUCKET_DOMAIN="$BUCKET.s3.$REGION.amazonaws.com" # stacks from before the output existed
+if [ "$ANONYMOUS" -eq 1 ]; then
+    if [ -n "$BUCKET_DOMAIN" ]; then
+        code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/index.html")"
+        expect "$code" "403" "e. anonymous GET straight from S3 ($BUCKET_DOMAIN) is denied"
+        code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/")"
+        expect "$code" "403" "e. anonymous bucket listing is denied"
+    else
+        log "  (no --bucket-domain: the S3 checks need the bucket's address)"
+    fi
+    log "  (the bucket's settings need credentials: run the stack mode to check them)"
+else
+    BUCKET_DOMAIN="$(output BucketRegionalDomainName)"
+    if [ -z "$BUCKET_DOMAIN" ] || [ "$BUCKET_DOMAIN" = "None" ]; then
+        BUCKET_DOMAIN="$BUCKET.s3.$REGION.amazonaws.com" # stacks from before the output existed
+    fi
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/index.html")"
+    expect "$code" "403" "e. anonymous GET straight from S3 ($BUCKET_DOMAIN) is denied"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/")"
+    expect "$code" "403" "e. anonymous bucket listing is denied"
+    expect "$(aws s3api get-public-access-block --bucket "$BUCKET" --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text)" \
+        "True	True	True	True" "e. Block Public Access: all four settings on"
+    expect "$(aws s3api get-bucket-policy-status --bucket "$BUCKET" --query 'PolicyStatus.IsPublic' --output text)" "False" "e. S3 rates the bucket policy not public"
+    expect "$(aws s3api get-bucket-ownership-controls --bucket "$BUCKET" --query 'OwnershipControls.Rules[0].ObjectOwnership' --output text)" \
+        "BucketOwnerEnforced" "e. object ownership BucketOwnerEnforced"
+    aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text >"$WORK/policy.json"
+    expect "$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[s for s in p["Statement"] if s["Effect"]=="Allow"]; print(len(a), json.dumps(a[0]["Principal"],sort_keys=True), a[0]["Action"], a[0]["Condition"]["StringEquals"]["AWS:SourceArn"])' "$WORK/policy.json")" \
+        "1 {\"Service\": \"cloudfront.amazonaws.com\"} s3:GetObject $DIST_ARN" \
+        "e. the only Allow is s3:GetObject for cloudfront.amazonaws.com from this distribution"
+    expect "$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); d=[s for s in p["Statement"] if s["Effect"]=="Deny"]; print(len(d), d[0]["Condition"]["Bool"]["aws:SecureTransport"])' "$WORK/policy.json")" \
+        "1 false" "e. requests without TLS are denied"
+    expect "$(aws s3api get-bucket-encryption --bucket "$BUCKET" --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' --output text)" \
+        "AES256" "e. default encryption SSE-S3"
+    expect "$(aws s3api get-bucket-versioning --bucket "$BUCKET" --query Status --output text)" "Enabled" "e. versioning enabled"
+    objects="$(aws s3api list-objects-v2 --bucket "$BUCKET" --query 'Contents[].Key' --output text | tr '\t' '\n' | sort | tr '\n' ' ')"
+    allow="$(printf '%s\n' "${FILES[@]}" | sort | tr '\n' ' ')"
+    expect "$objects" "$allow" "e. the bucket holds exactly the allowlisted files"
 fi
-code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/index.html")"
-expect "$code" "403" "e. anonymous GET straight from S3 ($BUCKET_DOMAIN) is denied"
-code="$(curl -sS -o /dev/null -w '%{http_code}' "https://$BUCKET_DOMAIN/")"
-expect "$code" "403" "e. anonymous bucket listing is denied"
-expect "$(aws s3api get-public-access-block --bucket "$BUCKET" --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' --output text)" \
-    "True	True	True	True" "e. Block Public Access: all four settings on"
-expect "$(aws s3api get-bucket-policy-status --bucket "$BUCKET" --query 'PolicyStatus.IsPublic' --output text)" "False" "e. S3 rates the bucket policy not public"
-expect "$(aws s3api get-bucket-ownership-controls --bucket "$BUCKET" --query 'OwnershipControls.Rules[0].ObjectOwnership' --output text)" \
-    "BucketOwnerEnforced" "e. object ownership BucketOwnerEnforced"
-aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text >"$WORK/policy.json"
-expect "$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[s for s in p["Statement"] if s["Effect"]=="Allow"]; print(len(a), json.dumps(a[0]["Principal"],sort_keys=True), a[0]["Action"], a[0]["Condition"]["StringEquals"]["AWS:SourceArn"])' "$WORK/policy.json")" \
-    "1 {\"Service\": \"cloudfront.amazonaws.com\"} s3:GetObject $DIST_ARN" \
-    "e. the only Allow is s3:GetObject for cloudfront.amazonaws.com from this distribution"
-expect "$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); d=[s for s in p["Statement"] if s["Effect"]=="Deny"]; print(len(d), d[0]["Condition"]["Bool"]["aws:SecureTransport"])' "$WORK/policy.json")" \
-    "1 false" "e. requests without TLS are denied"
-expect "$(aws s3api get-bucket-encryption --bucket "$BUCKET" --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' --output text)" \
-    "AES256" "e. default encryption SSE-S3"
-expect "$(aws s3api get-bucket-versioning --bucket "$BUCKET" --query Status --output text)" "Enabled" "e. versioning enabled"
-objects="$(aws s3api list-objects-v2 --bucket "$BUCKET" --query 'Contents[].Key' --output text | tr '\t' '\n' | sort | tr '\n' ' ')"
-allow="$(printf '%s\n' "${FILES[@]}" | sort | tr '\n' ' ')"
-expect "$objects" "$allow" "e. the bucket holds exactly the allowlisted files"
 
 log ""
 if [ "$FAIL" -eq 0 ]; then
