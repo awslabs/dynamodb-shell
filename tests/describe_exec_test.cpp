@@ -9,9 +9,10 @@
 // quirk), billing/throughput, warm throughput, PITR (DescribeContinuousBackups),
 // per-GSI/LSI detail (incl. the LSI "all on one line" quirk and the On Demand
 // "mirrors table" branch), stream, table class, SSE, and replica auto-scaling.
-// Best-effort sections (PITR, auto-scaling) are skipped on failure. No in-scope
-// golden drives DESCRIBE this phase (the describe goldens are interleaved with
-// ALTER/PITR, deferred to 2c), so these native tests are the format contract.
+// Best-effort sections (PITR, auto-scaling) are skipped on failure. The
+// create-drop and pitr golden families also run DESCRIBE against real
+// DynamoDB, but they match fragments of the report with regular expressions;
+// these native tests pin the whole report.
 
 #include <optional>
 #include <string>

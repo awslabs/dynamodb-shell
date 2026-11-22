@@ -312,8 +312,8 @@ CloudFormation linter but not yet deployed by this project's tests.
    with the two commands in step 1. The folder name carries the new version.
 2. Check `SHA256SUMS` as in step 1.
 3. Set `DIR` again with the last line of the step 2 variables (it finds the
-   new folder), then run the seven commands in step 3. They upload the changed
-   files, delete files the new version no longer has, and clear CloudFront's
+   new folder), then run the seven commands in step 3. They upload every file
+   of the new version, delete files it no longer has, and clear CloudFront's
    cache.
 4. Run the checks in step 4.
 

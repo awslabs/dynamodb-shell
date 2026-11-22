@@ -218,17 +218,19 @@ struct CreateTableCmd {
 
 // ---- INSERT / REPLACE (W2 part 2) ------------------------------------------
 
-/// A write ratelimit (WITH RATELIMIT (...)). Captured for fidelity; execution
-/// of the token-bucket limiter is deferred to a later sub-phase (D19 defers
-/// rate-limiting), so the presence here just records the clause.
+/// A ratelimit (WITH RATELIMIT (...)): read and write capacity units per
+/// second. The token-bucket RateLimiter (execute/rate_limiter.cpp, D-2g-6)
+/// enforces it on the INSERT/REPLACE, UPDATE/UPSERT and DELETE executors and
+/// the SELECT cursor.
 struct RateLimit {
     double rcu = 0;
     double wcu = 0;
 };
 
 /// RETURN VALUES target (the original ReturnValue). INSERT forces `none`;
-/// REPLACE may request one. Non-`none` execution lands with return-values
-/// support in a later sub-phase.
+/// REPLACE, UPDATE/UPSERT and DELETE may request one. Their executors pass it
+/// to the client (to_client_return_value in execute/write_common.hpp) and
+/// keep the returned attributes for the Renderer to print (`want_rv`).
 enum class ReturnValue { none, all_old, all_new, updated_old, updated_new };
 
 /// INSERT INTO / REPLACE INTO <table> ( cols ) VALUES ( row ) [, ( row ) ...]
