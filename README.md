@@ -8,8 +8,8 @@ It is also an embeddable **C++23 library** with an SDK-free, terminal-free engin
 (lexer, parser, command model, expression engine, SQL→API planner, execution,
 and output/EXPLAIN formatting), a thin `ddbsh` command that wraps it, and a
 browser/WebAssembly build with a web UI. Current version: **0.12.1**. The engine
-drives the full standard `ddbsh` command surface end to end against real
-DynamoDB; global tables are the sole deferred family.
+drives the full standard `ddbsh` command surface, including global tables, end
+to end against real DynamoDB.
 
 ---
 **WARNING**

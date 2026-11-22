@@ -150,11 +150,6 @@ The engine drives this command set end to end against real DynamoDB:
   })
   ```
 
-**Deferred to a later phase:** global tables (`ALTER TABLE ... REPLICA`
-multi-region provisioning and the `ddbsh-gt-*` suite), which require a live
-multi-region setup. The parser may recognize other unimplemented syntax and
-return a clear "not implemented in this build" error rather than a parse error.
-
 - Vector search — a table may carry one or more **vector indexes** for
   real-time approximate-nearest-neighbor search. The CREATE/ALTER clause lead
   accepts three synonyms: `VSI (...)`, `VECTOR (...)`, or `VECTOR INDEX (...)`.
