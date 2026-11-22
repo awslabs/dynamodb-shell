@@ -15,6 +15,7 @@ they use, and the publish of the project's site, <https://www.ddbsh.org/>.
 - [AWS accounts and roles](#aws-accounts-and-roles)
 - [GitHub environments](#github-environments)
 - [The golden suite in CI](#the-golden-suite-in-ci)
+- [Pull requests from forks](#pull-requests-from-forks)
 - [The site publish](#the-site-publish)
 - [Releasing a version](#releasing-a-version)
 - [Updating the pins](#updating-the-pins)
@@ -30,8 +31,9 @@ they use, and the publish of the project's site, <https://www.ddbsh.org/>.
 | `publish-site.yml` | every tag `vMAJOR.MINOR.PATCH`, on demand on a tag | `bundle` (the reusable workflow), then `publish` | `publish` only, environment `site` |
 | `homebrew.yml` | a created release, on demand | updates the `aws/homebrew-tap` formula | none |
 
-The real-DynamoDB job needs the `native` job, so a pull request that fails
-offline never takes a golden-suite slot.
+The real-DynamoDB job waits for the `native` and `format` jobs, so a pull
+request whose native unit tests or formatting check fail never takes a
+golden-suite slot. It does not wait for `sanitize`, which takes longer.
 
 ## AWS accounts and roles
 
@@ -77,7 +79,8 @@ The `real-dynamodb` job:
    `source_profile` is `default`. ddbsh performs the AssumeRole into the cross
    account itself, the path the cross-account tests exist to exercise.
 4. Runs `devtools/check-ci-target`, which fails the job unless:
-   - no credential, profile or endpoint override is in the environment;
+   - no credential (a web identity included), profile or endpoint override is
+     in the environment;
    - the AWS CLI resolves `[default]` to the CI main role and `cross-acct` to
      the cross role;
    - ddbsh itself, run as the cross-account family runs it, names the cross
@@ -89,7 +92,13 @@ The `real-dynamodb` job:
    It drops the suite's fixed tables in both accounts. A failed target check
    skips it, because the drops are destructive and the target is unverified.
 7. Uploads `discussions/test-*` as the artifact `real-dynamodb-<run>-<attempt>`
-   (kept 14 days) and adds the run's summary to the job summary.
+   (kept 14 days) and adds the run's summary to the job summary. On a pull
+   request, the checkout is GitHub's merge of the branch into `main`, so the
+   file names carry that merge commit's short hash, not the branch head's.
+   Any signed-in GitHub user can download the artifact, so the job sets
+   `DDBSH_REDACT_KEY_ID=1`: the summary and the log show the session's access
+   key id only by its first and last four characters (`ASIA…WXYZ`), and the
+   caller ARN in full.
 
 **Why a profile and never environment variables.** ddbsh takes credentials
 from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` before
@@ -106,15 +115,25 @@ older one; the replaced job shows as cancelled but never touched AWS. Re-run
 it if you need its result.
 
 **Leftover tables.** The cleanup step drops the tables that most families
-create. The composite-GSI, vector, explain, show and global-tables families
-drop their own tables at their end, so a run that stops in the middle of one of
-them can leave its tables behind. A leftover usually makes one later run fail,
-and that run removes it. When no run is in progress, any table in the two CI
-accounts is a leftover; a maintainer with access to the account can remove it:
+create. It does not list the tables of the composite-GSI, vector, explain,
+show and global-tables families, or the create-drop family's `icddpe` and
+`icddpd`: only the tests that create them drop them. A run that stops in the
+middle of one of those families can therefore leave its tables behind. A
+leftover usually makes one later run fail, and that run removes it. When no
+run is in progress, any table in the two CI accounts is a leftover; a
+maintainer with access to the account can remove it:
 
 ```sh
 aws dynamodb list-tables --region us-east-1
 aws dynamodb delete-table --table-name <table> --region us-east-1
+```
+
+`icddpe` is created with deletion protection on, which `delete-table`
+refuses. Turn the protection off and wait for the table to be active first:
+
+```sh
+aws dynamodb update-table --table-name icddpe --no-deletion-protection-enabled --region us-east-1
+aws dynamodb wait table-exists --table-name icddpe --region us-east-1
 ```
 
 `gttest`, the global-tables family's table, lives in us-east-2 with a replica in
@@ -127,11 +146,33 @@ aws dynamodb describe-table --table-name gttest --region us-east-2 --query "Tabl
 aws dynamodb delete-table --table-name gttest --region us-east-2
 ```
 
-**Pull requests from forks.** GitHub gives a pull request from a fork no OIDC
-token, so the golden suite cannot run for it. The job "Golden suite (real
-DynamoDB): fork pull request" fails with that explanation instead of skipping
-silently. To run the suite, a maintainer pushes the branch to
-`awslabs/dynamodb-shell` and opens a pull request from it.
+## Pull requests from forks
+
+GitHub gives a pull request from a fork no OIDC token, so the golden suite
+cannot run for it. The job "Golden suite (real DynamoDB): fork pull request"
+fails with that explanation instead of skipping silently.
+
+A maintainer can run the suite on the change by pushing it to a branch of
+`awslabs/dynamodb-shell` and opening a pull request from that branch.
+**Review the whole change before you push it.** From the push on, the
+branch's code runs with the CI role:
+
+- a workflow that the change adds or edits can run on the push itself, before
+  any pull request exists;
+- the pull request runs the branch's workflows, `devtools/` scripts, build
+  and tests, and the `ddbsh` it builds, in a job that signs in as
+  `ddbsh-ci-tests`. That role may use DynamoDB throughout 291751120739 and
+  assume `ddbsh-ci-cross`.
+
+Read every changed file, everything under `.github/` and `devtools/`
+included, then push exactly the commit you reviewed, by its full hash:
+
+```sh
+git fetch origin pull/<number>/head
+git push origin <reviewed-commit>:refs/heads/<branch>
+```
+
+If the author pushes more commits, review those before you push them.
 
 ## The site publish
 
@@ -156,7 +197,10 @@ build pull requests run. The `publish` job, in the `site` environment:
    every file's status, content type, `Cache-Control`, security headers and
    sha256, the HTTP redirect, and that the bucket refuses anonymous reads. The
    publisher role cannot read the invalidation, so serving the right bytes is
-   the test. The log is kept as the artifact `site-publish-<run>-<attempt>`.
+   the test. The check reaches only the CloudFront edge location nearest the
+   runner: other edge locations can serve the old files until the
+   invalidation finishes there. The log is kept as the artifact
+   `site-publish-<run>-<attempt>`.
 
 Two `publish` runs never overlap (concurrency group `site-publish`).
 

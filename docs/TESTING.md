@@ -22,8 +22,9 @@ dedicated test account. Credentials and the region come from the standard AWS
 chain (`~/.aws`, `AWS_PROFILE`, `AWS_REGION`; the default region is
 `us-east-1`), and the cross-account family uses the `cross-acct` profile. Before
 any test runs, the script echoes the target (endpoint, access key id and caller
-ARN). Its artifacts are `discussions/test-<suite>-<hash>.{log,txt}`, named by
-the commit.
+ARN). With `DDBSH_REDACT_KEY_ID=1`, which CI sets, the echo shows the access key
+id only by its first and last four characters. The script's artifacts are
+`discussions/test-<suite>-<hash>.{log,txt}`, named by the commit.
 
 ## Running the native unit tests directly
 
@@ -44,16 +45,19 @@ the details for maintainers.
 - **On every pull request, every push to `main`, and on demand**
   (`.github/workflows/test.yml`): the native unit tests; the same tests under
   ASan, UBSan and LSan; a clang-format 15 check of every C/C++ file; and the
-  golden suite against real DynamoDB. `build.yml` builds the release binary and
-  the browser bundle, and runs the offline web gates.
+  golden suite against real DynamoDB.
+- **On every pull request, a created release, and on demand**
+  (`.github/workflows/build.yml`): the release binary, and the browser bundle
+  with the offline web gates.
 - **Where the golden suite runs.** In two dedicated AWS accounts, which GitHub
   signs in to through OIDC with no stored credentials: one for the whole suite
   (us-east-1, plus us-east-2 and us-west-1 for the global-tables family) and one
   for the cross-account family. Local runs never use these accounts.
 - **Pull requests from forks.** GitHub gives them no OIDC token, so the golden
   suite cannot run. Instead, the job "Golden suite (real DynamoDB): fork pull
-  request" fails with an explanation, and a maintainer runs the suite by
-  pushing the branch to `awslabs/dynamodb-shell`.
+  request" fails with an explanation. A maintainer can run the suite after
+  reviewing the whole change: pushing it to `awslabs/dynamodb-shell` runs it
+  with the CI role ([CI](CI.md#pull-requests-from-forks)).
 - **One golden run at a time.** The suite's table names are fixed, so the
   golden job queues. A running job is never cancelled; a newer waiting job
   replaces an older waiting one.

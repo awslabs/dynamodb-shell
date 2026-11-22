@@ -210,7 +210,9 @@ jobs:
     # Pull requests from forks get no OIDC token; they get the notice job
     # below instead, and never join this job's queue.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    needs: [aws-sdk, native]
+    # A pull request whose native tests or formatting fail takes no slot in
+    # the queue below. sanitize takes longer and is not waited for.
+    needs: [aws-sdk, native, format]
     runs-on: ubuntu-latest
     environment: ci
     # One run at a time: the suite's table names are fixed, so two runs in one
@@ -231,6 +233,10 @@ jobs:
       AWS_PAGER: ""
       # The native suite ran in the native job, which this job needs.
       DDBSH_SKIP_NATIVE: "1"
+      # Any signed-in GitHub user can download the artifacts and read the job
+      # summary, so run-tests' target echo shows the session's access key id
+      # only as ASIA…<last 4>; the caller ARN stays whole (DEV-P11-12).
+      DDBSH_REDACT_KEY_ID: "1"
 
     steps:
       - name: Check out the code
@@ -358,5 +364,5 @@ jobs:
     steps:
       - name: Explain why the golden suite did not run
         run: |
-          echo "::error::The golden suite runs against real DynamoDB through GitHub OIDC, which GitHub does not offer to pull requests from forks. A maintainer runs it by pushing the branch to awslabs/dynamodb-shell."
+          echo "::error::The golden suite runs against real DynamoDB through GitHub OIDC, which GitHub does not offer to pull requests from forks. A maintainer can run it after reviewing the whole change, by pushing the reviewed commit to a branch of awslabs/dynamodb-shell (docs/CI.md, Pull requests from forks)."
           exit 1
