@@ -138,7 +138,9 @@ web_offline_gates() {
     deploy_cmds="$(grep -E "$upload_re" "$repo/web/hosting/aws/deploy.sh" || true)"
     guide_cmds="$(grep -E "$upload_re" "$repo/docs/HOSTING.md" || true)"
     if [ "$(printf '%s\n' "$deploy_cmds" | grep -c .)" -ne 7 ] || [ "$deploy_cmds" != "$guide_cmds" ]; then
-        diff <(printf '%s\n' "$deploy_cmds") <(printf '%s\n' "$guide_cmds")
+        # diff exits 1 here; `|| true` keeps a caller's errexit (CI's
+        # bash -eo pipefail) from ending the function before the FAIL line.
+        diff <(printf '%s\n' "$deploy_cmds") <(printf '%s\n' "$guide_cmds") || true
         echo "FAIL: deploy.sh and docs/HOSTING.md must carry the same seven upload commands" >&2
         rc=1
     else
