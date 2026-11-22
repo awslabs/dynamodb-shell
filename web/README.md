@@ -47,11 +47,11 @@ unchanged, and service errors arrive as their verbatim `__type` document.
 | File | Role |
 |---|---|
 | `CMakeLists.txt` | the `ddbsh-wasm` target (OUTPUT_NAME `ddbsh`): `bindings.cpp` + `js_sdk_transport.cpp`, linking the engine, `ddbsh-wire` and `ddbsh-cli-core`; stages the static bundle |
-| `bindings.cpp` | embind `DdbshSession`: `run(text)` (UI path, `run_batch`), `runScript(text, abortOnError)` (CLI `-c`/`-f` path, `run_source`), `region()`, `endpointOverridden()`; `RunResult {stdout, stderr, segments, ok, status}`; `WebWireClient` (retry cap 1, CONNECT-rejection notice) |
+| `bindings.cpp` | embind `DdbshSession`: `run(text)` (UI path, `run_batch`), `runScript(text, abortOnError)` (CLI `-c`/`-f` path, `run_source`), `region()`, `endpointOverridden()`; `RunResult {stdout, stderr, segments, ok, status}`; `WebWireClient` (retry cap 1, CONNECT-rejection notice); the free function `version()` (the header's version) |
 | `js_sdk_transport.{hpp,cpp}` | `JsSdkTransport`: `send` → `Module.ddbshSend` (Asyncify), `on_connect` → `Module.ddbshConnect`, `descriptor` → `Module.ddbshDescriptor` |
 | `sdk-bridge.mjs` | DOM-free bridge: credentials (closure only), the `DynamoDBClient`, CONNECT validation + fail-closed blocking, the two middlewares, the SHOW CONNECTION descriptor, `installHooks(Module, bridge)` |
-| `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus` |
-| `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the editor (textContent only) |
+| `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus`, the header's `versionLabel` and busy clock (`createBusyClock`) |
+| `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the header (version, busy indicator), the editor (textContent only) |
 | `index.html`, `styles.css` | the page; the CSP `<meta>` between the `csp:begin`/`csp:end` markers is generated |
 | `bundle-files.txt` | the publish allowlist: the 9 files the page loads plus the 2 SDK notices, 11 in all |
 | `package.cmake` | the packaging step (target `ddbsh-web-package`): copies the allowlist into `dist/ddbsh-web-<version>/`, zips it, writes `SHA256SUMS` |

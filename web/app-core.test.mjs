@@ -12,8 +12,10 @@
 // validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9); and the
 // P10 additions: history clear() (D-P10-6), the framed / opened / insecure
 // credential refusal (G1), the Trusted Types directives in the CSP, the
-// cross-tab history removal (historyRemovedElsewhere), and the credentials
-// controls shipping disabled in index.html.
+// cross-tab history removal (historyRemovedElsewhere), the credentials
+// controls shipping disabled in index.html, and the header's engine version
+// (versionLabel, D-P10-14), busy indicator (createBusyClock, D-P10-16) and
+// Help link (D-P10-17).
 
 import { readFileSync } from "node:fs";
 
@@ -21,8 +23,12 @@ import { ALLOWED_HOSTS } from "./vendor/aws-sdk/allowed-hosts.mjs";
 import {
     buildPrompt,
     buildTranscriptEntries,
+    busyFinishedText,
+    busyText,
+    createBusyClock,
     credentialEnvironmentProblem,
     credentialStatus,
+    elapsedSeconds,
     maskAccessKeyId,
     parseCredentials,
     validateCredentials,
@@ -31,6 +37,7 @@ import {
     createHistoryRecall,
     createRunGuard,
     historyRemovedElsewhere,
+    versionLabel,
 } from "./app-core.mjs";
 
 let failures = 0;
@@ -440,6 +447,166 @@ console.log("controls that ship disabled");
     }
     check(openingTag("cred-forget-btn") !== "" && !shipsDisabled("cred-forget-btn"),
         "#cred-forget-btn ships enabled");
+}
+
+// ---- header: version (P10, D-P10-14) ---------------------------------------
+console.log("versionLabel");
+eq(versionLabel({ version: () => "0.12.1" }), "version 0.12.1", "the engine's version");
+eq(versionLabel({ version: () => "0.13" }), "version 0.13", "a two-part version");
+eq(versionLabel({ version: () => "1.2.3.4" }), "version 1.2.3.4", "a four-part version");
+eq(versionLabel({}), "", "an older ddbsh.wasm without the export: the title stays 'ddbsh (web)'");
+eq(versionLabel(null), "", "no module");
+eq(versionLabel({ version: "0.12.1" }), "", "a non-function export is ignored");
+eq(versionLabel({ version: () => { throw new Error("boom"); } }), "", "a throwing export is ignored");
+eq(versionLabel({ version: () => "" }), "", "an empty version is ignored");
+eq(versionLabel({ version: () => "0.12.1 <b>" }), "", "anything but a version is ignored");
+eq(versionLabel({ version: () => 12 }), "", "a non-string is ignored");
+
+// ---- header: busy indicator (P10, D-P10-16) --------------------------------
+console.log("busy indicator");
+eq(elapsedSeconds(1000, 1000), 0, "elapsed: 0 at the start");
+eq(elapsedSeconds(1000, 1999.9), 0, "elapsed: whole seconds, rounded down");
+eq(elapsedSeconds(1000, 2000), 1, "elapsed: 1 after one second");
+eq(elapsedSeconds(1000, 62500), 61, "elapsed: 61 after 61.5 s");
+eq(elapsedSeconds(1000, 500), 0, "elapsed: never negative");
+eq(busyText(0), "running… 0s", "busy text at the start");
+eq(busyText(42), "running… 42s", "busy text after 42 s");
+eq(busyFinishedText(0), "command finished after 0 seconds", "finished: 0 seconds");
+eq(busyFinishedText(1), "command finished after 1 second", "finished: 1 second (singular)");
+eq(busyFinishedText(5), "command finished after 5 seconds", "finished: 5 seconds");
+{
+    // A fake monotonic clock and animation-frame queue: frames(ms) runs one
+    // frame every 16 ms of fake time, in request order, like a 60 Hz display.
+    let nowMs = 5000;
+    let nextHandle = 1;
+    let queued = []; // [{ handle, fn }]
+    let requests = 0;
+    const renders = [];
+    const announcements = [];
+    const io = {
+        now: () => nowMs,
+        requestFrame: (fn) => {
+            requests += 1;
+            const handle = nextHandle++;
+            queued.push({ handle, fn });
+            return handle;
+        },
+        cancelFrame: (handle) => {
+            queued = queued.filter((q) => q.handle !== handle);
+        },
+        render: (text) => renders.push(text),
+        announce: (text) => announcements.push(text),
+    };
+    const frames = (ms, step = 16) => {
+        const until = nowMs + ms;
+        while (nowMs + step <= until) {
+            nowMs += step;
+            const run = queued;
+            queued = [];
+            for (const q of run) {
+                q.fn();
+            }
+        }
+        nowMs = until;
+    };
+    const clock = createBusyClock(io);
+    check(!clock.running, "idle before start");
+    check(clock.stop() === false, "stop() while idle does nothing");
+    eq(renders, [], "  … and renders nothing");
+    eq(announcements, [], "  … and announces nothing");
+
+    check(clock.start() === true, "start() starts");
+    check(clock.running, "running after start");
+    eq(renders, ["running… 0s"], "start shows 0s at once");
+    eq(announcements, ["command started"], "start is announced once");
+    eq(queued.length, 1, "start requests one animation frame");
+    check(clock.start() === false, "a second start() while running does nothing");
+    eq(renders.length, 1, "  … and does not re-render");
+    eq(queued.length, 1, "  … and requests no second frame");
+
+    frames(3500);
+    eq(renders, ["running… 0s", "running… 1s", "running… 2s", "running… 3s"],
+        "one render per whole second over 218 frames (3.5 s elapsed); frames in between render nothing");
+    eq(announcements, ["command started"], "the seconds are not announced");
+    eq(queued.length, 1, "exactly one frame pending while running");
+
+    nowMs = 5000 + 4900;
+    check(clock.stop() === true, "stop() stops");
+    check(!clock.running, "idle after stop");
+    eq(renders[renders.length - 1], null, "stop hides the indicator");
+    eq(announcements, ["command started", "command finished after 4 seconds"],
+        "stop announces the elapsed whole seconds");
+    eq(queued, [], "stop cancels the pending frame");
+    const rendersAtStop = renders.length;
+    const requestsAtStop = requests;
+    frames(5000);
+    eq(renders.length, rendersAtStop, "no render after stop");
+    eq(requests, requestsAtStop, "no frame requested after stop");
+
+    // A quick submission: start and stop in the same task.
+    check(clock.start() === true && clock.stop() === true, "start then stop at once");
+    eq(renders.slice(rendersAtStop), ["running… 0s", null], "shown then hidden");
+    eq(announcements.slice(2), ["command started", "command finished after 0 seconds"],
+        "both announced");
+    eq(queued, [], "no frame left pending");
+
+    // A frame callback that runs after stop() (already dequeued) does nothing.
+    const stale = [];
+    const staleClock = createBusyClock({
+        ...io,
+        requestFrame: (fn) => { stale.push(fn); return 99; },
+        cancelFrame: () => {},
+        render: (text) => stale.push(text),
+    });
+    staleClock.start();
+    const queuedFrame = stale[1];
+    staleClock.stop();
+    const before = stale.length;
+    queuedFrame();
+    eq(stale.length, before, "a frame that runs after stop() renders and requests nothing");
+
+    // No frames for a while (a hidden tab, or a blocked main thread): the next
+    // frame shows the true elapsed seconds.
+    renders.length = 0;
+    clock.start();
+    frames(1100);
+    nowMs += 2000; // 2 s without frames
+    frames(16);
+    eq(renders, ["running… 0s", "running… 1s", "running… 3s"],
+        "after 2 s without frames the next frame shows 3s (the true elapsed time)");
+    clock.stop();
+}
+
+// ---- header: index.html markup (P10, D-P10-14 / D-P10-16 / D-P10-17) -------
+console.log("header markup");
+{
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    const openingTag = (id) => {
+        const m = html.match(new RegExp(`<[a-z]+\\s[^>]*\\bid="${id}"[^>]*>`));
+        return m ? m[0] : "";
+    };
+    const attr = (tag, name) => {
+        const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`));
+        return m ? m[1] : null;
+    };
+    eq(html.match(/<title>([^<]*)<\/title>/)?.[1], "ddbsh (web)", "the tab title stays 'ddbsh (web)'");
+    check(/<span id="version-label" class="muted"><\/span>/.test(html),
+        "#version-label ships empty (app.js fills it from the engine)");
+    const help = openingTag("help-link");
+    check(help.startsWith("<a "), "#help-link is a link");
+    eq(attr(help, "href"),
+        "https://github.com/awslabs/dynamodb-shell/blob/main/docs/configurations/03-browser-aws.md",
+        "#help-link opens the browser guide on main");
+    eq(attr(help, "target"), "_blank",
+        "#help-link opens a new tab (leaving the page would forget the credentials)");
+    eq((attr(help, "rel") || "").split(/\s+/).sort(), ["noopener", "noreferrer"],
+        "#help-link has rel=\"noopener noreferrer\"");
+    const status = openingTag("busy-status");
+    eq(attr(status, "role"), "status", "#busy-status is a status region");
+    eq(attr(status, "aria-live"), "polite", "#busy-status is a polite live region");
+    const busy = openingTag("busy");
+    check(busy !== "" && attr(busy, "aria-live") === null && attr(busy, "role") === null,
+        "#busy (the ticking text) is not a live region");
 }
 
 // ---- summary ---------------------------------------------------------------

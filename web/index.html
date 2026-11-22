@@ -43,13 +43,30 @@
 
     <header id="connection-panel" class="panel">
         <div class="panel-row">
-            <span class="title">ddbsh <span class="muted">(web)</span></span>
+            <!-- app.js writes "version <v>" into #version-label from the engine
+                 it loaded (D-P10-14); an older ddbsh.wasm leaves it empty. -->
+            <span class="title">ddbsh <span class="muted">(web)</span> <span id="version-label" class="muted"></span></span>
+            <!-- A new tab: leaving this page would forget the credentials
+                 (pagehide), and noopener gives the guide no handle on this
+                 window (D-P10-17). -->
+            <a id="help-link" class="help-link"
+               href="https://github.com/awslabs/dynamodb-shell/blob/main/docs/configurations/03-browser-aws.md"
+               target="_blank" rel="noopener noreferrer"
+               title="The browser edition's guide on GitHub (opens in a new tab)">Help <span aria-hidden="true">↗</span></a>
             <span class="conn-field">region: <span id="region-label">…</span></span>
             <span class="conn-field">backend:
                 <span id="backend-label">loading…</span>
                 <span id="backend-dot" class="dot dot-loading" aria-hidden="true"></span>
             </span>
             <span class="conn-field">credentials: <span id="cred-status">none</span></span>
+            <!-- Shown while a submission runs (D-P10-16). #busy is not a live
+                 region, so the seconds are not read out as they count;
+                 #busy-status announces the start and the finish. -->
+            <span id="busy" class="busy">
+                <span class="spinner" aria-hidden="true"></span>
+                <span id="busy-text"></span>
+            </span>
+            <span id="busy-status" class="visually-hidden" role="status" aria-live="polite"></span>
         </div>
 
         <details id="cred-panel" class="cred-panel" open>

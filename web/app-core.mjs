@@ -21,6 +21,10 @@
 //   - historyRemovedElsewhere: whether a `storage` event means another tab
 //                             deleted the saved history (P10).
 //   - createRunGuard:         the one-submission-in-flight re-entrancy guard.
+//   - versionLabel:           the header's "version <v>" text, read from the
+//                             engine the page loaded (P10, D-P10-14).
+//   - busyText / createBusyClock: the header's "running… <N>s" indicator and
+//                             its start/finish announcements (P10, D-P10-16).
 //
 // No engine logic crosses into JS (tenet 3): the faithful shell text is produced
 // by the engine's Renderer and arrives verbatim in RunResult.segments; this
@@ -567,6 +571,154 @@ export function createRunGuard() {
         /** Release the slot. */
         end() {
             inFlight = false;
+        },
+    };
+}
+
+// ---- page header (P10, D-P10-14 / D-P10-16) ---------------------------------
+
+// The engine's version strings: CMake project(VERSION) allows only numeric
+// components, and ddbsh::version() prints two to four of them ("0.12.1").
+const ENGINE_VERSION = /^[0-9]+(\.[0-9]+){1,3}$/;
+
+/**
+ * The version text for the header title, read from the engine the page loaded
+ * (D-P10-14): "version 0.12.1", so the title reads "ddbsh (web) version
+ * 0.12.1". Returns "" (the title stays "ddbsh (web)") when the module has no
+ * `version()` export, which happens when a new app.js meets an older
+ * ddbsh.wasm during an upload, or when the export throws or returns something
+ * that is not a version. The page works either way.
+ *
+ * @param {{version?: () => string} | null} module  the instantiated WASM module.
+ * @returns {string}
+ */
+export function versionLabel(module) {
+    let version;
+    try {
+        version = module && typeof module.version === "function" ? module.version() : undefined;
+    } catch {
+        return "";
+    }
+    return typeof version === "string" && ENGINE_VERSION.test(version) ? `version ${version}` : "";
+}
+
+/**
+ * The whole seconds elapsed between two times (ms), never negative.
+ *
+ * @param {number} startMs
+ * @param {number} nowMs
+ * @returns {number}
+ */
+export function elapsedSeconds(startMs, nowMs) {
+    return Math.max(0, Math.floor((nowMs - startMs) / 1000));
+}
+
+/**
+ * The busy indicator's visible text while a submission runs (D-P10-16):
+ * "running… 0s", "running… 1s", …
+ *
+ * @param {number} seconds  whole seconds elapsed.
+ * @returns {string}
+ */
+export function busyText(seconds) {
+    return `running… ${seconds}s`;
+}
+
+/**
+ * What a screen reader hears when a submission finishes (D-P10-16). The start
+ * is announced as "command started"; the seconds are never announced as they
+ * count.
+ *
+ * @param {number} seconds  whole seconds the submission took.
+ * @returns {string}
+ */
+export function busyFinishedText(seconds) {
+    return `command finished after ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+/**
+ * Create the clock behind the header's busy indicator (D-P10-16). It is
+ * DOM-free: the caller supplies the clock, the frame scheduler and two output
+ * callbacks, so the start/stop behavior is unit-testable with a fake clock.
+ *
+ *   - start(): shows "running… 0s", announces "command started", then checks
+ *     the elapsed time on every animation frame and re-renders when the whole
+ *     seconds change. A second start() while running changes nothing.
+ *   - stop(): cancels the pending frame, hides the indicator (render(null))
+ *     and announces how long the submission took. stop() while idle changes
+ *     nothing.
+ *
+ * Why animation frames rather than a one-second timer: in headless Chromium
+ * 159 a setTimeout due at a whole second sometimes fired about a second late
+ * while a CREATE TABLE waited on DynamoDB, with no long task on the main
+ * thread, so the count skipped a second (P10 developer round). A frame
+ * callback runs on every frame while the page is visible and costs one
+ * comparison; nothing is rendered between whole seconds. In a hidden tab no
+ * frames run and nothing needs drawing; the first frame after the tab shows
+ * again renders the true elapsed seconds.
+ *
+ * @param {{now: () => number,
+ *          requestFrame: (fn: () => void) => unknown,
+ *          cancelFrame: (handle: unknown) => void,
+ *          render: (text: string | null) => void,
+ *          announce: (text: string) => void}} io
+ *        `now` returns milliseconds from a monotonic clock (performance.now
+ *        in the page); `requestFrame`/`cancelFrame` are
+ *        requestAnimationFrame/cancelAnimationFrame; `render(null)` hides the
+ *        indicator.
+ */
+export function createBusyClock({ now, requestFrame, cancelFrame, render, announce }) {
+    let startMs = null; // null while idle.
+    let shownSeconds = -1; // the seconds on screen; -1 while idle.
+    let frame = null;
+
+    function onFrame() {
+        frame = null;
+        if (startMs === null) {
+            return; // stopped while this frame was pending.
+        }
+        const seconds = elapsedSeconds(startMs, now());
+        if (seconds !== shownSeconds) {
+            shownSeconds = seconds;
+            render(busyText(seconds));
+        }
+        frame = requestFrame(onFrame);
+    }
+
+    return {
+        /** True while a submission is being timed. */
+        get running() {
+            return startMs !== null;
+        },
+
+        /** Show the indicator and start counting; false if already running. */
+        start() {
+            if (startMs !== null) {
+                return false;
+            }
+            startMs = now();
+            shownSeconds = 0;
+            render(busyText(0));
+            announce("command started");
+            frame = requestFrame(onFrame);
+            return true;
+        },
+
+        /** Hide the indicator and announce the finish; false if idle. */
+        stop() {
+            if (startMs === null) {
+                return false;
+            }
+            if (frame !== null) {
+                cancelFrame(frame);
+                frame = null;
+            }
+            const seconds = elapsedSeconds(startMs, now());
+            startMs = null;
+            shownSeconds = -1;
+            render(null);
+            announce(busyFinishedText(seconds));
+            return true;
         },
     };
 }

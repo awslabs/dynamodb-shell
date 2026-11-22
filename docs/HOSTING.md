@@ -243,9 +243,9 @@ curl.exe -sSI "http://$DOMAIN/" | Select-String -Pattern "^(HTTP|location)"
 curl.exe -sSI "https://$BUCKET_DOMAIN/index.html" | Select-String -Pattern "^HTTP"
 ```
 
-Then open `https://$DOMAIN/` in a browser. The header shows
-`backend: Amazon DynamoDB (AWS SDK for JavaScript …)` once the page has
-loaded. Paste short-term credentials and run `show connection;`.
+Then open `https://$DOMAIN/` in a browser. Once the page has loaded, the
+header shows `ddbsh (web) version <version>` and `backend: Amazon DynamoDB`.
+Paste short-term credentials and run `show connection;`.
 
 The distribution answers 403, not 404, for a file that is not in the bundle:
 CloudFront may not list the bucket, so S3 does not reveal whether a name

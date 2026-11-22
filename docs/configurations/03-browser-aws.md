@@ -15,7 +15,21 @@ serves the page ([HOSTING](../HOSTING.md) lists what the host must provide).
 The engine still builds every request body and parses every response itself,
 so statements map to the same DynamoDB calls, and print the same output, as in
 the native binary. The whole golden test suite runs through this path
-(`devtools/run-web-golden`, see [TESTING](../TESTING.md)).
+(`devtools/run-web-golden`, see [TESTING](../TESTING.md)). The
+[command reference](../reference/README.md) describes the statements.
+
+## The page
+
+- **The header** shows `ddbsh (web) version <version>` (the engine's version,
+  as `show version;` prints it), a **Help ↗** link to this guide, the region,
+  `backend: Amazon DynamoDB` and the credentials status. The link opens a new
+  tab, so the page keeps your credentials. While a statement or a file runs,
+  `running… <N>s` at the right end counts the seconds; screen readers hear
+  when it starts and when it finishes.
+- **The editor** at the bottom opens at a fifth of the window's height; drag
+  its corner to make it taller, up to 40%. Ctrl-Enter (⌘-Enter on a Mac) runs
+  everything in it, Enter starts a new line, and the up and down arrows recall
+  earlier statements.
 
 ## Short-term credentials
 

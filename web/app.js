@@ -28,10 +28,17 @@
 // The only localStorage use is the command history (editor submissions only),
 // which the "Clear history" button removes, in this tab and, through the
 // storage event, in the page's other open tabs (P10, D-P10-6).
+//
+// The header (P10): the title carries the engine's version (versionLabel,
+// D-P10-14); the backend label reads "Amazon DynamoDB" (D-P10-15); a busy
+// indicator counts the seconds while a submission runs and announces its start
+// and finish to screen readers (createBusyClock, D-P10-16); the Help link is
+// static markup in index.html (D-P10-17).
 
 import {
     buildPrompt,
     buildTranscriptEntries,
+    createBusyClock,
     credentialEnvironmentProblem,
     credentialStatus,
     fileToSubmission,
@@ -40,6 +47,7 @@ import {
     createRunGuard,
     historyRemovedElsewhere,
     parseCredentials,
+    versionLabel,
 } from "./app-core.mjs";
 import { createSdkBridge, installHooks } from "./sdk-bridge.mjs";
 import * as sdk from "./vendor/aws-sdk/aws-sdk-dynamodb.mjs";
@@ -48,9 +56,13 @@ import { ALLOWED_HOSTS, REGIONS, SDK_VERSION } from "./vendor/aws-sdk/allowed-ho
 // ---- DOM handles -----------------------------------------------------------
 const els = {
     fileBanner: document.getElementById("file-protocol-banner"),
+    versionLabel: document.getElementById("version-label"),
     regionLabel: document.getElementById("region-label"),
     backendLabel: document.getElementById("backend-label"),
     backendDot: document.getElementById("backend-dot"),
+    busy: document.getElementById("busy"),
+    busyText: document.getElementById("busy-text"),
+    busyStatus: document.getElementById("busy-status"),
     credStatus: document.getElementById("cred-status"),
     credPanel: document.getElementById("cred-panel"),
     credInput: document.getElementById("cred-input"),
@@ -83,6 +95,23 @@ const bridge = createSdkBridge({
     regions: REGIONS,
     sdkVersion: SDK_VERSION,
     region: DEFAULT_REGION,
+});
+
+// The header's busy indicator (D-P10-16). textContent and classList only
+// (Trusted Types, D-P6e-6). performance.now() is monotonic, so a change of the
+// system clock does not skew the count; animation frames, not a timer, drive
+// the re-render (see createBusyClock).
+const busyClock = createBusyClock({
+    now: () => performance.now(),
+    requestFrame: (fn) => window.requestAnimationFrame(fn),
+    cancelFrame: (handle) => window.cancelAnimationFrame(handle),
+    render: (text) => {
+        els.busyText.textContent = text === null ? "" : text;
+        els.busy.classList.toggle("busy-running", text !== null);
+    },
+    announce: (text) => {
+        els.busyStatus.textContent = text;
+    },
 });
 
 // ---- history persistence (localStorage; editor submissions only) -----------
@@ -276,10 +305,10 @@ async function submit(text, { addToHistory }) {
         return; // a submission is already in flight; ignore this one.
     }
     setBusy(true);
-    // Capture the prompt BEFORE running: a CONNECT inside the submission may
-    // change the region, but the echo reflects the region as typed.
-    const prompt = buildPrompt(session.region(), session.endpointOverridden());
     try {
+        // Capture the prompt BEFORE running: a CONNECT inside the submission
+        // may change the region, but the echo reflects the region as typed.
+        const prompt = buildPrompt(session.region(), session.endpointOverridden());
         let result = session.run(text);
         if (result && typeof result.then === "function") {
             result = await result; // Asyncify may surface run() as a Promise.
@@ -296,9 +325,9 @@ async function submit(text, { addToHistory }) {
                          kind: "stderr" }]);
     } finally {
         guard.end();
+        setBusy(false); // first, so the busy indicator clears even if a refresh below throws.
         refreshRegion(); // CONNECT may have changed the region live.
         refreshCredStatus();
-        setBusy(false);
     }
 }
 
@@ -312,10 +341,18 @@ function refreshRegion() {
 }
 
 // ---- UI enable/disable -----------------------------------------------------
+// setBusy(true) runs right after the run guard is claimed and setBusy(false)
+// in submit()'s finally, so the busy indicator covers Run, Ctrl/Cmd-Enter and
+// file runs, and clears on success, an engine error or an internal error.
 function setBusy(busy) {
     els.runBtn.disabled = busy;
     els.fileInput.disabled = busy;
     els.fileLabel.setAttribute("aria-disabled", String(busy));
+    if (busy) {
+        busyClock.start();
+    } else {
+        busyClock.stop();
+    }
 }
 
 function setReady() {
@@ -323,7 +360,8 @@ function setReady() {
     els.runBtn.disabled = false;
     els.fileInput.disabled = false;
     els.fileLabel.setAttribute("aria-disabled", "false");
-    els.backendLabel.textContent = `Amazon DynamoDB (AWS SDK for JavaScript ${SDK_VERSION})`;
+    els.versionLabel.textContent = versionLabel(Module);
+    els.backendLabel.textContent = "Amazon DynamoDB";
     els.backendDot.className = "dot dot-ready";
     refreshRegion();
     refreshCredStatus();
