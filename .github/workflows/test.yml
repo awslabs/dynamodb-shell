@@ -1,0 +1,361 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# test.yml — the test suites in CI (D-P11-15, D-P11-21 to D-P11-27).
+#
+# Every pull request, every push to main, and manual runs:
+#   aws-sdk        builds the pinned AWS SDK for C++ once per SDK version,
+#                  runner image and compiler, and caches it.
+#   native         the native GoogleTest suite and the offline CTests
+#                  (FakeDDBClient, MemoryClient, engine_boundary_check, the
+#                  wire differential gate, the offline samples). No AWS.
+#   sanitize       the same suite under ASan, UBSan and LSan. No AWS.
+#   format         clang-format 15 on every tracked C/C++ file.
+#   real-dynamodb  the golden suite against real DynamoDB in the CI accounts,
+#                  through the GitHub environment `ci` and OIDC. One run at a
+#                  time, because the suite's table names are fixed.
+# Pull requests from forks get no OIDC token, so instead of real-dynamodb
+# they get real-dynamodb-fork-notice, which fails with an explanation.
+#
+# docs/CI.md describes the accounts, the environments, the target check,
+# cleanup and re-runs.
+
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Nothing on the runner probes instance metadata for credentials.
+  AWS_EC2_METADATA_DISABLED: "true"
+  CMAKE_BUILD_PARALLEL_LEVEL: "4"
+  # The pinned AWS SDK for C++ (D-P11-23). To update it, change both lines;
+  # the cache key follows the version.
+  AWS_SDK_CPP_VERSION: "1.11.916"
+  AWS_SDK_CPP_COMMIT: "5ca639b2aafd08a0156c8354628281c1ddb49400"
+
+jobs:
+  aws-sdk:
+    name: AWS SDK for C++ (cached)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    outputs:
+      cache-key: ${{ steps.key.outputs.key }}
+
+    steps:
+      - name: Compute the cache key
+        id: key
+        run: |
+          key="aws-sdk-cpp-${AWS_SDK_CPP_VERSION}-${ImageOS}-$(gcc -dumpfullversion)-shared-r1"
+          echo "cache key: $key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      # lookup-only: on a hit this job downloads nothing; on a miss the post
+      # step saves what the build below installs. A cache saved by a run on
+      # main is readable by every pull request.
+      - name: Look up the cached SDK
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/aws-sdk-cpp
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+
+      - name: Install the SDK's build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install libcurl4-openssl-dev libssl-dev zlib1g-dev
+
+      # The recipe build-linux uses (shared SDK and CRT, three clients), from
+      # the pinned tag, with the tag's commit checked.
+      - name: Build the SDK
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          src="$RUNNER_TEMP/aws-sdk-cpp"
+          git clone --quiet --depth 1 --branch "$AWS_SDK_CPP_VERSION" \
+            --recurse-submodules --shallow-submodules \
+            https://github.com/aws/aws-sdk-cpp.git "$src"
+          head="$(git -C "$src" rev-parse HEAD)"
+          if [ "$head" != "$AWS_SDK_CPP_COMMIT" ]; then
+            echo "::error::aws-sdk-cpp tag $AWS_SDK_CPP_VERSION is at $head, not the pinned $AWS_SDK_CPP_COMMIT."
+            exit 1
+          fi
+          cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/.local/aws-sdk-cpp" \
+            -DBUILD_ONLY="dynamodb;iam;sts" -DBUILD_SHARED_LIBS=ON \
+            -DENABLE_TESTING=OFF -DFORCE_SHARED_CRT=ON
+          cmake --build "$src/build"
+          cmake --install "$src/build"
+
+  native:
+    name: Native unit tests
+    needs: aws-sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install flex bison libreadline-dev libcurl4-openssl-dev libssl-dev zlib1g-dev ninja-build
+
+      - name: Restore the SDK
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/aws-sdk-cpp
+          key: ${{ needs.aws-sdk.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      # The preset names the gcc14 toolchain of the development hosts; CI uses
+      # the runner's default GCC, the compiler build-linux ships with.
+      - name: Configure (Debug, -Werror)
+        run: cmake --preset linux-debug -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build
+        run: cmake --build --preset linux-debug
+
+      - name: Test
+        run: ctest --preset linux-debug --no-tests=error
+
+  sanitize:
+    name: Native unit tests (ASan, UBSan, LSan)
+    needs: aws-sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    env:
+      # Without halt_on_error, UBSan prints a finding and the test still
+      # passes. ASan and LSan fail a test by default.
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install flex bison libreadline-dev libcurl4-openssl-dev libssl-dev zlib1g-dev ninja-build
+
+      - name: Restore the SDK
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/aws-sdk-cpp
+          key: ${{ needs.aws-sdk.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      # Older sanitizer runtimes can fail at startup
+      # (AddressSanitizer:DEADLYSIGNAL) when the kernel randomizes mmap
+      # addresses with 32 bits; 28 bits is the usual workaround. The setting
+      # lasts only as long as this runner.
+      - name: Limit mmap randomization for the sanitizers
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Configure (ASan, UBSan, LSan)
+        run: cmake --preset linux-sanitize -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build
+        run: cmake --build --preset linux-sanitize
+
+      - name: Test
+        run: ctest --preset linux-sanitize --no-tests=error
+
+  format:
+    name: clang-format
+    # The formatter's version must be exact, so the image is pinned.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install clang-format 15
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install clang-format-15
+          clang-format-15 --version
+
+      - name: Check the formatting of every tracked C/C++ file
+        run: git ls-files -z '*.cpp' '*.hpp' '*.h' '*.cc' '*.c' | xargs -0 clang-format-15 --dry-run --Werror
+
+  real-dynamodb:
+    name: Golden suite (real DynamoDB)
+    # Pull requests from forks get no OIDC token; they get the notice job
+    # below instead, and never join this job's queue.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [aws-sdk, native]
+    runs-on: ubuntu-latest
+    environment: ci
+    # One run at a time: the suite's table names are fixed, so two runs in one
+    # account would delete each other's tables. A running job is never
+    # cancelled; a newer pending job replaces an older pending one (D-P11-26).
+    concurrency:
+      group: real-dynamodb
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 150
+    env:
+      CC: gcc
+      CXX: g++
+      AWS_REGION: ${{ vars.CI_REGION }}
+      AWS_STS_REGIONAL_ENDPOINTS: regional
+      AWS_PAGER: ""
+      # The native suite ran in the native job, which this job needs.
+      DDBSH_SKIP_NATIVE: "1"
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install flex bison libreadline-dev libcurl4-openssl-dev libssl-dev zlib1g-dev
+
+      - name: Restore the SDK
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/aws-sdk-cpp
+          key: ${{ needs.aws-sdk.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      # The SDK installs its libraries under lib on Ubuntu; run-tests defaults
+      # to lib64.
+      - name: Locate the SDK's shared libraries
+        run: |
+          core="$(find "$HOME/.local/aws-sdk-cpp" -name libaws-cpp-sdk-core.so -print -quit)"
+          if [ -z "$core" ]; then
+            echo "::error::libaws-cpp-sdk-core.so is not in the restored SDK."
+            exit 1
+          fi
+          echo "DDBSH_SDK_LIB=$(dirname "$core")" >> "$GITHUB_ENV"
+
+      # Build before any credential exists on the runner (D-P11-28).
+      - name: Build ddbsh and configure the golden suite
+        run: devtools/run-tests --build-only
+
+      # Credentials reach the runner only as the [default] profile, never as
+      # environment variables: credentials in the environment take precedence
+      # over the cross-acct profile in ddbsh, and the cross-account family
+      # would run in the main account (D-P11-24). The account is fixed here,
+      # so a changed variable cannot point the suite at another account.
+      - name: Credentials for the CI main account
+        id: creds
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.CI_ROLE_ARN }}
+          aws-region: ${{ vars.CI_REGION }}
+          aws-profile: default
+          role-session-name: ddbsh-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 7200
+          allowed-account-ids: "291751120739"
+
+      # ddbsh performs the AssumeRole into the cross account itself, which is
+      # the path the original's cross-account tests exercise. The cross role's
+      # policy covers us-east-1 only.
+      - name: Write the cross-acct profile
+        env:
+          CI_CROSS_ROLE_ARN: ${{ vars.CI_CROSS_ROLE_ARN }}
+        run: |
+          want="arn:aws:iam::457765142880:role/ddbsh-ci-cross"
+          if [ "$CI_CROSS_ROLE_ARN" != "$want" ]; then
+            echo "::error::vars.CI_CROSS_ROLE_ARN is not $want; the cross-account family runs only in the CI cross account (docs/CI.md)."
+            exit 1
+          fi
+          if grep -q '^\[profile cross-acct\]' "$HOME/.aws/config"; then
+            echo "::error::$HOME/.aws/config already has a cross-acct profile."
+            exit 1
+          fi
+          {
+            echo ""
+            echo "[profile cross-acct]"
+            echo "role_arn = $want"
+            echo "source_profile = default"
+            echo "region = us-east-1"
+          } >> "$HOME/.aws/config"
+
+      # Fails closed unless both profiles, and ddbsh itself, resolve to the CI
+      # roles (D-P11-25).
+      - name: Check the target
+        run: |
+          mkdir -p discussions
+          hash="$(git rev-parse --short HEAD)"
+          devtools/check-ci-target \
+            "arn:aws:sts::291751120739:assumed-role/ddbsh-ci-tests/" \
+            "arn:aws:sts::457765142880:assumed-role/ddbsh-ci-cross/" \
+            build-engine/ddbsh 2>&1 | tee "discussions/test-citarget-$hash.log"
+
+      - name: Golden suite
+        timeout-minutes: 90
+        run: devtools/run-tests
+
+      # Drops the suite's fixed tables in both accounts after a pass, a
+      # failure or a cancellation.
+      - name: Clean up the suite's tables
+        if: always() && steps.creds.outcome == 'success'
+        timeout-minutes: 20
+        run: |
+          hash="$(git rev-parse --short HEAD)"
+          ctest --test-dir build-golden -R '^test-cleanup' --output-on-failure --no-tests=error 2>&1 |
+            tee "discussions/test-cicleanup-$hash.log"
+
+      - name: Upload the test artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: real-dynamodb-${{ github.run_id }}-${{ github.run_attempt }}
+          path: discussions/test-*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Job summary
+        if: always()
+        run: |
+          for f in discussions/test-all-*.txt; do
+            [ -e "$f" ] || continue
+            { echo '```'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  real-dynamodb-fork-notice:
+    name: "Golden suite (real DynamoDB): fork pull request"
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+
+    steps:
+      - name: Explain why the golden suite did not run
+        run: |
+          echo "::error::The golden suite runs against real DynamoDB through GitHub OIDC, which GitHub does not offer to pull requests from forks. A maintainer runs it by pushing the branch to awslabs/dynamodb-shell."
+          exit 1

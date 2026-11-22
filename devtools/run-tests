@@ -44,6 +44,12 @@
 #                                          # (devtools/run-web-smoke)
 #   devtools/run-tests --live-sample       # also build + run the live embedding
 #                                          # tests (opt-in; creates a real table)
+#   devtools/run-tests --build-only        # build build-engine/ddbsh and
+#                                          # configure build-golden exactly as a
+#                                          # full run does, then exit 0: no AWS
+#                                          # call, no target echo, no artifact
+#                                          # (CI builds before any credential
+#                                          # exists on the runner, D-P11-28)
 #   devtools/run-tests --help              # print this usage and exit; builds,
 #                                          # runs and writes nothing (also -h)
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
@@ -103,6 +109,9 @@ WEB_GOLDEN=0
 # devtools/run-web-smoke. Takes no further args. Its artifact is
 # discussions/test-websmoke-<hash>.log.
 WEB_SMOKE=0
+# --build-only (D-P11-28): build the CLI and configure the golden project, then
+# stop before the target echo. Takes no further args.
+BUILD_ONLY=0
 CTEST_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -126,6 +135,10 @@ while [ $# -gt 0 ]; do
             WEB_SMOKE=1
             shift
             ;;
+        --build-only)
+            BUILD_ONLY=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -136,6 +149,14 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    if [ "${#CTEST_ARGS[@]}" -gt 0 ] || [ -n "$SUITE" ] || [ "$FULL_ENGINE" -eq 1 ] ||
+       [ "$LIVE_SAMPLE" -eq 1 ] || [ "$WEB_GOLDEN" -eq 1 ] || [ "$WEB_SMOKE" -eq 1 ]; then
+        echo "error: --build-only takes no further arguments." >&2
+        exit 2
+    fi
+fi
 
 if [ "$WEB_GOLDEN" -eq 1 ] && [ "$WEB_SMOKE" -eq 1 ]; then
     echo "error: --web-golden and --web-smoke are separate runs; pass one." >&2
@@ -245,6 +266,11 @@ cmake -S "$GOLDEN_SRC" -B "$GOLDEN_BUILD" \
     -DDDBSH_SHELL_BIN="$ENGINE_BIN" \
     -DDDBSH_SDK_LIB="$DDBSH_SDK_LIB" \
     -DGOLDEN_DIR="$GOLDEN_DIR_PATH"
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "=== Build only ($HASH): built $ENGINE_BIN, configured $GOLDEN_BUILD; no AWS call, no artifact ==="
+    exit 0
+fi
 
 # --- Target echo + verification ---------------------------------------------
 # No endpoint override => the real regional DynamoDB endpoint.
