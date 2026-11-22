@@ -328,7 +328,10 @@ jobs:
 
       # Drops the suite's fixed tables in both accounts after a pass, a
       # failure or a cancellation. It runs only against a verified target: the
-      # drops are destructive, so a failed target check skips it too.
+      # drops are destructive, so a failed target check skips it too. Before
+      # its drop, test-cleanup-last can wait up to 15 minutes (ddbsh-wait's
+      # ceiling) for an index to finish building, so the limit stays above
+      # that (DEV-P11-17).
       - name: Clean up the suite's tables
         if: always() && steps.target.outcome == 'success'
         timeout-minutes: 20

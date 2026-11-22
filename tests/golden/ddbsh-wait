@@ -26,6 +26,15 @@
 #       AWS_REGION); the global-tables family uses it to settle the primary
 #       region (us-east-2) independent of the suite's default region.
 #
+#   ddbsh-wait table-settled-or-gone <table>
+#       Wait until the table is gone, or settled as for table-settled. Gone
+#       means DescribeTable answered ResourceNotFoundException; any other
+#       DescribeTable error (credentials, throttling, network) counts as
+#       neither, so the wait times out instead of passing on an error. The
+#       test-cleanup-last family uses it before it drops a table whose GSI may
+#       still be building: DynamoDB refuses DeleteTable while an index is
+#       being created (DEV-P11-17).
+#
 #   ddbsh-wait pitr <table> <ENABLED|DISABLED>
 #       Wait until the table's PointInTimeRecoveryStatus equals the target.
 #
@@ -82,7 +91,7 @@ die() {
 }
 
 MODE="${1:-}"
-[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|pitr|warm-throughput-active|replica-active|replica-gone|scan-count|retry-cmd> ..."
+[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|table-settled-or-gone|pitr|warm-throughput-active|replica-active|replica-gone|scan-count|retry-cmd> ..."
 
 # retry-cmd is handled separately: it takes a command, not a table, and does
 # not itself query the control plane.
@@ -129,6 +138,26 @@ table_settled() {
     fi
     # settled iff no status is anything other than ACTIVE.
     ! printf '%s\n' $gsi_statuses | grep -qvE '^ACTIVE$'
+}
+
+table_gone() {
+    # Gone only when DynamoDB itself answers ResourceNotFoundException; the AWS
+    # CLI prints the error code in parentheses. A describe that succeeds means
+    # the table exists, and any other error does not show that it is gone.
+    local err
+    if err="$(aws dynamodb describe-table --table-name "$TABLE" --region "$REGION" \
+        --query 'Table.TableStatus' --output text 2>&1 >/dev/null)"; then
+        return 1
+    fi
+    [[ "$err" == *"(ResourceNotFoundException)"* ]]
+}
+
+table_settled_or_gone() {
+    if table_gone; then
+        echo "ddbsh-wait: table $TABLE does not exist"
+        return 0
+    fi
+    table_settled
 }
 
 pitr_matches() {
@@ -186,6 +215,10 @@ case "$MODE" in
         check() { table_settled; }
         desc="table $TABLE to settle (TableStatus + all GSIs ACTIVE) in $REGION"
         ;;
+    table-settled-or-gone)
+        check() { table_settled_or_gone; }
+        desc="table $TABLE to be gone, or to settle (TableStatus + all GSIs ACTIVE), in $REGION"
+        ;;
     pitr)
         WANT="${3:-}"
         [ -n "$WANT" ] || die "usage: ddbsh-wait pitr <table> <ENABLED|DISABLED>"
@@ -223,7 +256,7 @@ case "$MODE" in
         desc="table $TABLE in $REGION to hold $WANT_COUNT items"
         ;;
     *)
-        die "unknown mode: $MODE (expected table-settled|pitr|warm-throughput-active|replica-active|replica-gone|scan-count|retry-cmd)"
+        die "unknown mode: $MODE (expected table-settled|table-settled-or-gone|pitr|warm-throughput-active|replica-active|replica-gone|scan-count|retry-cmd)"
         ;;
 esac
 

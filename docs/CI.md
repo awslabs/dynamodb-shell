@@ -87,10 +87,15 @@ The `real-dynamodb` job:
      role in DynamoDB's access-denied message for a table the role may not
      read.
 5. Runs the golden suite with `devtools/run-tests` (90 minutes at most).
-6. Runs the `test-cleanup` family afterwards (`ctest -R '^test-cleanup'`)
-   whenever the target check passed, even after a failure or a cancellation.
-   It drops the suite's fixed tables in both accounts. A failed target check
-   skips it, because the drops are destructive and the target is unverified.
+6. Runs the cleanup tests afterwards (`ctest -R '^test-cleanup'`: the
+   `test-cleanup` and `test-cleanup-last` families) whenever the target check
+   passed, even after a failure or a cancellation. They drop the suite's fixed
+   tables in both accounts. A failed target check skips them, because the
+   drops are destructive and the target is unverified. DynamoDB refuses to
+   delete a table while one of its indexes is being created, so
+   `test-cleanup-last` waits up to 15 minutes for `icdwarmthroughput0`'s index
+   to finish before it drops that table. A wait that runs out, or a refused
+   drop, fails the step. The step's 20-minute limit leaves room for the wait.
 7. Uploads `discussions/test-*` as the artifact `real-dynamodb-<run>-<attempt>`
    (kept 14 days) and adds the run's summary to the job summary. On a pull
    request, the checkout is GitHub's merge of the branch into `main`, so the
@@ -126,6 +131,20 @@ maintainer with access to the account can remove it:
 ```sh
 aws dynamodb list-tables --region us-east-1
 aws dynamodb delete-table --table-name <table> --region us-east-1
+```
+
+`delete-table` also refuses a table while one of its indexes is being created
+("Cannot delete table while indexes are being created, updated, or
+deleted."). The create-drop family adds an index with warm throughput to
+`icdwarmthroughput0`, and DynamoDB has taken more than 25 minutes to build it.
+The suite's last tests wait for that index and then drop the table. A run
+that stops within about 10 minutes of creating the index can still leave the
+table behind: the cleanup step's wait, 15 minutes at most, can run out before
+the index is built. Before you delete a table with indexes, wait until every
+`IndexStatus` is `ACTIVE`:
+
+```sh
+aws dynamodb describe-table --table-name icdwarmthroughput0 --region us-east-1 --query "Table.GlobalSecondaryIndexes[].IndexStatus"
 ```
 
 `icddpe` is created with deletion protection on, which `delete-table`
