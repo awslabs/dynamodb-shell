@@ -11,10 +11,15 @@
 #   web_build_bundle     configure (once) + build the wasm-release preset and
 #                        its packaging step (ddbsh-web-package), and set
 #                        WEB_OUT to the staged static bundle dir.
-#   web_offline_gates    run the offline web gates against WEB_OUT: the glue
+#   web_offline_gates    run the offline web gates: against WEB_OUT, the glue
 #                        no-eval check (D-P9-02-9), app-core.test.mjs,
-#                        sdk-bridge.test.mjs and package.test.mjs. Returns
-#                        nonzero on any failure.
+#                        sdk-bridge.test.mjs and package.test.mjs; against the
+#                        sources, the browser-storage gate (D-P9-4) and the
+#                        upload-command drift gate (deploy.sh vs
+#                        docs/HOSTING.md). Needs WEB_OUT and NODE_BIN. Every
+#                        caller runs the same set: run-web-smoke,
+#                        run-web-golden and CI (.github/workflows/
+#                        web-bundle.yml). Returns nonzero on any failure.
 #
 # Env overrides: EMSDK (emsdk root; default $HOME/emsdk), EMSDK_PYTHON,
 # DDBSH_WASM_BUILD_DIR.
@@ -79,7 +84,14 @@ web_build_bundle() {
 }
 
 web_offline_gates() {
-    local rc=0
+    local rc=0 repo storage_re storage_ok bad deploy_cmds guide_cmds upload_re
+    # The source gates read the repository, found from this file's location
+    # (devtools/), so callers pass nothing beyond WEB_OUT and NODE_BIN.
+    repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if [ -z "${WEB_OUT:-}" ] || [ -z "${NODE_BIN:-}" ]; then
+        echo "error: web_offline_gates needs WEB_OUT and NODE_BIN" >&2
+        return 1
+    fi
     echo "--- glue no-eval check (D-P9-02-9) ---"
     if grep -nE 'newFunc\(Function|new Function|[^A-Za-z_.]eval\(' "$WEB_OUT/ddbsh.js"; then
         echo "FAIL: ddbsh.js contains dynamic code; the page CSP (script-src 'self' 'wasm-unsafe-eval') would block it" >&2
@@ -93,6 +105,45 @@ web_offline_gates() {
     (cd "$WEB_OUT" && "$NODE_BIN" sdk-bridge.test.mjs) || rc=1
     echo "--- package.test.mjs ---"
     (cd "$WEB_OUT" && "$NODE_BIN" package.test.mjs) || rc=1
+
+    # Credentials stay in the tab's memory (D-P9-4): sdk-bridge.mjs never
+    # touches browser storage, and app.js uses it only for the command
+    # history (read, write, and the "Clear history" removal).
+    echo "--- storage grep gate (D-P9-4) ---"
+    storage_re='localStorage|sessionStorage|indexedDB|document\.cookie'
+    storage_ok=1
+    bad="$(grep -nE "$storage_re" "$repo/web/sdk-bridge.mjs" || true)"
+    if [ -n "$bad" ]; then
+        echo "$bad"
+        echo "FAIL: sdk-bridge.mjs touches browser storage" >&2
+        storage_ok=0
+    fi
+    bad="$(grep -nE "$storage_re" "$repo/web/app.js" | grep -vE 'localStorage\.(getItem|setItem|removeItem)\(HISTORY_KEY' | grep -vE '^[0-9]+:\s*//' || true)"
+    if [ -n "$bad" ]; then
+        echo "$bad"
+        echo "FAIL: app.js uses browser storage beyond the command history" >&2
+        storage_ok=0
+    fi
+    if [ "$storage_ok" -eq 1 ]; then
+        echo "ok: no credential-capable storage use"
+    else
+        rc=1
+    fi
+
+    # The upload commands exist twice by design: web/hosting/aws/deploy.sh
+    # runs them and docs/HOSTING.md shows them for copy-paste (P10). Each sets
+    # the Content-Type browsers need, so the two copies must not drift apart.
+    echo "--- upload-command drift gate (deploy.sh vs docs/HOSTING.md) ---"
+    upload_re='^aws (s3 sync|cloudfront create-invalidation) '
+    deploy_cmds="$(grep -E "$upload_re" "$repo/web/hosting/aws/deploy.sh" || true)"
+    guide_cmds="$(grep -E "$upload_re" "$repo/docs/HOSTING.md" || true)"
+    if [ "$(printf '%s\n' "$deploy_cmds" | grep -c .)" -ne 7 ] || [ "$deploy_cmds" != "$guide_cmds" ]; then
+        diff <(printf '%s\n' "$deploy_cmds") <(printf '%s\n' "$guide_cmds")
+        echo "FAIL: deploy.sh and docs/HOSTING.md must carry the same seven upload commands" >&2
+        rc=1
+    else
+        echo "ok: deploy.sh and docs/HOSTING.md carry the same seven upload commands"
+    fi
     return $rc
 }
 

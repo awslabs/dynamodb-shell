@@ -14,7 +14,8 @@
 #
 # Steps:
 #   1. emsdk + Node >= 20 (devtools/lib-web.sh), build wasm-release, run the
-#      offline web gates (glue no-eval, app-core + sdk-bridge tests).
+#      offline web gates (web_offline_gates: the same set run-web-smoke and
+#      CI run).
 #   2. Mint short-term STS session credentials for every profile the goldens
 #      use (default, cross-acct) into a private temp dir (0700/0600, removed on
 #      exit). Long-term keys never reach the browser path; ddbsh-node.mjs runs
