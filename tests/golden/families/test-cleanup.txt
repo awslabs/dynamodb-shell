@@ -28,3 +28,9 @@ add_test(NAME test-cleanup COMMAND ddbshtest -c "drop table if exists nowait ddb
                                               drop table if exists icdthroughput; \
                                               drop table if exists nowait icdwarmthroughput0; \
                                               drop table if exists icdwarmthroughput1; ")
+
+# N25 (D-P11-1): the cross-account family's table lives in the cross account,
+# so it needs that profile. After a failed run, run this family by itself
+# (ctest -R '^test-cleanup') to remove what the run left.
+add_test(NAME test-cleanup-cross-account COMMAND ddbshtest -c "drop table if exists nowait ddbsh_test_table_1")
+set_property(TEST test-cleanup-cross-account PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")

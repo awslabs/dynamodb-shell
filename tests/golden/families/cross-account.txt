@@ -154,3 +154,8 @@ add_test(NAME ddbsh-cross-account-test-49 COMMAND ddbshtest -q -T ${RD}/ddbsh-cr
 set_property(TEST ddbsh-cross-account-test-49 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
 
 # set_property(TEST ddbsh-cross-account-delete-test-table-1-fail PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
+
+# N25 (D-P11-1): drop the table at the end of the family, so it exists only
+# while a run is in progress. test-cleanup drops it too, with the same profile.
+add_test(NAME ddbsh-cross-account-drop-test-table-1 COMMAND ddbshtest -c "drop table ddbsh_test_table_1")
+set_property(TEST ddbsh-cross-account-drop-test-table-1 PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")
