@@ -153,7 +153,7 @@ jobs:
       - name: Check the live site anonymously
         id: check
         run: |
-          DDBSH_WEB_DIST_DIR=dist devtools/check-web-hosting --anonymous "$SITE_URL" \
+          DDBSH_WEB_DIST_DIR="$PWD/dist" devtools/check-web-hosting --anonymous "$SITE_URL" \
             --bucket-domain "$SITE_BUCKET.s3.$SITE_REGION.amazonaws.com" --wait 900 site-publish
 
       - name: Upload the check's log

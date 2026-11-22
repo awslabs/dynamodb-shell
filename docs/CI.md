@@ -84,9 +84,10 @@ The `real-dynamodb` job:
      role in DynamoDB's access-denied message for a table the role may not
      read.
 5. Runs the golden suite with `devtools/run-tests` (90 minutes at most).
-6. Always runs the `test-cleanup` family afterwards (`ctest -R '^test-cleanup'`),
-   which drops the suite's fixed tables in both accounts after a pass, a
-   failure or a cancellation.
+6. Runs the `test-cleanup` family afterwards (`ctest -R '^test-cleanup'`)
+   whenever the target check passed, even after a failure or a cancellation.
+   It drops the suite's fixed tables in both accounts. A failed target check
+   skips it, because the drops are destructive and the target is unverified.
 7. Uploads `discussions/test-*` as the artifact `real-dynamodb-<run>-<attempt>`
    (kept 14 days) and adds the run's summary to the job summary.
 
