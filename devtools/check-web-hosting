@@ -11,9 +11,9 @@
 # Checks, all anonymous over the public internet except (e)'s bucket reads:
 #   a. HTTPS 200 on / and on every file in web/bundle-files.txt; plain HTTP
 #      answers 301 with an https:// Location.
-#   b. each file's Content-Type and Cache-Control (the upload's per-type
-#      values: no-cache on HTML, so a new version is seen on the next visit,
-#      and max-age=300 on everything else).
+#   b. each file's Content-Type (the upload's per-type values) and
+#      Cache-Control: no-cache on every file, so a browser checks each file on
+#      every load and never runs a cached script with a newer index.html.
 #   c. every response carries the eight headers of the template's response
 #      headers policy.
 #   d. the sha256 of every served file matches the packaged SHA256SUMS
@@ -98,12 +98,6 @@ content_type_for() {
         *) echo "(no upload rule)" ;;
     esac
 }
-cache_control_for() {
-    case "$1" in
-        *.html) echo "no-cache" ;;
-        *) echo "max-age=300" ;;
-    esac
-}
 header() { # header <headers-file> <name> -> value of the last occurrence (CR stripped)
     grep -i "^$2:" "$1" | tail -1 | cut -d: -f2- | sed 's/^ *//' | tr -d '\r'
 }
@@ -142,7 +136,7 @@ for f in "${FILES[@]}"; do
     code="$(curl -sS -o "$WORK/$safe.body" -D "$WORK/$safe.h" -w '%{http_code}' "https://$DOMAIN/$f")"
     expect "$code" "200" "a. GET /$f"
     expect "$(header "$WORK/$safe.h" content-type)" "$(content_type_for "$f")" "b. /$f Content-Type"
-    expect "$(header "$WORK/$safe.h" cache-control)" "$(cache_control_for "$f")" "b. /$f Cache-Control"
+    expect "$(header "$WORK/$safe.h" cache-control)" "no-cache" "b. /$f Cache-Control"
     check_security_headers "$WORK/$safe.h" "/$f"
     want="$(grep "  $BUNDLE/$f\$" "$DIST_DIR/SHA256SUMS" | cut -d' ' -f1)"
     got="$(sha256sum "$WORK/$safe.body" | cut -d' ' -f1)"

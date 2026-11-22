@@ -231,7 +231,8 @@ Resources:
           AllowedMethods: [GET, HEAD]
           CachedMethods: [GET, HEAD]
           # Managed-CachingOptimized. It honors the Cache-Control the upload
-          # sets on each object (no-cache on index.html).
+          # sets on each object: no-cache on every file (docs/HOSTING.md
+          # step 3), because the file names carry no version.
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
           ResponseHeadersPolicyId: !GetAtt ResponseHeadersPolicy.Id
           Compress: true

@@ -125,6 +125,9 @@ template, and what any other host has to provide. In short:
   1,783 characters).
 - **Content types**, in particular `application/wasm` for `ddbsh.wasm` and
   `text/javascript` for the `.js` and `.mjs` modules.
+- **`Cache-Control: no-cache` on every file.** The file names carry no
+  version, so with a longer cache time a returning visitor's browser can run
+  a new `index.html` with older scripts.
 
 The page holds no secrets and needs no sign-in gate. No cross-origin-isolation
 headers are needed.

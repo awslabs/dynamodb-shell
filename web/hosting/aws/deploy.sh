@@ -25,8 +25,12 @@
 # application/wasm). --delete removes objects of that type that are no longer
 # in the bundle. sync uploads a file when its size differs or the local copy is
 # newer than the object; the packaging step writes every file fresh, so upload
-# right after packaging. index.html is no-cache so a new version is seen on the
-# next load; the other files may be cached for five minutes.
+# right after packaging. Every file is no-cache: the file names carry no
+# version, so a browser must check each file on every load, or a cached app.js
+# could run with a newer index.html. An unchanged file costs one 304 reply. A
+# visitor who loads the page while these commands run can still get a mix of
+# old and new files; once the invalidation has finished, a reload loads one
+# version.
 #
 # TODO(portability): no PowerShell wrapper; on Windows run the commands from
 # docs/HOSTING.md directly.
@@ -47,9 +51,9 @@ if [ ! -f "$DIR/index.html" ] || [ ! -f "$DIR/ddbsh.wasm" ]; then
 fi
 
 aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.html" --content-type "text/html; charset=utf-8" --cache-control "no-cache"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.js" --include "*.mjs" --content-type "text/javascript" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.wasm" --content-type "application/wasm" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.css" --content-type "text/css; charset=utf-8" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.json" --content-type "application/json" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.txt" --content-type "text/plain; charset=utf-8" --cache-control "max-age=300"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.js" --include "*.mjs" --content-type "text/javascript" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.wasm" --content-type "application/wasm" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.css" --content-type "text/css; charset=utf-8" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.json" --content-type "application/json" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.txt" --content-type "text/plain; charset=utf-8" --cache-control "no-cache"
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"

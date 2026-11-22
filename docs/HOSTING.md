@@ -178,15 +178,17 @@ $DIR = (Get-ChildItem -Directory -Path build-preset/wasm-release/dist -Filter "d
 ## 3. Upload the page
 
 These commands are the same in bash, zsh and PowerShell. Run them from the
-repository root.
+repository root. In Git Bash on Windows, run the last one as
+`MSYS_NO_PATHCONV=1 aws cloudfront create-invalidation …`: Git Bash otherwise
+rewrites `/*` into a Windows path, and CloudFront rejects the invalidation.
 
 ```sh
 aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.html" --content-type "text/html; charset=utf-8" --cache-control "no-cache"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.js" --include "*.mjs" --content-type "text/javascript" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.wasm" --content-type "application/wasm" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.css" --content-type "text/css; charset=utf-8" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.json" --content-type "application/json" --cache-control "max-age=300"
-aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.txt" --content-type "text/plain; charset=utf-8" --cache-control "max-age=300"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.js" --include "*.mjs" --content-type "text/javascript" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.wasm" --content-type "application/wasm" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.css" --content-type "text/css; charset=utf-8" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.json" --content-type "application/json" --cache-control "no-cache"
+aws s3 sync "$DIR" "s3://$BUCKET/" --delete --exclude "*" --include "*.txt" --content-type "text/plain; charset=utf-8" --cache-control "no-cache"
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
 ```
 
@@ -195,14 +197,19 @@ Why one command per file type:
 - Each sets the `Content-Type` browsers need. A JavaScript module served with
   another type does not load, and `ddbsh.wasm` must be `application/wasm`.
 - `--delete` removes files of that type that are no longer in the bundle.
-- `index.html` is marked `no-cache`, so visitors get a new version on their
-  next visit. The other files may stay in a browser's cache for five minutes.
+- Every file is marked `no-cache`. A browser may keep a copy, but it checks
+  with CloudFront before each use, and an unchanged file costs a short
+  `304 Not Modified` reply. The file names carry no version, so with a longer
+  cache time a returning visitor's browser could run a new `index.html` with
+  an older `app.js`.
 - `aws s3 sync` uploads a file when its size changed or the local copy is
   newer than the one in the bucket. The packaging step writes every file
   fresh, so upload right after packaging.
 
 The invalidation clears CloudFront's cached copies; it finishes within a few
-minutes. On Linux or macOS, `web/hosting/aws/deploy.sh "$DIR" "$BUCKET"
+minutes. A visitor who loads the page while these commands run can get a mix
+of old and new files. Once the invalidation has finished, a reload loads one
+version. On Linux or macOS, `web/hosting/aws/deploy.sh "$DIR" "$BUCKET"
 "$DIST_ID"` runs the same seven commands.
 
 ## 4. Check the deployment
@@ -210,12 +217,13 @@ minutes. On Linux or macOS, `web/hosting/aws/deploy.sh "$DIR" "$BUCKET"
 Each command prints what to compare with the comment above it.
 
 ```sh
-# 200, Content-Type text/html; charset=utf-8, and the eight headers from step 2
-curl -sSI "https://$DOMAIN/" | grep -iE "^(HTTP|content-type|content-security-policy|x-frame-options|strict-transport-security|x-content-type-options|referrer-policy|cross-origin-opener-policy|cross-origin-resource-policy|permissions-policy)"
+# 200, Content-Type text/html; charset=utf-8, Cache-Control no-cache, and the
+# eight headers from step 2
+curl -sSI "https://$DOMAIN/" | grep -iE "^(HTTP|content-type|cache-control|content-security-policy|x-frame-options|strict-transport-security|x-content-type-options|referrer-policy|cross-origin-opener-policy|cross-origin-resource-policy|permissions-policy)"
 # application/wasm
 curl -sSI "https://$DOMAIN/ddbsh.wasm" | grep -i "^content-type"
-# text/javascript
-curl -sSI "https://$DOMAIN/app.js" | grep -i "^content-type"
+# text/javascript, and Cache-Control no-cache
+curl -sSI "https://$DOMAIN/app.js" | grep -iE "^(content-type|cache-control)"
 # 301, and a Location that starts with https://
 curl -sSI "http://$DOMAIN/" | grep -iE "^(HTTP|location)"
 # 403: the bucket is private; only CloudFront can read it
@@ -228,9 +236,9 @@ below, so that Windows PowerShell's `curl` alias for `Invoke-WebRequest` is
 never used; on macOS and Linux, write `curl`.
 
 ```powershell
-curl.exe -sSI "https://$DOMAIN/" | Select-String -Pattern "^(HTTP|content-type|content-security-policy|x-frame-options|strict-transport-security|x-content-type-options|referrer-policy|cross-origin-opener-policy|cross-origin-resource-policy|permissions-policy)"
+curl.exe -sSI "https://$DOMAIN/" | Select-String -Pattern "^(HTTP|content-type|cache-control|content-security-policy|x-frame-options|strict-transport-security|x-content-type-options|referrer-policy|cross-origin-opener-policy|cross-origin-resource-policy|permissions-policy)"
 curl.exe -sSI "https://$DOMAIN/ddbsh.wasm" | Select-String -Pattern "^content-type"
-curl.exe -sSI "https://$DOMAIN/app.js" | Select-String -Pattern "^content-type"
+curl.exe -sSI "https://$DOMAIN/app.js" | Select-String -Pattern "^(content-type|cache-control)"
 curl.exe -sSI "http://$DOMAIN/" | Select-String -Pattern "^(HTTP|location)"
 curl.exe -sSI "https://$BUCKET_DOMAIN/index.html" | Select-String -Pattern "^HTTP"
 ```
@@ -312,9 +320,16 @@ CloudFormation linter but not yet deployed by this project's tests.
 If the template itself changed, run the `aws cloudformation deploy` command
 from step 2 again first; it updates the stack in place and keeps the
 parameters you set before. Add `--capabilities CAPABILITY_NAMED_IAM` if the
-stack has the deployer policy. Earlier versions of each file stay in the
-bucket for 90 days, so you can restore one with the S3 console or
-`aws s3api copy-object` if a release goes wrong.
+stack has the deployer policy.
+
+To roll back, publish the earlier release the same way: check it out instead
+of pulling (for example `git checkout v0.12.1`), then follow steps 1–4 of this
+section. This works back to 0.12.1, the first release with the packaging step.
+The files of one release work only together, so do not restore single files
+from the bucket's earlier versions. Upload only a freshly packaged folder:
+`aws s3 sync` skips a file whose size is unchanged and whose local copy is
+older than the bucket's, so uploading an older copy of a folder can leave some
+files at the newer release.
 
 ## Command history in the browser
 
@@ -348,6 +363,12 @@ run both commands again until `versions.json` reads `"Objects": []`. When the
 list is empty, `delete-objects` reports a `MalformedXML` error, which you can
 ignore. (The S3 console's **Empty** button also empties a bucket.)
 
+If you attached the deployer policy to a role, user or group, detach it
+first: `aws iam detach-role-policy --role-name <role> --policy-arn <arn>`,
+or `detach-user-policy --user-name <user>` or
+`detach-group-policy --group-name <group>` with the same `--policy-arn`. The
+ARN is the stack's `DeployerPolicyArn` output.
+
 Then delete the stack and the list file:
 
 ```sh
@@ -371,10 +392,12 @@ credentials they paste. Your bill covers:
 
 - **S3 storage** for the bundle (about 2 MB per version) and its earlier
   versions, which expire after 90 days;
-- **S3 requests**, mostly from CloudFront fetching files it has not cached,
-  and from your uploads;
-- **CloudFront** data transfer to visitors and requests (each visit loads
-  about 2 MB before compression, then mostly uses the browser's cache);
+- **S3 requests**: CloudFront checks a file with S3 when its copy is more
+  than a second old, so up to one small request per file for each visit,
+  plus your uploads;
+- **CloudFront** data transfer to visitors and requests: a first visit loads
+  about 2 MB before compression; a later visit makes one request per file and
+  downloads only the files that changed;
 - **CloudFront invalidations** beyond the monthly free allowance (each upload
   uses one path, `/*`).
 
@@ -406,12 +429,15 @@ Any host can serve the page if it meets these requirements:
    Policy is in `index.html` and is too long for some hosts' header settings
    (CloudFront accepts at most 1783 characters for this header), and browsers
    apply the `<meta>` policy and the header policy together.
+6. **`Cache-Control: no-cache` on every file**, or another setting that makes
+   browsers check each file on every load. The file names carry no version,
+   so a cached script can otherwise outlive the `index.html` it belongs to.
 
 **GitHub Pages** serves HTTPS with the right content types, but it cannot send
 custom response headers, so a page there gets none of the eight headers from
 step 2. The most important of them, `frame-ancestors`, stops other sites from
 framing the page; the page itself refuses credentials when it is framed or
-opened by another page's script, which covers that risk. Two cautions apply:
+opened by another page's script, which covers that risk. Three cautions apply:
 
 - All the project sites of one GitHub user or organization share the origin
   `https://<owner>.github.io`, so pages from that owner's other repositories
@@ -419,3 +445,6 @@ opened by another page's script, which covers that risk. Two cautions apply:
   hosts the page, or an owner with no other Pages sites.
 - Without `frame-ancestors`, another site can still show the page in a frame
   (where it refuses credentials), for example to confuse visitors.
+- GitHub Pages sends `Cache-Control: max-age=600` on every file, which you
+  cannot change. For up to ten minutes after you publish, a returning
+  visitor's browser can combine new and old files.
