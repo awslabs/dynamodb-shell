@@ -174,17 +174,21 @@ fails with that explanation instead of skipping silently.
 A maintainer can run the suite on the change by pushing it to a branch of
 `awslabs/dynamodb-shell` and opening a pull request from that branch.
 **Review the whole change before you push it.** From the push on, the
-branch's code runs with the CI role:
+branch's code runs with this repository's secrets and the CI role:
 
 - a workflow that the change adds or edits can run on the push itself, before
-  any pull request exists;
+  any pull request exists, with every secret this repository's workflows can
+  read and with its `ci` environment. One of those secrets is `TOKEN`, which
+  `homebrew.yml` uses to update the `aws/homebrew-tap` formula that Homebrew
+  users of ddbsh install;
 - the pull request runs the branch's workflows, `devtools/` scripts, build
   and tests, and the `ddbsh` it builds, in a job that signs in as
   `ddbsh-ci-tests`. That role may use DynamoDB throughout 291751120739 and
   assume `ddbsh-ci-cross`.
 
 Read every changed file, everything under `.github/` and `devtools/`
-included, then push exactly the commit you reviewed, by its full hash:
+included, then push exactly the commit you reviewed, by its full hash (here
+`origin` is `awslabs/dynamodb-shell`):
 
 ```sh
 git fetch origin pull/<number>/head

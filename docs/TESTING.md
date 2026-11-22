@@ -57,7 +57,8 @@ the details for maintainers.
   suite cannot run. Instead, the job "Golden suite (real DynamoDB): fork pull
   request" fails with an explanation. A maintainer can run the suite after
   reviewing the whole change: pushing it to `awslabs/dynamodb-shell` runs it
-  with the CI role ([CI](CI.md#pull-requests-from-forks)).
+  with the repository's secrets and the CI role
+  ([CI](CI.md#pull-requests-from-forks)).
 - **One golden run at a time.** The suite's table names are fixed, so the
   golden job queues. A running job is never cancelled; a newer waiting job
   replaces an older waiting one.
