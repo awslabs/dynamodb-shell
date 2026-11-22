@@ -58,12 +58,15 @@ bool seed(ddbsh::Connection& db) {
     return run(db,
                "create table catalog ( id string, year number ) "
                "primary key ( id hash, year range );") &&
-           run(db, "insert into catalog ( id, year, title ) "
-                   "values ( \"film\", 2010, \"Inception\" );") &&
-           run(db, "insert into catalog ( id, year, title ) "
-                   "values ( \"film\", 2014, \"Interstellar\" );") &&
-           run(db, "insert into catalog ( id, year, title ) "
-                   "values ( \"film\", 2017, \"Dunkirk\" );");
+           run(db,
+               "insert into catalog ( id, year, title ) "
+               "values ( \"film\", 2010, \"Inception\" );") &&
+           run(db,
+               "insert into catalog ( id, year, title ) "
+               "values ( \"film\", 2014, \"Interstellar\" );") &&
+           run(db,
+               "insert into catalog ( id, year, title ) "
+               "values ( \"film\", 2017, \"Dunkirk\" );");
 }
 
 // ---- 1. Prepared / parameterized statements -------------------------------

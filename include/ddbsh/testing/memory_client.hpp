@@ -309,8 +309,8 @@ public:
                                  : "STANDARD";
         }
         if (in.billing.has_value()) {
-            t->billing_mode = (in.billing->mode == BillingMode::provisioned) ? "PROVISIONED"
-                                                                             : "PAY_PER_REQUEST";
+            t->billing_mode =
+                (in.billing->mode == BillingMode::provisioned) ? "PROVISIONED" : "PAY_PER_REQUEST";
         }
         return UpdateTableOut{};
     }

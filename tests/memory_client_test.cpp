@@ -33,8 +33,7 @@ void seed_filter_table(Connection& db) {
     ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
     ASSERT_TRUE(
         db.exec("insert into t ( id, n, tag ) values ( \"a\", 1, \"alpha\" );").has_value());
-    ASSERT_TRUE(
-        db.exec("insert into t ( id, n, tag ) values ( \"b\", 5, \"beta\" );").has_value());
+    ASSERT_TRUE(db.exec("insert into t ( id, n, tag ) values ( \"b\", 5, \"beta\" );").has_value());
     ASSERT_TRUE(
         db.exec("insert into t ( id, n, tag ) values ( \"c\", 9, \"gamma\" );").has_value());
 }

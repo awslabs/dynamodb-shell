@@ -73,7 +73,7 @@ public:
 
 private:
     friend Result<SelectRowCursor> open_select_cursor(const SelectCmd&, IDDBClient&,
-                                                       const std::string&);
+                                                      const std::string&);
 
     explicit SelectRowCursor(IDDBClient& client) : client_(&client) {}
 

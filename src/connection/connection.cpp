@@ -861,7 +861,9 @@ Result<RowSet> drain_rowset(Result<Results> r) {
 
 }  // namespace
 
-Result<RowSet> Connection::query(std::string_view sql) { return drain_rowset(exec(sql)); }
+Result<RowSet> Connection::query(std::string_view sql) {
+    return drain_rowset(exec(sql));
+}
 
 Result<RowSet> Connection::query(const PreparedStatement& stmt) {
     return drain_rowset(exec(stmt));
