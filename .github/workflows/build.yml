@@ -99,6 +99,9 @@ jobs:
           emcmake cmake --preset wasm-release
           cmake --build build-preset/wasm-release
 
+      - name: Package the bundle (allowlisted files, zip, SHA256SUMS)
+        run: cmake --build build-preset/wasm-release --target ddbsh-web-package
+
       - name: Glue has no eval / new Function (page CSP has no 'unsafe-eval')
         run: |
           ! grep -nE 'newFunc\(Function|new Function|[^A-Za-z_.]eval\(' build-preset/wasm-release/web/ddbsh.js
@@ -108,18 +111,12 @@ jobs:
         run: |
           node app-core.test.mjs
           node sdk-bridge.test.mjs
+          node package.test.mjs
 
+      # The packaged bundle: ddbsh-web-<version>/ (exactly the files a host
+      # publishes, web/bundle-files.txt), its zip, and SHA256SUMS.
       - name: Upload the static browser bundle
         uses: actions/upload-artifact@v4
         with:
           name: ddbsh-web-bundle
-          path: |
-            build-preset/wasm-release/web/index.html
-            build-preset/wasm-release/web/app.js
-            build-preset/wasm-release/web/app-core.mjs
-            build-preset/wasm-release/web/sdk-bridge.mjs
-            build-preset/wasm-release/web/styles.css
-            build-preset/wasm-release/web/package.json
-            build-preset/wasm-release/web/ddbsh.js
-            build-preset/wasm-release/web/ddbsh.wasm
-            build-preset/wasm-release/web/vendor/aws-sdk/
+          path: build-preset/wasm-release/dist/

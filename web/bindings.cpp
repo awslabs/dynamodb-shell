@@ -23,6 +23,10 @@
 // order, so a consumer that merges the streams (the golden runner's 2>&1, the
 // UI transcript) sees the same interleaving as the CLI.
 //
+// One free function: version() returns ddbsh::version() (CMake
+// project(VERSION), the string SHOW VERSION prints), which the page shows in
+// its header (P10, D-P10-14).
+//
 // WASM-only: this TU is compiled solely for the Emscripten web target.
 
 #if defined(__EMSCRIPTEN__)
@@ -41,6 +45,7 @@
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
+#include "ddbsh/version.hpp"
 #include "ddbsh/wire/wire_client.hpp"
 #include "js_sdk_transport.hpp"
 #include "repl.hpp"
@@ -187,6 +192,7 @@ EMSCRIPTEN_BINDINGS(ddbsh) {
         .function("runScript", &DdbshSession::run_script)
         .function("region", &DdbshSession::region)
         .function("endpointOverridden", &DdbshSession::endpoint_overridden);
+    emscripten::function("version", &ddbsh::version);
 }
 
 // A trivial entry point. The embind surface is registered by static

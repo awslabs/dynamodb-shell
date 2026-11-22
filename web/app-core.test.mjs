@@ -9,7 +9,13 @@
 // P6e logic — the history ring, the prompt builder, the transcript-entry model,
 // the file->submission handoff, and the single-flight run guard — plus the P9
 // additions: ordered RunResult segments, short-term credential parsing and
-// validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9).
+// validation (D-P9-3), and the index.html CSP drift check (D-P9-02-9); and the
+// P10 additions: history clear() (D-P10-6), the framed / opened / insecure
+// credential refusal (G1), the Trusted Types directives in the CSP, the
+// cross-tab history removal (historyRemovedElsewhere), the credentials
+// controls shipping disabled in index.html, and the header's engine version
+// (versionLabel, D-P10-14), busy indicator (createBusyClock, D-P10-16) and
+// Help link (D-P10-17).
 
 import { readFileSync } from "node:fs";
 
@@ -17,7 +23,12 @@ import { ALLOWED_HOSTS } from "./vendor/aws-sdk/allowed-hosts.mjs";
 import {
     buildPrompt,
     buildTranscriptEntries,
+    busyFinishedText,
+    busyText,
+    createBusyClock,
+    credentialEnvironmentProblem,
     credentialStatus,
+    elapsedSeconds,
     maskAccessKeyId,
     parseCredentials,
     validateCredentials,
@@ -25,6 +36,8 @@ import {
     createHistory,
     createHistoryRecall,
     createRunGuard,
+    historyRemovedElsewhere,
+    versionLabel,
 } from "./app-core.mjs";
 
 let failures = 0;
@@ -141,6 +154,65 @@ console.log("createHistory");
     check(h.next() === null, "push resets recall cursor to draft");
     eq(h.previous(), "c", "after reset, previous() recalls the newest");
 }
+{
+    // clear() (the page's "Clear history", D-P10-6) empties the ring and the
+    // cursor; recording starts again with the next push.
+    const h = createHistory({ entries: ["a", "b", "c"] });
+    h.previous(); // mid-recall
+    h.clear();
+    eq(h.list(), [], "clear() empties the ring");
+    check(h.size() === 0, "size 0 after clear()");
+    check(h.previous() === null && h.next() === null, "no recall after clear()");
+    h.push("d");
+    eq(h.list(), ["d"], "push after clear() starts a new history");
+    eq(h.previous(), "d", "recall works again after clear()");
+}
+{
+    // The page clears the ring and resets recall together; a recall in
+    // progress must not resurrect a cleared entry or wipe the live draft.
+    const h = createHistory({ entries: ["a", "b"] });
+    const r = createHistoryRecall(h);
+    eq(r.up("draft"), "b", "recalling before clear()");
+    h.clear();
+    r.reset();
+    check(r.recalling === false, "reset() after clear() ends the recall");
+    check(r.up("typed") === null, "up() after clear() is a no-op (nothing to recall)");
+    check(r.down() === null, "down() after clear() is a no-op");
+}
+
+// ---- historyRemovedElsewhere (P10) -----------------------------------------
+// The page's storage-event handler: another tab's "Clear history" must clear
+// this tab's in-memory copy too, or this tab's next save writes it back.
+console.log("historyRemovedElsewhere");
+{
+    const KEY = "ddbsh.history";
+    check(historyRemovedElsewhere({ key: KEY, newValue: null }, KEY) === true,
+        "the history key removed in another tab (Clear history): removed");
+    check(historyRemovedElsewhere({ key: null, newValue: null }, KEY) === true,
+        "the whole storage area cleared in another tab (key null): removed");
+    check(historyRemovedElsewhere({ key: KEY, newValue: JSON.stringify(["show tables;"]) }, KEY) === false,
+        "another tab saved its history (a new value): not removed");
+    check(historyRemovedElsewhere({ key: KEY, newValue: "" }, KEY) === false,
+        "an empty-string value is a value, not a removal");
+    check(historyRemovedElsewhere({ key: "other.key", newValue: null }, KEY) === false,
+        "another key removed: not removed");
+    check(historyRemovedElsewhere({}, KEY) === false, "an event without a key: not removed");
+    check(historyRemovedElsewhere(undefined, KEY) === false, "no event at all: not removed");
+    check(historyRemovedElsewhere({ key: undefined, newValue: null }, undefined) === false,
+        "no history key given: not removed");
+    // The handler's whole effect, on the modules app.js uses: this tab's ring
+    // and recall are emptied, so its next command saves only itself.
+    const h = createHistory({ entries: ["cmd1", "cmd2"] });
+    const r = createHistoryRecall(h);
+    eq(r.up(""), "cmd2", "this tab is recalling an entry when the event arrives");
+    if (historyRemovedElsewhere({ key: KEY, newValue: null }, KEY)) {
+        h.clear();
+        r.reset();
+    }
+    check(r.up("") === null, "after the event, nothing is recalled");
+    h.push("cmd3");
+    eq(h.list(), ["cmd3"], "after the event, this tab saves only its new command");
+}
 
 // ---- createHistoryRecall ---------------------------------------------------
 console.log("createHistoryRecall");
@@ -231,17 +303,26 @@ eq(buildTranscriptEntries("r> ", "x", {
 // ---- credentials (P9, D-P9-3 / D-P9-4) -------------------------------------
 console.log("credentials");
 {
-    const NOW = Date.parse("2026-11-20T12:00:00Z");
-    const KEY = "ASIAQWERTYUIOPASDFGH";
+    // Test fixtures. Every value below is fictitious: none was ever issued by
+    // AWS and none was ever a valid credential. The key ids are a keyboard row
+    // (QWERTYUIOPASDFGH) behind the ASIA/AKIA/XXXX prefixes, SECRET is the
+    // example secret from the AWS documentation, and TOKEN is invented. Every
+    // expiry, and the clock (NOW) the tests inject, is in 2025, so a value
+    // mistaken for a real one would be long expired.
+    const NOW = Date.parse("2025-01-15T12:00:00Z");
+    const KEY = "ASIAQWERTYUIOPASDFGH";           // short-term shape (accepted)
+    const LONG_TERM_KEY = "AKIAQWERTYUIOPASDFGH"; // long-term shape (refused)
+    const MALFORMED_KEY = "XXXXQWERTYUIOPASDFGH"; // neither prefix (refused)
     const SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const TOKEN = "IQoJb3JpZ2luX2VjEXAMPLETOKEN==";
-    const EXP = "2026-11-20T13:00:00Z";
+    const EXP = "2025-01-15T13:00:00Z";     // one hour after NOW
+    const EXPIRED = "2025-01-15T11:00:00Z"; // one hour before NOW
 
     const sts = JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET,
         SessionToken: TOKEN, Expiration: EXP }, AssumedRoleUser: { Arn: "arn:x" } });
     let r = parseCredentials(sts, NOW);
     check(r.ok && r.credentials.accessKeyId === KEY && r.credentials.sessionToken === TOKEN &&
-        r.credentials.expiration.toISOString() === "2026-11-20T13:00:00.000Z", "STS JSON accepted");
+        r.credentials.expiration.toISOString() === "2025-01-15T13:00:00.000Z", "STS JSON accepted");
 
     r = parseCredentials(JSON.stringify({ Version: 1, AccessKeyId: KEY, SecretAccessKey: SECRET,
         SessionToken: TOKEN, Expiration: EXP }), NOW);
@@ -265,14 +346,14 @@ console.log("credentials");
     check(r.ok, "cmd set lines accepted");
 
     const refused = [
-        [JSON.stringify({ AccessKeyId: "AKIAQWERTYUIOPASDFGH", SecretAccessKey: SECRET }), /long-term access keys \(AKIA…\)/],
-        [`AWS_ACCESS_KEY_ID=AKIAQWERTYUIOPASDFGH\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /long-term/],
+        [JSON.stringify({ AccessKeyId: LONG_TERM_KEY, SecretAccessKey: SECRET }), /long-term access keys \(AKIA…\)/],
+        [`AWS_ACCESS_KEY_ID=${LONG_TERM_KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /long-term/],
         [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}`, /a session token is required/],
-        [`AWS_ACCESS_KEY_ID=XXXXQWERTYUIOPASDFGH\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /not an AWS short-term access key id/],
+        [`AWS_ACCESS_KEY_ID=${MALFORMED_KEY}\nAWS_SECRET_ACCESS_KEY=${SECRET}\nAWS_SESSION_TOKEN=${TOKEN}`, /not an AWS short-term access key id/],
         [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SESSION_TOKEN=${TOKEN}`, /secret access key is missing/],
         [`AWS_ACCESS_KEY_ID=${KEY}\nAWS_SECRET_ACCESS_KEY=a b\nAWS_SESSION_TOKEN=${TOKEN}`, /secret access key is missing or malformed/],
         [JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET, SessionToken: TOKEN,
-            Expiration: "2026-11-20T11:00:00Z" } }), /these credentials expired at 2026-11-20T11:00:00.000Z/],
+            Expiration: EXPIRED } }), /these credentials expired at 2025-01-15T11:00:00.000Z/],
         [JSON.stringify({ Credentials: { AccessKeyId: KEY, SecretAccessKey: SECRET, SessionToken: TOKEN,
             Expiration: "soon" } }), /not a valid date/],
         ["{not json", /does not parse/],
@@ -297,6 +378,29 @@ console.log("credentials");
     eq(credentialStatus({ accessKeyId: KEY }, NOW), "ASIA…DFGH (expiry unknown)", "status: expiry unknown");
 }
 
+// ---- where credentials may be used (P10, G1) -------------------------------
+console.log("credentialEnvironmentProblem");
+{
+    const fine = { secureContext: true, framed: false, opened: false };
+    check(credentialEnvironmentProblem(fine) === null, "secure, top-level, not opened: accepted");
+    const framed = credentialEnvironmentProblem({ ...fine, framed: true });
+    check(/refused/.test(framed) && /inside a frame/.test(framed) && /open the page directly in its own tab/.test(framed),
+        `framed: refused — ${framed}`);
+    const opened = credentialEnvironmentProblem({ ...fine, opened: true });
+    check(/refused/.test(opened) && /opened this window/.test(opened) && /open the page directly/.test(opened),
+        `opened by another page's script: refused — ${opened}`);
+    const insecure = credentialEnvironmentProblem({ ...fine, secureContext: false });
+    check(/https:\/\/ or http:\/\/localhost/.test(insecure), `not a secure context: refused — ${insecure}`);
+    eq(credentialEnvironmentProblem({ secureContext: false, framed: true, opened: true }), framed,
+        "framed is reported first when several apply");
+    eq(credentialEnvironmentProblem({ secureContext: false, framed: false, opened: true }), opened,
+        "opened is reported before the secure-context problem");
+    check(credentialEnvironmentProblem({}) !== null, "unknown facts are refused (fail closed)");
+    check(credentialEnvironmentProblem() !== null, "no facts at all are refused (fail closed)");
+    check(credentialEnvironmentProblem({ secureContext: "yes", framed: 0, opened: "" }) !== null,
+        "only the boolean false/true values count (fail closed)");
+}
+
 // ---- CSP drift check (D-P9-02-9) -------------------------------------------
 console.log("CSP");
 {
@@ -311,6 +415,9 @@ console.log("CSP");
     eq(directives["default-src"], ["'none'"], "default-src 'none'");
     eq(directives["object-src"], ["'none'"], "object-src 'none'");
     eq(directives["base-uri"], ["'none'"], "base-uri 'none'");
+    eq(directives["require-trusted-types-for"], ["'script'"], "require-trusted-types-for 'script' (Trusted Types, D-P10-12)");
+    eq(directives["trusted-types"], ["'none'"], "trusted-types 'none' (no Trusted Types policy may be created)");
+    check(!("frame-ancestors" in directives), "no frame-ancestors in the <meta> (browsers ignore it there; the host sends it)");
     check(!/unsafe-inline|'unsafe-eval'/.test(m ? m[1] : ""), "no 'unsafe-inline' or 'unsafe-eval'");
     check(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "no inline <script> in index.html");
     check(!/\sstyle=/i.test(html) && !/<style/i.test(html), "no inline style in index.html");
@@ -318,6 +425,188 @@ console.log("CSP");
         "every allowed host is [search-]dynamodb[-fips].<region>.{amazonaws.com,api.aws}");
     check(ALLOWED_HOSTS.includes("search-dynamodb.us-east-1.amazonaws.com"),
         "the SearchVectors host is allowed");
+}
+
+// ---- controls that ship disabled (P10) -------------------------------------
+// The credentials text box and "Use credentials" stay disabled until app.js has
+// run and found the environment safe (credentialEnvironmentProblem), so a page
+// whose script never runs (scripts blocked, a sandboxed frame, modules served
+// with the wrong type) never invites a paste. The editor and Run wait for the
+// engine the same way. Forget stays enabled: forgetting is always safe.
+console.log("controls that ship disabled");
+{
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    const openingTag = (id) => {
+        const m = html.match(new RegExp(`<[a-z]+\\s[^>]*\\bid="${id}"[^>]*>`));
+        return m ? m[0] : "";
+    };
+    const shipsDisabled = (id) => /\sdisabled(?=[\s>=])/.test(openingTag(id));
+    for (const id of ["cred-input", "cred-use-btn", "editor", "run-btn", "file-input"]) {
+        check(openingTag(id) !== "", `index.html has #${id}`);
+        check(shipsDisabled(id), `#${id} ships disabled`);
+    }
+    check(openingTag("cred-forget-btn") !== "" && !shipsDisabled("cred-forget-btn"),
+        "#cred-forget-btn ships enabled");
+}
+
+// ---- header: version (P10, D-P10-14) ---------------------------------------
+console.log("versionLabel");
+eq(versionLabel({ version: () => "0.12.1" }), "version 0.12.1", "the engine's version");
+eq(versionLabel({ version: () => "0.13" }), "version 0.13", "a two-part version");
+eq(versionLabel({ version: () => "1.2.3.4" }), "version 1.2.3.4", "a four-part version");
+eq(versionLabel({}), "", "an older ddbsh.wasm without the export: the title stays 'ddbsh (web)'");
+eq(versionLabel(null), "", "no module");
+eq(versionLabel({ version: "0.12.1" }), "", "a non-function export is ignored");
+eq(versionLabel({ version: () => { throw new Error("boom"); } }), "", "a throwing export is ignored");
+eq(versionLabel({ version: () => "" }), "", "an empty version is ignored");
+eq(versionLabel({ version: () => "0.12.1 <b>" }), "", "anything but a version is ignored");
+eq(versionLabel({ version: () => 12 }), "", "a non-string is ignored");
+
+// ---- header: busy indicator (P10, D-P10-16) --------------------------------
+console.log("busy indicator");
+eq(elapsedSeconds(1000, 1000), 0, "elapsed: 0 at the start");
+eq(elapsedSeconds(1000, 1999.9), 0, "elapsed: whole seconds, rounded down");
+eq(elapsedSeconds(1000, 2000), 1, "elapsed: 1 after one second");
+eq(elapsedSeconds(1000, 62500), 61, "elapsed: 61 after 61.5 s");
+eq(elapsedSeconds(1000, 500), 0, "elapsed: never negative");
+eq(busyText(0), "running… 0s", "busy text at the start");
+eq(busyText(42), "running… 42s", "busy text after 42 s");
+eq(busyFinishedText(0), "command finished after 0 seconds", "finished: 0 seconds");
+eq(busyFinishedText(1), "command finished after 1 second", "finished: 1 second (singular)");
+eq(busyFinishedText(5), "command finished after 5 seconds", "finished: 5 seconds");
+{
+    // A fake monotonic clock and animation-frame queue: frames(ms) runs one
+    // frame every 16 ms of fake time, in request order, like a 60 Hz display.
+    let nowMs = 5000;
+    let nextHandle = 1;
+    let queued = []; // [{ handle, fn }]
+    let requests = 0;
+    const renders = [];
+    const announcements = [];
+    const io = {
+        now: () => nowMs,
+        requestFrame: (fn) => {
+            requests += 1;
+            const handle = nextHandle++;
+            queued.push({ handle, fn });
+            return handle;
+        },
+        cancelFrame: (handle) => {
+            queued = queued.filter((q) => q.handle !== handle);
+        },
+        render: (text) => renders.push(text),
+        announce: (text) => announcements.push(text),
+    };
+    const frames = (ms, step = 16) => {
+        const until = nowMs + ms;
+        while (nowMs + step <= until) {
+            nowMs += step;
+            const run = queued;
+            queued = [];
+            for (const q of run) {
+                q.fn();
+            }
+        }
+        nowMs = until;
+    };
+    const clock = createBusyClock(io);
+    check(!clock.running, "idle before start");
+    check(clock.stop() === false, "stop() while idle does nothing");
+    eq(renders, [], "  … and renders nothing");
+    eq(announcements, [], "  … and announces nothing");
+
+    check(clock.start() === true, "start() starts");
+    check(clock.running, "running after start");
+    eq(renders, ["running… 0s"], "start shows 0s at once");
+    eq(announcements, ["command started"], "start is announced once");
+    eq(queued.length, 1, "start requests one animation frame");
+    check(clock.start() === false, "a second start() while running does nothing");
+    eq(renders.length, 1, "  … and does not re-render");
+    eq(queued.length, 1, "  … and requests no second frame");
+
+    frames(3500);
+    eq(renders, ["running… 0s", "running… 1s", "running… 2s", "running… 3s"],
+        "one render per whole second over 218 frames (3.5 s elapsed); frames in between render nothing");
+    eq(announcements, ["command started"], "the seconds are not announced");
+    eq(queued.length, 1, "exactly one frame pending while running");
+
+    nowMs = 5000 + 4900;
+    check(clock.stop() === true, "stop() stops");
+    check(!clock.running, "idle after stop");
+    eq(renders[renders.length - 1], null, "stop hides the indicator");
+    eq(announcements, ["command started", "command finished after 4 seconds"],
+        "stop announces the elapsed whole seconds");
+    eq(queued, [], "stop cancels the pending frame");
+    const rendersAtStop = renders.length;
+    const requestsAtStop = requests;
+    frames(5000);
+    eq(renders.length, rendersAtStop, "no render after stop");
+    eq(requests, requestsAtStop, "no frame requested after stop");
+
+    // A quick submission: start and stop in the same task.
+    check(clock.start() === true && clock.stop() === true, "start then stop at once");
+    eq(renders.slice(rendersAtStop), ["running… 0s", null], "shown then hidden");
+    eq(announcements.slice(2), ["command started", "command finished after 0 seconds"],
+        "both announced");
+    eq(queued, [], "no frame left pending");
+
+    // A frame callback that runs after stop() (already dequeued) does nothing.
+    const stale = [];
+    const staleClock = createBusyClock({
+        ...io,
+        requestFrame: (fn) => { stale.push(fn); return 99; },
+        cancelFrame: () => {},
+        render: (text) => stale.push(text),
+    });
+    staleClock.start();
+    const queuedFrame = stale[1];
+    staleClock.stop();
+    const before = stale.length;
+    queuedFrame();
+    eq(stale.length, before, "a frame that runs after stop() renders and requests nothing");
+
+    // No frames for a while (a hidden tab, or a blocked main thread): the next
+    // frame shows the true elapsed seconds.
+    renders.length = 0;
+    clock.start();
+    frames(1100);
+    nowMs += 2000; // 2 s without frames
+    frames(16);
+    eq(renders, ["running… 0s", "running… 1s", "running… 3s"],
+        "after 2 s without frames the next frame shows 3s (the true elapsed time)");
+    clock.stop();
+}
+
+// ---- header: index.html markup (P10, D-P10-14 / D-P10-16 / D-P10-17) -------
+console.log("header markup");
+{
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    const openingTag = (id) => {
+        const m = html.match(new RegExp(`<[a-z]+\\s[^>]*\\bid="${id}"[^>]*>`));
+        return m ? m[0] : "";
+    };
+    const attr = (tag, name) => {
+        const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`));
+        return m ? m[1] : null;
+    };
+    eq(html.match(/<title>([^<]*)<\/title>/)?.[1], "ddbsh (web)", "the tab title stays 'ddbsh (web)'");
+    check(/<span id="version-label" class="muted"><\/span>/.test(html),
+        "#version-label ships empty (app.js fills it from the engine)");
+    const help = openingTag("help-link");
+    check(help.startsWith("<a "), "#help-link is a link");
+    eq(attr(help, "href"),
+        "https://github.com/awslabs/dynamodb-shell/blob/main/docs/configurations/03-browser-aws.md",
+        "#help-link opens the browser guide on main");
+    eq(attr(help, "target"), "_blank",
+        "#help-link opens a new tab (leaving the page would forget the credentials)");
+    eq((attr(help, "rel") || "").split(/\s+/).sort(), ["noopener", "noreferrer"],
+        "#help-link has rel=\"noopener noreferrer\"");
+    const status = openingTag("busy-status");
+    eq(attr(status, "role"), "status", "#busy-status is a status region");
+    eq(attr(status, "aria-live"), "polite", "#busy-status is a polite live region");
+    const busy = openingTag("busy");
+    check(busy !== "" && attr(busy, "aria-live") === null && attr(busy, "role") === null,
+        "#busy (the ticking text) is not a live region");
 }
 
 // ---- summary ---------------------------------------------------------------

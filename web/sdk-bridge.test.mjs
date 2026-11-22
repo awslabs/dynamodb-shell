@@ -37,10 +37,18 @@ async function rejects(promise, re, label) {
     }
 }
 
-const KEY = "ASIAABCDEFGHIJKLMNOP";
+// Test fixtures. Every value below is fictitious: none was ever issued by AWS
+// and none was ever a valid credential. The key ids are the alphabet
+// (ABCDEFGHIJKLMNOP) behind the ASIA/AKIA prefixes, and SECRET and TOKEN are
+// invented. Every expiry, and every clock (NOW) a test injects, is in 2025, so
+// a value mistaken for a real one would be long expired.
+const KEY = "ASIAABCDEFGHIJKLMNOP";           // short-term shape (accepted)
+const LONG_TERM_KEY = "AKIAABCDEFGHIJKLMNOP"; // long-term shape (refused)
 const SECRET = "s3cr3t/SECRETVALUE+xyz";
 const TOKEN = "TOKENVALUE-session-token-abc";
 const CREDS = { accessKeyId: KEY, secretAccessKey: SECRET, sessionToken: TOKEN };
+const NOW = Date.parse("2025-01-15T12:00:00Z");
+const EXP = "2025-01-15T13:00:00Z"; // one hour after NOW
 
 // A stub HTTP handler: replays scripted responses and records each request.
 function stub(script) {
@@ -162,14 +170,14 @@ console.log("send: refusals");
     eq(calls.length, 0, "no request was made");
 }
 {
-    let t = Date.parse("2026-11-20T12:00:00Z");
+    let t = NOW;
     const { bridge, calls } = bridgeWith([{ status: 200, body: "{}" }], { now: () => t });
     const problems = [];
     bridge.onCredentialProblem((p) => problems.push(p.kind));
-    const r = bridge.setCredentials({ ...CREDS, expiration: new Date("2026-11-20T13:00:00Z") });
+    const r = bridge.setCredentials({ ...CREDS, expiration: new Date(EXP) });
     check(r.ok === true, "unexpired credentials accepted");
-    t = Date.parse("2026-11-20T13:00:01Z");
-    await rejects(bridge.send("ListTables", "{}"), /credentials expired at 2026-11-20T13:00:00.000Z/,
+    t = Date.parse("2025-01-15T13:00:01Z");
+    await rejects(bridge.send("ListTables", "{}"), /credentials expired at 2025-01-15T13:00:00.000Z/,
         "locally expired credentials refused");
     eq(problems, ["expired"], "expiry callback fired");
     eq(calls.length, 0, "no request with expired credentials");
@@ -185,7 +193,7 @@ console.log("send: refusals");
 }
 {
     const { bridge } = bridgeWith([{ status: 200, body: "{}" }]);
-    const r = bridge.setCredentials({ accessKeyId: "AKIAABCDEFGHIJKLMNOP", secretAccessKey: "x", sessionToken: "y" });
+    const r = bridge.setCredentials({ accessKeyId: LONG_TERM_KEY, secretAccessKey: "x", sessionToken: "y" });
     check(r.ok === false && /long-term/.test(r.message), "setCredentials re-validates (AKIA refused)");
 }
 
@@ -258,15 +266,18 @@ console.log("middleware host check");
 // ---- descriptor + secrecy -----------------------------------------------------
 console.log("descriptor");
 {
-    const { bridge } = bridgeWith([{ status: 200, body: "{}" }]);
+    // A fixed 2025 clock: with the real clock (bridgeWith's default Date.now) a
+    // 2025 expiry would be refused as already expired.
+    const { bridge } = bridgeWith([{ status: 200, body: "{}" }], { now: () => NOW });
     eq(bridge.descriptor(),
         `wire/aws-sdk-js ${SDK_VERSION} -> https://dynamodb.us-east-1.amazonaws.com (default); credentials none`,
         "descriptor without credentials");
-    bridge.setCredentials({ ...CREDS, expiration: new Date("2099-01-01T00:00:00Z") });
+    const set = bridge.setCredentials({ ...CREDS, expiration: new Date(EXP) });
+    check(set.ok === true, "fixture credentials accepted under the injected clock");
     bridge.connect("us-east-1", "https://dynamodb-fips.us-east-1.amazonaws.com");
     const d = bridge.descriptor();
     eq(d, `wire/aws-sdk-js ${SDK_VERSION} -> https://dynamodb-fips.us-east-1.amazonaws.com; ` +
-        "credentials ASIA…MNOP expires 2099-01-01T00:00:00.000Z", "descriptor with credentials");
+        "credentials ASIA…MNOP expires 2025-01-15T13:00:00.000Z", "descriptor with credentials");
     check(!d.includes(SECRET) && !d.includes(TOKEN) && !d.includes(KEY), "descriptor reveals no secret, token or full key id");
     const all = [d, JSON.stringify(bridge.credentialSummary()), bridge.connect("x", "")].join("\n");
     check(!all.includes(SECRET) && !all.includes(TOKEN), "summaries and messages reveal no secret or token");

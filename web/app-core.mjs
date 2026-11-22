@@ -13,9 +13,18 @@
 //   - buildTranscriptEntries: a RunResult + echoed input -> ordered render blocks.
 //   - parseCredentials / validateCredentials / credentialStatus /
 //     maskAccessKeyId:        short-term credential handling (P9, D-P9-3).
+//   - credentialEnvironmentProblem: whether this window may take credentials
+//                             at all (secure context, not framed, not opened
+//                             by another page's script; P10, G1).
 //   - fileToSubmission:       file text -> one submission (the `-f`/source path).
-//   - createHistory:          the command-history ring (push/cap/dedup/traverse).
+//   - createHistory:          the command-history ring (push/cap/dedup/traverse/clear).
+//   - historyRemovedElsewhere: whether a `storage` event means another tab
+//                             deleted the saved history (P10).
 //   - createRunGuard:         the one-submission-in-flight re-entrancy guard.
+//   - versionLabel:           the header's "version <v>" text, read from the
+//                             engine the page loaded (P10, D-P10-14).
+//   - busyText / createBusyClock: the header's "running… <N>s" indicator and
+//                             its start/finish announcements (P10, D-P10-16).
 //
 // No engine logic crosses into JS (tenet 3): the faithful shell text is produced
 // by the engine's Renderer and arrives verbatim in RunResult.segments; this
@@ -305,6 +314,41 @@ export function credentialStatus(c, nowMs = Date.now()) {
 }
 
 /**
+ * Decide whether this window may accept credentials at all (P10, G1). The
+ * page refuses them, before anything is pasted, when:
+ *   - it is inside a frame (`window.top !== window.self`): the framing page may
+ *     overlay or restyle it to capture what is typed (clickjacking). A host
+ *     sends `frame-ancestors 'none'` to stop framing; this check also covers a
+ *     host that cannot send that header;
+ *   - another page's script opened it (`window.opener` is set): a same-origin
+ *     opener has full access to this window's DOM, including the credentials
+ *     text box;
+ *   - it is not in a secure context (not https:// or http://localhost): the
+ *     page could have been modified in transit.
+ * The caller gathers the three facts from `window` (see app.js); this function
+ * only decides, so the rules are unit-testable without a DOM.
+ *
+ * @param {{secureContext: boolean, framed: boolean, opened: boolean}} env
+ * @returns {string|null} null when credentials may be used, else the reason
+ *          to show (which also says what to do instead).
+ */
+export function credentialEnvironmentProblem({ secureContext, framed, opened } = {}) {
+    if (framed !== false) {
+        return "credentials are refused: this page is shown inside a frame on another page, " +
+            "which could capture what you type; open the page directly in its own tab";
+    }
+    if (opened !== false) {
+        return "credentials are refused: another page's script opened this window and can reach " +
+            "into it; open the page directly by typing or pasting its address";
+    }
+    if (secureContext !== true) {
+        return "credentials can only be used on https:// or http://localhost; " +
+            "serve over HTTPS or use an SSH tunnel";
+    }
+    return null;
+}
+
+/**
  * Convert uploaded file text into one submission (the browser equivalent of the
  * CLI's `-f` / `source`). The whole file runs as a single submission; the engine
  * splits the `;`-terminated statements. A trailing newline is harmless (the
@@ -332,9 +376,12 @@ export function fileToSubmission(text) {
  *   - next(): walks toward newer entries (ArrowDown); returns null past the
  *     newest (the live draft).
  *   - list(): a copy of the entries, oldest first (for persistence).
+ *   - clear(): drops every entry and resets the recall cursor (the page's
+ *     "Clear history" button; P10, D-P10-6).
  *
  * The caller owns persistence (e.g. localStorage): seed via `entries` and write
- * `list()` back after each push. This module touches no storage.
+ * `list()` back after each push (and remove the stored copy on clear()). This
+ * module touches no storage.
  *
  * @param {{limit?: number, entries?: string[]}} [opts]
  */
@@ -395,11 +442,38 @@ export function createHistory({ limit = 500, entries = [] } = {}) {
             return items.slice();
         },
 
+        /** Drop every entry and reset the recall cursor to the (empty) draft. */
+        clear() {
+            items.length = 0;
+            cursor = 0;
+        },
+
         /** The number of stored entries. */
         size() {
             return items.length;
         },
     };
+}
+
+/**
+ * Decide whether a `storage` event means another tab of this page deleted the
+ * saved command history (P10): its "Clear history" button removed the key, or
+ * the origin's whole storage area was cleared (the event's `key` is null then).
+ * The tab that receives such an event forgets its in-memory copy too; otherwise
+ * its next command would write the deleted statements back. Browsers deliver
+ * storage events only to the origin's other documents, never to the one that
+ * made the change.
+ *
+ * @param {{key?: string|null, newValue?: string|null}} event  the StorageEvent
+ *        (only `key` and `newValue` are read).
+ * @param {string} historyKey  the storage key of the saved history.
+ * @returns {boolean} true when the saved history is gone.
+ */
+export function historyRemovedElsewhere({ key, newValue } = {}, historyKey) {
+    if (key === null) {
+        return true; // the whole storage area was cleared.
+    }
+    return typeof historyKey === "string" && key === historyKey && newValue === null;
 }
 
 /**
@@ -497,6 +571,154 @@ export function createRunGuard() {
         /** Release the slot. */
         end() {
             inFlight = false;
+        },
+    };
+}
+
+// ---- page header (P10, D-P10-14 / D-P10-16) ---------------------------------
+
+// The engine's version strings: CMake project(VERSION) allows only numeric
+// components, and ddbsh::version() prints two to four of them ("0.12.1").
+const ENGINE_VERSION = /^[0-9]+(\.[0-9]+){1,3}$/;
+
+/**
+ * The version text for the header title, read from the engine the page loaded
+ * (D-P10-14): "version 0.12.1", so the title reads "ddbsh (web) version
+ * 0.12.1". Returns "" (the title stays "ddbsh (web)") when the module has no
+ * `version()` export, which happens when a new app.js meets an older
+ * ddbsh.wasm during an upload, or when the export throws or returns something
+ * that is not a version. The page works either way.
+ *
+ * @param {{version?: () => string} | null} module  the instantiated WASM module.
+ * @returns {string}
+ */
+export function versionLabel(module) {
+    let version;
+    try {
+        version = module && typeof module.version === "function" ? module.version() : undefined;
+    } catch {
+        return "";
+    }
+    return typeof version === "string" && ENGINE_VERSION.test(version) ? `version ${version}` : "";
+}
+
+/**
+ * The whole seconds elapsed between two times (ms), never negative.
+ *
+ * @param {number} startMs
+ * @param {number} nowMs
+ * @returns {number}
+ */
+export function elapsedSeconds(startMs, nowMs) {
+    return Math.max(0, Math.floor((nowMs - startMs) / 1000));
+}
+
+/**
+ * The busy indicator's visible text while a submission runs (D-P10-16):
+ * "running… 0s", "running… 1s", …
+ *
+ * @param {number} seconds  whole seconds elapsed.
+ * @returns {string}
+ */
+export function busyText(seconds) {
+    return `running… ${seconds}s`;
+}
+
+/**
+ * What a screen reader hears when a submission finishes (D-P10-16). The start
+ * is announced as "command started"; the seconds are never announced as they
+ * count.
+ *
+ * @param {number} seconds  whole seconds the submission took.
+ * @returns {string}
+ */
+export function busyFinishedText(seconds) {
+    return `command finished after ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+/**
+ * Create the clock behind the header's busy indicator (D-P10-16). It is
+ * DOM-free: the caller supplies the clock, the frame scheduler and two output
+ * callbacks, so the start/stop behavior is unit-testable with a fake clock.
+ *
+ *   - start(): shows "running… 0s", announces "command started", then checks
+ *     the elapsed time on every animation frame and re-renders when the whole
+ *     seconds change. A second start() while running changes nothing.
+ *   - stop(): cancels the pending frame, hides the indicator (render(null))
+ *     and announces how long the submission took. stop() while idle changes
+ *     nothing.
+ *
+ * Why animation frames rather than a one-second timer: in headless Chromium
+ * 159 a setTimeout due at a whole second sometimes fired about a second late
+ * while a CREATE TABLE waited on DynamoDB, with no long task on the main
+ * thread, so the count skipped a second (P10 developer round). A frame
+ * callback runs on every frame while the page is visible and costs one
+ * comparison; nothing is rendered between whole seconds. In a hidden tab no
+ * frames run and nothing needs drawing; the first frame after the tab shows
+ * again renders the true elapsed seconds.
+ *
+ * @param {{now: () => number,
+ *          requestFrame: (fn: () => void) => unknown,
+ *          cancelFrame: (handle: unknown) => void,
+ *          render: (text: string | null) => void,
+ *          announce: (text: string) => void}} io
+ *        `now` returns milliseconds from a monotonic clock (performance.now
+ *        in the page); `requestFrame`/`cancelFrame` are
+ *        requestAnimationFrame/cancelAnimationFrame; `render(null)` hides the
+ *        indicator.
+ */
+export function createBusyClock({ now, requestFrame, cancelFrame, render, announce }) {
+    let startMs = null; // null while idle.
+    let shownSeconds = -1; // the seconds on screen; -1 while idle.
+    let frame = null;
+
+    function onFrame() {
+        frame = null;
+        if (startMs === null) {
+            return; // stopped while this frame was pending.
+        }
+        const seconds = elapsedSeconds(startMs, now());
+        if (seconds !== shownSeconds) {
+            shownSeconds = seconds;
+            render(busyText(seconds));
+        }
+        frame = requestFrame(onFrame);
+    }
+
+    return {
+        /** True while a submission is being timed. */
+        get running() {
+            return startMs !== null;
+        },
+
+        /** Show the indicator and start counting; false if already running. */
+        start() {
+            if (startMs !== null) {
+                return false;
+            }
+            startMs = now();
+            shownSeconds = 0;
+            render(busyText(0));
+            announce("command started");
+            frame = requestFrame(onFrame);
+            return true;
+        },
+
+        /** Hide the indicator and announce the finish; false if idle. */
+        stop() {
+            if (startMs === null) {
+                return false;
+            }
+            if (frame !== null) {
+                cancelFrame(frame);
+                frame = null;
+            }
+            const seconds = elapsedSeconds(startMs, now());
+            startMs = null;
+            shownSeconds = -1;
+            render(null);
+            announce(busyFinishedText(seconds));
+            return true;
         },
     };
 }

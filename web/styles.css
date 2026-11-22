@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * styles.css — minimal styling for the ddbsh browser edition (P6e UI; P9
- * credentials panel).
+ * credentials panel; P10 header Help link, busy indicator and input height).
  *
  * Monospace throughout so the engine Renderer's byte-exact alignment survives
  * (O-2). Zero runtime dependencies (O-4): plain CSS, no framework.
@@ -22,6 +22,7 @@
     --banner-bg: #5a1d1d;
     --dot-ready: #4ec9b0;
     --dot-loading: #d7ba7d;
+    --link: #4fc1ff;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
 }
 
@@ -105,6 +106,68 @@ body {
     background: var(--dot-ready);
 }
 
+/* ---- header: Help link and busy indicator (P10, D-P10-16 / D-P10-17) ------ */
+.help-link {
+    color: var(--link);
+    text-decoration: none;
+}
+
+.help-link:hover,
+.help-link:focus-visible {
+    text-decoration: underline;
+}
+
+/* Hidden while idle; app.js adds .busy-running while a submission runs.
+   margin-left: auto puts it at the right end of the header row. */
+.busy {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    color: var(--dot-loading);
+}
+
+.busy.busy-running {
+    display: inline-flex;
+}
+
+.spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: ddbsh-spin 0.8s linear infinite;
+}
+
+@keyframes ddbsh-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* The spinner stands still for users who ask for less motion; the seconds
+   still count. */
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        animation: none;
+    }
+}
+
+/* Read by screen readers, not shown. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
 .result-pane {
     flex: 1 1 auto;
     overflow-y: auto;
@@ -144,9 +207,15 @@ body {
     align-items: flex-end;
 }
 
+/* The input pane opens at 20% of the window height (D-P10-18). It can be
+   dragged up to 40% and never shrinks below three lines: 3 x the 1.35
+   line-height, plus the 6px top and bottom padding and the 1px borders
+   (border-box sizing). min-height wins over height and max-height in a short
+   window. */
 .editor {
     flex: 1 1 auto;
-    min-height: 3.2em;
+    height: 20vh;
+    min-height: calc(4.05em + 14px);
     max-height: 40vh;
     resize: vertical;
     background: var(--bg);
@@ -194,14 +263,24 @@ body {
     cursor: default;
 }
 
-#clear-btn {
+#clear-btn,
+#clear-history-btn {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg);
 }
 
-#clear-btn:hover {
+#clear-btn:hover,
+#clear-history-btn:hover {
     background: rgba(255, 255, 255, 0.06);
+}
+
+.toolbar-status {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    text-align: center;
+    min-height: 1em;
 }
 
 /* ---- credentials panel (P9) ---------------------------------------------- */
@@ -253,7 +332,9 @@ body {
     border: 1px solid var(--border);
 }
 
-.cred-actions select:disabled {
+.cred-actions button:disabled,
+.cred-actions select:disabled,
+.cred-input:disabled {
     opacity: 0.5;
     cursor: default;
 }

@@ -148,6 +148,11 @@ if (indexHtml) {
         "base-uri 'none'",
         "form-action 'none'",
         "object-src 'none'",
+        // Trusted Types (P10, D-P10-12): no string reaches a DOM injection sink
+        // (innerHTML, a script URL, eval-like calls) and no Trusted Types
+        // policy may be created. The page writes text with textContent only.
+        "require-trusted-types-for 'script'",
+        "trusted-types 'none'",
     ].join("; ");
     const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
     writeFileSync(indexHtml, html.replace(re, `$1\n    ${meta}\n    $2`));

@@ -174,9 +174,24 @@ set_property(TEST icd-create-table-32 PROPERTY PASS_REGULAR_EXPRESSION "13000 RC
 add_test( NAME icd-create-table-33
           COMMAND ddbshtest -c "alter table icdwarmthroughput0 set warm throughput (4000 wcu, 14000 rcu)")
 
+# A warm-throughput update can finish within a second, so right after the ALTER
+# the table's Warm Throughput line shows either the old values with
+# Status UPDATING or the new values with Status ACTIVE (the original expected
+# UPDATING only). 34 accepts either state on the table's line (the leading
+# newline excludes the GSI lines, which carry ", Warm Throughput: (" mid-line);
+# 34a waits until the update has finished, so 35 does not alter a table whose
+# update is still running; 34b proves the ALTER took effect. 36 still covers
+# how Status UPDATING renders. No .exp file changes. Human-approved: D-P10-19
+# (discussion 2026-11-21-P10-01, Human Session 2026-11-22T05:35Z).
 add_test( NAME icd-create-table-34
           COMMAND ddbshtest -c "describe icdwarmthroughput0" )
-set_property(TEST icd-create-table-34 PROPERTY PASS_REGULAR_EXPRESSION "Status UPDATING")
+set_property(TEST icd-create-table-34 PROPERTY PASS_REGULAR_EXPRESSION "\nWarm Throughput: [(][0-9]+ RCU, [0-9]+ WCU, Status (UPDATING|ACTIVE)[)]")
+
+add_test( NAME icd-create-table-34a COMMAND ${GOLDEN_DIR}/ddbsh-wait warm-throughput-active icdwarmthroughput0)
+
+add_test( NAME icd-create-table-34b
+          COMMAND ddbshtest -c "describe icdwarmthroughput0" )
+set_property(TEST icd-create-table-34b PROPERTY PASS_REGULAR_EXPRESSION "\nWarm Throughput: [(]14000 RCU, 4000 WCU, Status ACTIVE[)]")
 
 add_test( NAME icd-create-table-35
           COMMAND ddbshtest -c "alter table icdwarmthroughput0 (a number) create gsi icdwt0gsi0 on (a hash) projecting all \

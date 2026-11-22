@@ -1,0 +1,291 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# web/hosting/aws/ddbsh-web-hosting.yaml — host the ddbsh browser edition on
+# its own origin: a private S3 bucket read only by a CloudFront distribution
+# through Origin Access Control (OAC). See docs/HOSTING.md for the walkthrough.
+#
+# What it creates:
+#   SiteBucket            private (all four Block Public Access settings,
+#                         BucketOwnerEnforced, SSE-S3, versioning); old object
+#                         versions expire after 90 days
+#   SiteBucketPolicy      s3:GetObject for cloudfront.amazonaws.com only when
+#                         the request comes from THIS distribution
+#                         (AWS:SourceArn); denies any request not using TLS
+#   OriginAccessControl   CloudFront signs every origin request with SigV4
+#   ResponseHeadersPolicy the security headers the page relies on, chiefly
+#                         CSP frame-ancestors 'none' (a <meta> CSP cannot set
+#                         it; the page's own CSP stays in index.html)
+#   Distribution          HTTPS only (HTTP redirects), index.html as the root
+#                         object, HTTP/2 and HTTP/3, the managed
+#                         CachingOptimized cache policy, compression on
+#   DeployerPolicy        optional (CreateDeployerPolicy=true), not attached
+#                         to anyone: only what an upload needs (list the
+#                         bucket, put/delete its objects, invalidate the
+#                         distribution)
+#
+# Access logging is off; add it to the distribution if you need it.
+#
+# Deploy (the stack can be in any region; CloudFront itself is global):
+#   aws cloudformation deploy --stack-name <name> \
+#       --template-file web/hosting/aws/ddbsh-web-hosting.yaml
+# Then upload the packaged bundle and invalidate the cache (docs/HOSTING.md).
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ddbsh browser edition hosting: a private S3 bucket behind CloudFront with
+  Origin Access Control and security response headers.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional custom domain for the page (for example ddbsh.example.com).
+      Leave empty to use only the distribution's *.cloudfront.net name. When
+      set, AcmCertificateArn is required.
+    AllowedPattern: "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+    ConstraintDescription: a lowercase DNS name such as ddbsh.example.com, or empty
+  AcmCertificateArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of an ACM certificate for DomainName. CloudFront accepts only
+      certificates issued in us-east-1. Leave empty when DomainName is empty.
+    AllowedPattern: "^$|^arn:aws[a-z-]*:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]+$"
+    ConstraintDescription: an ACM certificate ARN in us-east-1, or empty
+  CreateDeployerPolicy:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: >-
+      true creates an unattached IAM managed policy, <stack name>-deployer,
+      with only the permissions an upload needs. Attach it yourself to the
+      role or user that publishes the page.
+  Purpose:
+    Type: String
+    Default: hosting
+    Description: Value of the purpose tag on the bucket and the distribution.
+    AllowedPattern: "^[A-Za-z0-9 _.:/=+@-]{1,256}$"
+
+Rules:
+  CustomDomainNeedsCertificate:
+    RuleCondition: !Not [!Equals [!Ref DomainName, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AcmCertificateArn, ""]]
+        AssertDescription: AcmCertificateArn (an ACM certificate in us-east-1) is required when DomainName is set.
+  CertificateNeedsCustomDomain:
+    RuleCondition: !Not [!Equals [!Ref AcmCertificateArn, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref DomainName, ""]]
+        AssertDescription: DomainName is required when AcmCertificateArn is set.
+
+Conditions:
+  # Both are required together (see Rules); testing both lets cfn-lint see
+  # that neither is empty where they are used.
+  HasCustomDomain: !And
+    - !Not [!Equals [!Ref DomainName, ""]]
+    - !Not [!Equals [!Ref AcmCertificateArn, ""]]
+  CreateDeployer: !Equals [!Ref CreateDeployerPolicy, "true"]
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: project
+          Value: ddbsh-web
+        - Key: purpose
+          Value: !Ref Purpose
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudFrontReadsForThisDistributionOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+          - Sid: DenyRequestsWithoutTls
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt SiteBucket.Arn
+              - !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac"
+        Description: ddbsh browser edition; CloudFront signs requests to the private bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-headers"
+        Comment: ddbsh browser edition security headers
+        SecurityHeadersConfig:
+          # Browsers enforce this header CSP together with the <meta> CSP in
+          # index.html. Only frame-ancestors is needed here: a <meta> CSP cannot
+          # carry it, and the full page policy is too long for a header policy.
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "frame-ancestors 'none'"
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: false
+            Preload: false
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: no-referrer
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: Cross-Origin-Opener-Policy
+              Value: same-origin
+              Override: true
+            - Header: Cross-Origin-Resource-Policy
+              Value: same-origin
+              Override: true
+            # Powerful features the page never uses.
+            - Header: Permissions-Policy
+              Value: >-
+                accelerometer=(), autoplay=(), camera=(), display-capture=(),
+                encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(),
+                hid=(), idle-detection=(), magnetometer=(), microphone=(),
+                midi=(), payment=(), picture-in-picture=(),
+                publickey-credentials-get=(), screen-wake-lock=(), serial=(),
+                usb=(), xr-spatial-tracking=()
+              Override: true
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "ddbsh browser edition (${AWS::StackName})"
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Aliases: !If [HasCustomDomain, [!Ref DomainName], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref AcmCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: site-bucket
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: site-bucket
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          # Managed-CachingOptimized. It honors the Cache-Control the upload
+          # sets on each object: no-cache on every file (docs/HOSTING.md
+          # step 3), because the file names carry no version.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !GetAtt ResponseHeadersPolicy.Id
+          Compress: true
+      Tags:
+        - Key: project
+          Value: ddbsh-web
+        - Key: purpose
+          Value: !Ref Purpose
+
+  DeployerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: CreateDeployer
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-deployer"
+      Description: Publish the ddbsh browser edition to this stack's bucket and invalidate its distribution.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListTheSiteBucket
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt SiteBucket.Arn
+          - Sid: WriteTheSiteObjects
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+          - Sid: InvalidateTheDistribution
+            Effect: Allow
+            Action: cloudfront:CreateInvalidation
+            Resource: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+Outputs:
+  SiteUrl:
+    Description: The page's address.
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${DomainName}/"
+      - !Sub "https://${Distribution.DomainName}/"
+  DistributionDomainName:
+    Description: The distribution's *.cloudfront.net name (the CNAME target for DomainName).
+    Value: !GetAtt Distribution.DomainName
+  DistributionId:
+    Description: The distribution id (for create-invalidation).
+    Value: !Ref Distribution
+  BucketName:
+    Description: The private bucket the page is uploaded to.
+    Value: !Ref SiteBucket
+  BucketRegionalDomainName:
+    Description: The bucket's own S3 endpoint; an anonymous request to it must be refused (403).
+    Value: !GetAtt SiteBucket.RegionalDomainName
+  DeployerPolicyArn:
+    Condition: CreateDeployer
+    Description: The unattached deployer managed policy.
+    Value: !Ref DeployerPolicy

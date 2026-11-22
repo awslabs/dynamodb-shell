@@ -13,24 +13,41 @@
 //
 // Requests go from this tab straight to Amazon DynamoDB: the engine serializes
 // each request, the vendored AWS SDK for JavaScript signs and sends it (P9,
-// D-P9-1). Credentials (D-P9-3 / D-P9-4):
+// D-P9-1). Credentials (D-P9-3 / D-P9-4; P10):
 //   * short-term only (ASIA… + session token); pasted into the credentials
 //     panel, parsed + validated by app-core, held only inside the bridge;
 //   * the textarea is cleared after every "Use credentials", whatever the
 //     outcome; nothing credential-related is stored, logged or put in the URL;
-//   * refused outside a secure context (https:// or http://localhost,
-//     D-P9-02-7).
-// The only localStorage use is the command history (editor submissions only).
+//   * the textarea and "Use credentials" ship disabled in index.html, so a
+//     page whose script never runs never invites a paste; start() enables
+//     them only in a secure context (https:// or http://localhost,
+//     D-P9-02-7), outside any frame, and when no other page's script opened
+//     this window (P10, G1; app-core credentialEnvironmentProblem).
+//     "Use credentials" checks again and fails closed;
+//   * wiped on pagehide, so the back/forward cache never restores them (P10).
+// The only localStorage use is the command history (editor submissions only),
+// which the "Clear history" button removes, in this tab and, through the
+// storage event, in the page's other open tabs (P10, D-P10-6).
+//
+// The header (P10): the title carries the engine's version (versionLabel,
+// D-P10-14); the backend label reads "Amazon DynamoDB" (D-P10-15); a busy
+// indicator counts the seconds while a submission runs and announces its start
+// and finish to screen readers (createBusyClock, D-P10-16); the Help link is
+// static markup in index.html (D-P10-17).
 
 import {
     buildPrompt,
     buildTranscriptEntries,
+    createBusyClock,
+    credentialEnvironmentProblem,
     credentialStatus,
     fileToSubmission,
     createHistory,
     createHistoryRecall,
     createRunGuard,
+    historyRemovedElsewhere,
     parseCredentials,
+    versionLabel,
 } from "./app-core.mjs";
 import { createSdkBridge, installHooks } from "./sdk-bridge.mjs";
 import * as sdk from "./vendor/aws-sdk/aws-sdk-dynamodb.mjs";
@@ -39,9 +56,13 @@ import { ALLOWED_HOSTS, REGIONS, SDK_VERSION } from "./vendor/aws-sdk/allowed-ho
 // ---- DOM handles -----------------------------------------------------------
 const els = {
     fileBanner: document.getElementById("file-protocol-banner"),
+    versionLabel: document.getElementById("version-label"),
     regionLabel: document.getElementById("region-label"),
     backendLabel: document.getElementById("backend-label"),
     backendDot: document.getElementById("backend-dot"),
+    busy: document.getElementById("busy"),
+    busyText: document.getElementById("busy-text"),
+    busyStatus: document.getElementById("busy-status"),
     credStatus: document.getElementById("cred-status"),
     credPanel: document.getElementById("cred-panel"),
     credInput: document.getElementById("cred-input"),
@@ -55,6 +76,8 @@ const els = {
     fileLabel: document.getElementById("file-label"),
     fileInput: document.getElementById("file-input"),
     clearBtn: document.getElementById("clear-btn"),
+    clearHistoryBtn: document.getElementById("clear-history-btn"),
+    toolbarStatus: document.getElementById("toolbar-status"),
 };
 
 const HISTORY_KEY = "ddbsh.history";
@@ -74,6 +97,23 @@ const bridge = createSdkBridge({
     region: DEFAULT_REGION,
 });
 
+// The header's busy indicator (D-P10-16). textContent and classList only
+// (Trusted Types, D-P6e-6). performance.now() is monotonic, so a change of the
+// system clock does not skew the count; animation frames, not a timer, drive
+// the re-render (see createBusyClock).
+const busyClock = createBusyClock({
+    now: () => performance.now(),
+    requestFrame: (fn) => window.requestAnimationFrame(fn),
+    cancelFrame: (handle) => window.cancelAnimationFrame(handle),
+    render: (text) => {
+        els.busyText.textContent = text === null ? "" : text;
+        els.busy.classList.toggle("busy-running", text !== null);
+    },
+    announce: (text) => {
+        els.busyStatus.textContent = text;
+    },
+});
+
 // ---- history persistence (localStorage; editor submissions only) -----------
 function loadHistory() {
     try {
@@ -90,6 +130,32 @@ function persistHistory() {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(history.list()));
     } catch {
         // storage unavailable (private mode / quota): history is in-memory only.
+    }
+}
+
+// "Clear history" (D-P10-6): forget the stored copy and the in-memory ring.
+// Saving stays on; the next command starts a new history.
+function onClearHistory() {
+    history.clear();
+    recall.reset();
+    try {
+        window.localStorage.removeItem(HISTORY_KEY);
+    } catch {
+        // storage unavailable: there was no stored copy to remove.
+    }
+    els.toolbarStatus.textContent = "history cleared";
+    els.editor.focus();
+}
+
+// Another open tab of this page pressed "Clear history" (or cleared the
+// origin's storage). Forget this tab's copy too: persistHistory writes the
+// whole ring back after every command, so this tab's next command would
+// otherwise restore the deleted statements.
+function onStorageChanged(ev) {
+    if (historyRemovedElsewhere(ev, HISTORY_KEY)) {
+        history.clear();
+        recall.reset();
+        els.toolbarStatus.textContent = "history cleared in another tab";
     }
 }
 
@@ -113,6 +179,21 @@ function appendEntries(entries) {
 }
 
 // ---- credentials panel -----------------------------------------------------
+// The three facts credentialEnvironmentProblem decides on. Comparing
+// window.top with window.self and reading window.opener are allowed even when
+// the other window is cross-origin.
+function windowEnvironment() {
+    let framed = true;
+    let opened = true;
+    try {
+        framed = window.top !== window.self;
+        opened = window.opener !== null && window.opener !== undefined;
+    } catch {
+        // cannot tell: treat as framed / opened (fail closed).
+    }
+    return { secureContext: window.isSecureContext === true, framed, opened };
+}
+
 function refreshCredStatus() {
     els.credStatus.textContent = credentialStatus(bridge.credentialSummary());
 }
@@ -127,9 +208,9 @@ function onUseCredentials() {
     // Clear the secret from the DOM whatever happens next, so it is not kept in
     // the page or restored by back/forward navigation.
     els.credInput.value = "";
-    if (!window.isSecureContext) {
-        setCredMessage("credentials can only be used on https:// or http://localhost; " +
-            "serve over HTTPS or use an SSH tunnel", true);
+    const problem = credentialEnvironmentProblem(windowEnvironment());
+    if (problem !== null) {
+        setCredMessage(problem, true); // fail closed, even if startup's check was bypassed.
         return;
     }
     const parsed = parseCredentials(text);
@@ -154,6 +235,19 @@ function onForgetCredentials() {
     bridge.clearCredentials();
     refreshCredStatus();
     setCredMessage("credentials forgotten", false);
+}
+
+// pagehide fires when the page is put into the back/forward cache (and on
+// unload). Forgetting the credentials then means a restored page never has
+// them; the message tells the user why on return.
+function onPageHide() {
+    els.credInput.value = "";
+    if (bridge.credentialSummary() !== null) {
+        bridge.clearCredentials();
+        refreshCredStatus();
+        setCredMessage("credentials were forgotten when you left the page; paste them again", false);
+        els.credPanel.open = true;
+    }
 }
 
 bridge.onCredentialProblem(({ kind, detail }) => {
@@ -211,10 +305,10 @@ async function submit(text, { addToHistory }) {
         return; // a submission is already in flight; ignore this one.
     }
     setBusy(true);
-    // Capture the prompt BEFORE running: a CONNECT inside the submission may
-    // change the region, but the echo reflects the region as typed.
-    const prompt = buildPrompt(session.region(), session.endpointOverridden());
     try {
+        // Capture the prompt BEFORE running: a CONNECT inside the submission
+        // may change the region, but the echo reflects the region as typed.
+        const prompt = buildPrompt(session.region(), session.endpointOverridden());
         let result = session.run(text);
         if (result && typeof result.then === "function") {
             result = await result; // Asyncify may surface run() as a Promise.
@@ -231,9 +325,9 @@ async function submit(text, { addToHistory }) {
                          kind: "stderr" }]);
     } finally {
         guard.end();
+        setBusy(false); // first, so the busy indicator clears even if a refresh below throws.
         refreshRegion(); // CONNECT may have changed the region live.
         refreshCredStatus();
-        setBusy(false);
     }
 }
 
@@ -247,10 +341,18 @@ function refreshRegion() {
 }
 
 // ---- UI enable/disable -----------------------------------------------------
+// setBusy(true) runs right after the run guard is claimed and setBusy(false)
+// in submit()'s finally, so the busy indicator covers Run, Ctrl/Cmd-Enter and
+// file runs, and clears on success, an engine error or an internal error.
 function setBusy(busy) {
     els.runBtn.disabled = busy;
     els.fileInput.disabled = busy;
     els.fileLabel.setAttribute("aria-disabled", String(busy));
+    if (busy) {
+        busyClock.start();
+    } else {
+        busyClock.stop();
+    }
 }
 
 function setReady() {
@@ -258,7 +360,8 @@ function setReady() {
     els.runBtn.disabled = false;
     els.fileInput.disabled = false;
     els.fileLabel.setAttribute("aria-disabled", "false");
-    els.backendLabel.textContent = `Amazon DynamoDB (AWS SDK for JavaScript ${SDK_VERSION})`;
+    els.versionLabel.textContent = versionLabel(Module);
+    els.backendLabel.textContent = "Amazon DynamoDB";
     els.backendDot.className = "dot dot-ready";
     refreshRegion();
     refreshCredStatus();
@@ -286,6 +389,7 @@ function runFromEditor() {
         return;
     }
     els.editor.value = "";
+    els.toolbarStatus.textContent = "";
     recall.reset();
     submit(text, { addToHistory: true });
 }
@@ -356,16 +460,26 @@ async function start() {
     fillRegionSelect();
     els.runBtn.addEventListener("click", runFromEditor);
     els.clearBtn.addEventListener("click", onClear);
+    els.clearHistoryBtn.addEventListener("click", onClearHistory);
     els.editor.addEventListener("keydown", onEditorKeydown);
     els.editor.addEventListener("input", onEditorInput);
     els.fileInput.addEventListener("change", onFileChosen);
     els.credUseBtn.addEventListener("click", onUseCredentials);
     els.credForgetBtn.addEventListener("click", onForgetCredentials);
     els.regionSelect.addEventListener("change", refreshRegion);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("storage", onStorageChanged);
 
-    if (!window.isSecureContext) {
-        setCredMessage("this page is not in a secure context; credentials can only be used on " +
-            "https:// or http://localhost (serve over HTTPS or use an SSH tunnel)", true);
+    // The credentials controls ship disabled (index.html). Enable them only
+    // where credentials are safe to use; where they would be at risk (framed,
+    // opened by another page's script, or not a secure context) leave them
+    // disabled and say why. onUseCredentials checks again.
+    const problem = credentialEnvironmentProblem(windowEnvironment());
+    if (problem === null) {
+        els.credInput.disabled = false;
+        els.credUseBtn.disabled = false;
+    } else {
+        setCredMessage(problem, true);
     }
 
     try {
@@ -374,6 +488,10 @@ async function start() {
         installHooks(Module, bridge);
         setReady();
     } catch (e) {
+        // Without the engine nothing can use credentials: disable the panel
+        // again so it does not invite a paste.
+        els.credInput.disabled = true;
+        els.credUseBtn.disabled = true;
         els.backendLabel.textContent = "failed to load";
         els.backendDot.className = "dot";
         appendEntries([{ text: `failed to initialize ddbsh: ${e && e.message ? e.message : e}\n`,

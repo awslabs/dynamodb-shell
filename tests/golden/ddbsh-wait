@@ -29,6 +29,12 @@
 #   ddbsh-wait pitr <table> <ENABLED|DISABLED>
 #       Wait until the table's PointInTimeRecoveryStatus equals the target.
 #
+#   ddbsh-wait warm-throughput-active <table>
+#       Wait until TableStatus == ACTIVE and the table's WarmThroughput.Status
+#       == ACTIVE, i.e. an ALTER ... SET WARM THROUGHPUT has finished.
+#       table-settled does not cover this: during the update the table can
+#       stay ACTIVE while its warm throughput is UPDATING (D-P10-19).
+#
 #   ddbsh-wait replica-active <table> <primary-region> <replica-region>
 #       Global-tables settling: poll DescribeTable in <primary-region> until the
 #       replica in <replica-region> reports ReplicaStatus == ACTIVE (i.e. the
@@ -76,7 +82,7 @@ die() {
 }
 
 MODE="${1:-}"
-[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|pitr|replica-active|replica-gone|scan-count|retry-cmd> ..."
+[ -n "$MODE" ] || die "usage: ddbsh-wait <table-settled|pitr|warm-throughput-active|replica-active|replica-gone|scan-count|retry-cmd> ..."
 
 # retry-cmd is handled separately: it takes a command, not a table, and does
 # not itself query the control plane.
@@ -133,6 +139,15 @@ pitr_matches() {
     [ "$status" = "$want" ]
 }
 
+warm_throughput_active() {
+    # Both statuses in one DescribeTable call ("ACTIVE<TAB>ACTIVE" when done). A
+    # table without warm throughput prints "None" for it, so this never
+    # succeeds on such a table and times out instead of passing by accident.
+    local statuses
+    statuses="$(describe_table_query '[Table.TableStatus, Table.WarmThroughput.Status]')"
+    [ "$statuses" = "$(printf 'ACTIVE\tACTIVE')" ]
+}
+
 replica_active() {
     # $1 = replica region name. Poll DescribeTable in $REGION (the primary) and
     # read the ReplicaStatus for the requested replica region. A table with no
@@ -177,6 +192,10 @@ case "$MODE" in
         check() { pitr_matches "$WANT"; }
         desc="table $TABLE PITR to reach $WANT"
         ;;
+    warm-throughput-active)
+        check() { warm_throughput_active; }
+        desc="table $TABLE and its warm throughput to be ACTIVE in $REGION"
+        ;;
     replica-active)
         PRIMARY="${3:-}"
         REPLICA="${4:-}"
@@ -204,7 +223,7 @@ case "$MODE" in
         desc="table $TABLE in $REGION to hold $WANT_COUNT items"
         ;;
     *)
-        die "unknown mode: $MODE (expected table-settled|pitr|replica-active|replica-gone|scan-count)"
+        die "unknown mode: $MODE (expected table-settled|pitr|warm-throughput-active|replica-active|replica-gone|scan-count|retry-cmd)"
         ;;
 esac
 

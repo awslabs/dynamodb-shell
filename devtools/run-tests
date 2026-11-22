@@ -42,6 +42,10 @@
 #                                          # browser edition (devtools/run-web-golden)
 #   devtools/run-tests --web-smoke         # the browser edition's quick gates
 #                                          # (devtools/run-web-smoke)
+#   devtools/run-tests --live-sample       # also build + run the live embedding
+#                                          # tests (opt-in; creates a real table)
+#   devtools/run-tests --help              # print this usage and exit; builds,
+#                                          # runs and writes nothing (also -h)
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
 #
 # Modes:
@@ -67,9 +71,17 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Print the header comment from "Usage:" to its end (Usage, Modes, Env
+# overrides, WARNING) without the leading "# ".
+usage() {
+    sed -n '/^# Usage:/,/^$/{s/^# \{0,1\}//;p;}' "${BASH_SOURCE[0]}"
+}
+
 # --- Argument parsing -------------------------------------------------------
 # Optional --suite <label>; --full-engine selects the exposure mode; all other
-# args pass through to ctest.
+# args pass through to ctest. -h / --help print the usage and exit 0 before
+# anything is built, echoed or written: passed through to ctest, `--help` ran no
+# test but still wrote this HEAD's summary artifact over the real one (P10 N21).
 SUITE=""
 FULL_ENGINE=0
 # --live-sample (opt-in): additionally build + run the LIVE embedding tests —
@@ -113,6 +125,10 @@ while [ $# -gt 0 ]; do
         --web-smoke)
             WEB_SMOKE=1
             shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
             ;;
         *)
             CTEST_ARGS+=("$1")

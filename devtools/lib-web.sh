@@ -9,10 +9,12 @@
 #                        scripts, put emcc/emcmake and emsdk's Node on PATH, and
 #                        set NODE_BIN (Node >= 20 is required by the SDK bundle).
 #   web_build_bundle     configure (once) + build the wasm-release preset and
-#                        set WEB_OUT to the staged static bundle dir.
+#                        its packaging step (ddbsh-web-package), and set
+#                        WEB_OUT to the staged static bundle dir.
 #   web_offline_gates    run the offline web gates against WEB_OUT: the glue
-#                        no-eval check (D-P9-02-9), app-core.test.mjs and
-#                        sdk-bridge.test.mjs. Returns nonzero on any failure.
+#                        no-eval check (D-P9-02-9), app-core.test.mjs,
+#                        sdk-bridge.test.mjs and package.test.mjs. Returns
+#                        nonzero on any failure.
 #
 # Env overrides: EMSDK (emsdk root; default $HOME/emsdk), EMSDK_PYTHON,
 # DDBSH_WASM_BUILD_DIR.
@@ -62,6 +64,9 @@ web_build_bundle() {
         (cd "$repo" && emcmake cmake --preset wasm-release) || return 1
     fi
     cmake --build "$WASM_BUILD" || return 1
+    # The packaging step (P10): dist/ddbsh-web-<version>/ + zip + SHA256SUMS,
+    # checked by package.test.mjs in web_offline_gates.
+    cmake --build "$WASM_BUILD" --target ddbsh-web-package || return 1
     WEB_OUT="$WASM_BUILD/web"
     local f
     for f in ddbsh.js ddbsh.wasm index.html app.js sdk-bridge.mjs ddbsh-node.mjs \
@@ -86,6 +91,8 @@ web_offline_gates() {
     (cd "$WEB_OUT" && "$NODE_BIN" app-core.test.mjs) || rc=1
     echo "--- sdk-bridge.test.mjs ---"
     (cd "$WEB_OUT" && "$NODE_BIN" sdk-bridge.test.mjs) || rc=1
+    echo "--- package.test.mjs ---"
+    (cd "$WEB_OUT" && "$NODE_BIN" package.test.mjs) || rc=1
     return $rc
 }
 

@@ -52,6 +52,7 @@ incurring cost.
 
 Each configuration has its own page (linked from the table above). The browser
 edition against ExtendDB is not available; use the native binary for ExtendDB.
+To publish the browser edition for others, see [HOSTING](../HOSTING.md).
 Developer details for the browser edition are in
 [`web/README.md`](../../web/README.md).
 

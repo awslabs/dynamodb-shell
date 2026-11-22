@@ -1,0 +1,31 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# web/bundle-files.txt - the allowlist of files a host publishes for the
+# browser edition (P10, G4). The packaging step (web/package.cmake, CMake
+# target ddbsh-web-package) copies exactly these files, relative to the staged
+# build output (build-preset/wasm-release/web/), into
+# build-preset/wasm-release/dist/ddbsh-web-<version>/. Nothing else in the build
+# folder is published: not the Node shim, the tests, package.json, CMakeFiles/
+# or cmake_install.cmake.
+#
+# The list is what the page loads, plus the third-party license notices:
+#   index.html loads styles.css and app.js; app.js imports app-core.mjs,
+#   sdk-bridge.mjs and the two vendored SDK modules, and loads ddbsh.js, which
+#   fetches ddbsh.wasm. web/package.test.mjs fails if the page's load graph and
+#   this list drift apart, or if the packaged folder differs from this list.
+#
+# One path per line, relative, forward slashes. Blank lines and lines starting
+# with # are ignored.
+
+index.html
+styles.css
+app.js
+app-core.mjs
+sdk-bridge.mjs
+ddbsh.js
+ddbsh.wasm
+vendor/aws-sdk/aws-sdk-dynamodb.mjs
+vendor/aws-sdk/allowed-hosts.mjs
+vendor/aws-sdk/PROVENANCE.json
+vendor/aws-sdk/THIRD-PARTY-NOTICES.txt

@@ -7,9 +7,9 @@ ddbsh presents the user with a simple command line interface. Here the user can 
 It is also an embeddable **C++23 library** with an SDK-free, terminal-free engine
 (lexer, parser, command model, expression engine, SQL→API planner, execution,
 and output/EXPLAIN formatting), a thin `ddbsh` command that wraps it, and a
-browser/WebAssembly build with a web UI. Current version: **0.12.0**. The engine
-drives the full standard `ddbsh` command surface end to end against real
-DynamoDB; global tables are the sole deferred family.
+browser/WebAssembly build with a web UI. Current version: **0.12.1**. The engine
+drives the full standard `ddbsh` command surface, including global tables, end
+to end against real DynamoDB.
 
 ---
 **WARNING**
@@ -43,7 +43,7 @@ Or start the interactive shell and type SQL-like statements terminated by `;`:
 
 ```
 $ ddbsh
-ddbsh - version 0.12
+ddbsh - version 0.12.1
 us-east-1> show tables;
 ```
 
@@ -79,6 +79,8 @@ devtools/serve-web 8080        # loopback only; open http://localhost:8080/
 ```
 
 Details: [docs/configurations/03-browser-aws.md](docs/configurations/03-browser-aws.md).
+To publish the page for others (a private S3 bucket behind CloudFront, or
+another host), see [docs/HOSTING.md](docs/HOSTING.md).
 
 ## Documentation
 
@@ -92,6 +94,8 @@ Details: [docs/configurations/03-browser-aws.md](docs/configurations/03-browser-
   API, `ddbsh::aws::open`, the offline `MemoryClient`, and `find_package(ddbsh)`.
 - **[Running ddbsh: configurations](docs/configurations/README.md)** — the three
   run configurations, one page each.
+- **[Hosting the browser edition](docs/HOSTING.md)** — publish the page on its
+  own origin: the CloudFormation template, upload, checks, updates, teardown.
 - **[Command reference](docs/reference/README.md)** — the full SQL-like command
   surface: [control](docs/reference/control.md),
   [DDL](docs/reference/ddl.md), [DML](docs/reference/dml.md), and
