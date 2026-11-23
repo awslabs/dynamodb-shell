@@ -152,7 +152,7 @@ vendor_case "keeps Node 22 on PATH over emsdk's Node 18" "$T/path22:" "$T/emsdk1
     "$T/path22/node v22.23.5"
 emsdk_case "keeps Node 22 on PATH over emsdk's Node 18" "$T/path22:" "$T/emsdk18" \
     "$T/path22/node v22.23.5"
-# 2. Node 18 on PATH, emsdk with Node 24 (this project's local hosts). emsdk's Node is used.
+# 2. Node 18 on PATH (an old system Node), emsdk with Node 24. emsdk's Node is used.
 vendor_case "uses emsdk's Node 24 when PATH has Node 18" "$T/path18:" "$T/emsdk24" \
     "$T/emsdk24/node/24.19.0_64bit/bin/node v24.19.0"
 emsdk_case "uses emsdk's Node 24 when PATH has Node 18" "$T/path18:" "$T/emsdk24" \
