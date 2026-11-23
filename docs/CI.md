@@ -189,6 +189,9 @@ the CI role:
   workflow file as it is at the tag, so a job in it can use the `site`
   environment, sign in as `ddbsh-web-site-publisher` and replace the site,
   the page where visitors paste short-term AWS credentials;
+- unless the repository stops GitHub Actions from approving pull requests,
+  the same token can approve pull requests, the one you open from the branch
+  included, and merge them into `main`;
 - the pull request runs the branch's workflows, `devtools/` scripts, build
   and tests, and the `ddbsh` it builds, in a job that signs in as
   `ddbsh-ci-tests`. That role may use DynamoDB throughout 291751120739 and
