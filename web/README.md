@@ -47,19 +47,20 @@ unchanged, and service errors arrive as their verbatim `__type` document.
 | File | Role |
 |---|---|
 | `CMakeLists.txt` | the `ddbsh-wasm` target (OUTPUT_NAME `ddbsh`): `bindings.cpp` + `js_sdk_transport.cpp`, linking the engine, `ddbsh-wire` and `ddbsh-cli-core`; stages the static bundle |
-| `bindings.cpp` | embind `DdbshSession`: `run(text)` (UI path, `run_batch`), `runScript(text, abortOnError)` (CLI `-c`/`-f` path, `run_source`), `region()`, `endpointOverridden()`; `RunResult {stdout, stderr, segments, ok, status}`; `WebWireClient` (retry cap 1, CONNECT-rejection notice); the free function `version()` (the header's version) |
+| `bindings.cpp` | embind `DdbshSession`: `runStreaming(text, options, onEvent)` (the UI path, `run_batch`: each piece of output goes to `onEvent` as a `{type: "text", stream, text}` event as soon as the engine emits it; `options` is reserved), `run(text)` (the same path, buffered), `runScript(text, abortOnError)` (CLI `-c`/`-f` path, `run_source`), `region()`, `endpointOverridden()`; `RunResult {stdout, stderr, segments, ok, status}`; `WebWireClient` (retry cap 1, CONNECT-rejection notice); the free function `version()` (the header's version) |
 | `js_sdk_transport.{hpp,cpp}` | `JsSdkTransport`: `send` → `Module.ddbshSend` (Asyncify), `on_connect` → `Module.ddbshConnect`, `descriptor` → `Module.ddbshDescriptor` |
-| `sdk-bridge.mjs` | DOM-free bridge: credentials (closure only), the `DynamoDBClient`, CONNECT validation + fail-closed blocking, the two middlewares, the SHOW CONNECTION descriptor, `installHooks(Module, bridge)` |
-| `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus`, the header's `versionLabel` and busy clock (`createBusyClock`) |
-| `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the header (version, busy indicator), the editor (textContent only) |
+| `sdk-bridge.mjs` | DOM-free bridge: credentials (closure only), the `DynamoDBClient`, CONNECT validation + fail-closed blocking, the two middlewares, the retry-strategy wrapper behind `onRetryEvent` (a `retry` event for each retry the SDK decides to make, before its backoff, and `settled` when each send ends), the SHOW CONNECTION descriptor, `installHooks(Module, bridge)` |
+| `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments; the streaming `createTranscriptAppender`, `guardedEventSink` and `streamSubmission`), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus`, the throttling-code list (`isThrottlingError`), the header's `versionLabel` and busy clock (`createBusyClock`, with its throttled / retrying states) |
+| `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the header (version, busy indicator and its retry states), the editor, the streaming transcript (Text nodes and textContent only) |
 | `index.html`, `styles.css` | the page; the CSP `<meta>` between the `csp:begin`/`csp:end` markers is generated |
 | `bundle-files.txt` | the publish allowlist: the 9 files the page loads plus the 2 SDK notices, 11 in all |
 | `package.cmake` | the packaging step (target `ddbsh-web-package`): copies the allowlist into `dist/ddbsh-web-<version>/`, zips it, writes `SHA256SUMS` |
 | `hosting/aws/` | `ddbsh-web-hosting.yaml` (private S3 bucket + CloudFront with Origin Access Control and security headers) and `deploy.sh` (the upload); see `docs/HOSTING.md` |
 | `vendor/aws-sdk/` | the pinned SDK: `package.json` + `package-lock.json` + `entry.mjs` + `generate.mjs` (inputs), `aws-sdk-dynamodb.mjs` + `allowed-hosts.mjs` + `THIRD-PARTY-NOTICES.txt` + `PROVENANCE.json` (outputs) |
 | `ddbsh-node.mjs` | CLI-shaped Node front end over the same files (the web golden gate's `DDBSH_SHELL_BIN`) |
-| `live-smoke.mjs` | live UI-path smoke (`DdbshSession.run`) against real DynamoDB |
+| `live-smoke.mjs` | live UI-path smoke (`DdbshSession.run` and `runStreaming`) against real DynamoDB |
 | `app-core.test.mjs`, `sdk-bridge.test.mjs` | offline Node unit tests (the bridge tests run the real SDK bundle with a stub HTTP handler) |
+| `streaming.test.mjs` | offline Node test of `runStreaming` against the built `ddbsh.wasm` with stub transport hooks: SHOW TABLES row k reaches the callback before row k+1 is described, the events equal `runScript`'s and `run`'s segments, and a throwing callback does not break the run |
 | `package.test.mjs` | offline check of the packaging step: the allowlist matches the page's load graph, the packaged folder, zip and `SHA256SUMS` match the allowlist and the build, and `package.cmake` refuses bad input |
 | `package.json` | marks the bundle dir as ES modules for Node |
 
@@ -144,7 +145,7 @@ script or style. `app-core.test.mjs` fails if the CSP drifts from
 
 | Command | What it proves |
 |---|---|
-| `devtools/run-web-smoke` | build and package; the offline gates (`web_offline_gates` in `devtools/lib-web.sh`: no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `package.test.mjs`, storage grep, upload commands of `deploy.sh` = `docs/HOSTING.md`; CI runs the same set); live `DdbshSession.run` smoke on one `ddbsh_web_smoke_<pid>` table |
+| `devtools/run-web-smoke` | build and package; the offline gates (`web_offline_gates` in `devtools/lib-web.sh`: no-eval glue, `app-core.test.mjs`, `sdk-bridge.test.mjs`, `streaming.test.mjs`, `package.test.mjs`, storage grep, upload commands of `deploy.sh` = `docs/HOSTING.md`; CI runs the same set); live `DdbshSession.run` and `runStreaming` smoke on one `ddbsh_web_smoke_<pid>` table |
 | `devtools/check-web-hosting <stack>` | a deployed `hosting/aws` stack: status, content type, `Cache-Control`, security headers and hash of every file over HTTPS, the HTTP redirect, and that the bucket is private (`discussions/test-s3host-<hash>.log`) |
 | `devtools/check-web-hosting --anonymous <url>` | the same checks of the served files by the site's address, with no credentials; `--bucket-domain` adds the anonymous S3 refusals and `--wait` first waits for the site to serve the bundle (the site publish workflow runs it) |
 | `devtools/run-tests --web-golden` | the offline gates, then the whole golden suite through `ddbsh-node.mjs` against real DynamoDB |
@@ -160,7 +161,11 @@ stack and the bucket's settings, and none with `--anonymous`. See
   terminal-free (`engine_boundary_check`). `<emscripten.h>` appears only in this
   directory's TUs and in the pre-ratified `#if __EMSCRIPTEN__` arm of
   `WireClient::backoff_sleep`.
-- The CLI driver (`cli/repl.*`) is shared, not copied: `run` uses `run_batch`,
-  `runScript` uses `run_source`.
+- The CLI driver (`cli/repl.*`) is shared, not copied: `runStreaming` and `run`
+  use `run_batch`, `runScript` uses `run_source`.
+- `runStreaming`'s callback runs while the engine is on the stack. It must not
+  throw (a JavaScript exception unwinds the WebAssembly frames without C++
+  cleanup) and must not call into the module or the session; the page passes
+  it through `guardedEventSink` and touches only the transcript.
 - Credentials never cross into WASM memory, `Module`, `window`, storage, the URL
   or a log.

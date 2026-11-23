@@ -11,17 +11,24 @@
 // writing to file descriptors. No engine logic lives in JS (tenet 3): JS owns
 // only module instantiation, the credentials, and the SDK bridge hooks.
 //
-// Two entry points (D-P9-02-11):
-//   run(text)                       the UI path: one submission through
-//                                   run_batch (no terminator lines, no
-//                                   stop-on-quit across submissions).
+// Three entry points (D-P9-02-11; P12, D-P12-17):
+//   run(text)                       one submission through run_batch (no
+//                                   terminator lines, no stop-on-quit across
+//                                   submissions), buffered.
+//   runStreaming(text, options, onEvent)
+//                                   the UI path (P12): the same run_batch
+//                                   submission as run(), but each rendered
+//                                   piece of output goes to onEvent as soon as
+//                                   the engine emits it, so the page can paint
+//                                   it while the next request is in flight.
 //   runScript(text, abortOnError)   the CLI `-c` / `-f` path: run_source over
 //                                   the text, exactly as the CLI drives it
 //                                   (terminator lines, stop-on-quit, -e). The
 //                                   golden gate (web/ddbsh-node.mjs) uses it.
-// Both return RunResult.segments: the rendered stdout/stderr text in emission
-// order, so a consumer that merges the streams (the golden runner's 2>&1, the
-// UI transcript) sees the same interleaving as the CLI.
+// run and runScript return RunResult.segments: the rendered stdout/stderr text
+// in emission order, so a consumer that merges the streams (the golden
+// runner's 2>&1) sees the same interleaving as the CLI. runStreaming delivers
+// the same text, in the same order, as events instead.
 //
 // One free function: version() returns ddbsh::version() (CMake
 // project(VERSION), the string SHOW VERSION prints), which the page shows in
@@ -52,10 +59,12 @@
 
 namespace {
 
-// The JS-visible result of one run / runScript. `segments` is a JS array of
-// {stream: "stdout"|"stderr", text} in emission order (adjacent same-stream
-// text coalesced); `stdout`/`stderr` are the per-stream concatenations;
-// `ok`/`status` follow the CLI's last-executed-statement exit semantics.
+// The JS-visible result of one run / runScript / runStreaming. `segments` is a
+// JS array of {stream: "stdout"|"stderr", text} in emission order (adjacent
+// same-stream text coalesced); `stdout`/`stderr` are the per-stream
+// concatenations (runStreaming leaves all three empty: its text went to the
+// event callback); `ok`/`status` follow the CLI's last-executed-statement exit
+// semantics.
 struct RunResult {
     std::string stdout_text;
     std::string stderr_text;
@@ -124,6 +133,38 @@ struct BufferingSink : ddbsh::OutcomeSink {
     }
 };
 
+// Delivers each emitted fragment to a JavaScript callback as it is emitted
+// (P12, D-P12-17): one {type: "text", stream: "stdout"|"stderr", text} event
+// per non-empty render, in the order BufferingSink would append them (the
+// fragment's stdout, its stderr, then a rejected CONNECT's notice). The
+// callback runs synchronously inside emit(), while the engine is on the stack;
+// it must not throw (the page passes app-core's guardedEventSink) and must not
+// call back into the module or the session.
+struct StreamingSink : ddbsh::OutcomeSink {
+    const ddbsh::render::Renderer& renderer;
+    WebWireClient& client;
+    emscripten::val on_event;
+    StreamingSink(const ddbsh::render::Renderer& r, WebWireClient& c, emscripten::val cb)
+        : renderer(r), client(c), on_event(std::move(cb)) {}
+
+    void text(const char* stream, const std::string& text) const {
+        if (text.empty()) {
+            return;
+        }
+        emscripten::val ev = emscripten::val::object();
+        ev.set("type", std::string("text"));
+        ev.set("stream", std::string(stream));
+        ev.set("text", text);
+        on_event(ev);
+    }
+
+    void emit(const ddbsh::ExecOutcome& fragment) override {
+        text("stdout", renderer.render(fragment));
+        text("stderr", renderer.render_stderr(fragment));
+        text("stderr", client.take_notice());
+    }
+};
+
 }  // namespace
 
 // A browser-side DynamoDB shell session. Construct one per tab; call run(text)
@@ -143,6 +184,34 @@ public:
         ddbsh::cli::BatchStatus st = ddbsh::cli::run_batch(
             session_, renderer_, text, /*abort_on_error=*/false, sink,
             [&](const std::string& rendered) { result.append("stderr", rendered); });
+        const bool failed = st.last_error.value_or(false);
+        result.ok = !failed;
+        result.status = failed ? 1 : 0;
+        return result;
+    }
+
+    // The streaming UI path (P12, D-P12-17): run() with each piece of output
+    // delivered to `on_event` as it is emitted (see StreamingSink), a failing
+    // statement's error as a stderr event after that statement's output, and
+    // a trailing parse error last. Returns {ok, status} with empty text
+    // fields and no segments, so nothing is delivered twice. `options` is
+    // reserved for the output-format selection (P12 S5) and is ignored.
+    // A non-function `on_event` runs nothing and returns status 1 with the
+    // reason in `stderr`.
+    RunResult run_streaming(const std::string& text, emscripten::val options,
+                            emscripten::val on_event) {
+        (void)options;
+        RunResult result;
+        if (on_event.typeOf().as<std::string>() != "function") {
+            result.stderr_text = "runStreaming: onEvent is not a function\n";
+            result.ok = false;
+            result.status = 1;
+            return result;
+        }
+        StreamingSink sink(renderer_, client_, on_event);
+        ddbsh::cli::BatchStatus st = ddbsh::cli::run_batch(
+            session_, renderer_, text, /*abort_on_error=*/false, sink,
+            [&](const std::string& rendered) { sink.text("stderr", rendered); });
         const bool failed = st.last_error.value_or(false);
         result.ok = !failed;
         result.status = failed ? 1 : 0;
@@ -189,6 +258,7 @@ EMSCRIPTEN_BINDINGS(ddbsh) {
     emscripten::class_<DdbshSession>("DdbshSession")
         .constructor<std::string>()
         .function("run", &DdbshSession::run)
+        .function("runStreaming", &DdbshSession::run_streaming)
         .function("runScript", &DdbshSession::run_script)
         .function("region", &DdbshSession::region)
         .function("endpointOverridden", &DdbshSession::endpoint_overridden);

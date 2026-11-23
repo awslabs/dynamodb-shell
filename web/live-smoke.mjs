@@ -3,13 +3,14 @@
 //
 // live-smoke.mjs — the browser edition's live UI-path smoke (P9 §4.5).
 //
-// Drives DdbshSession.run (the path the page's editor uses, run_batch) through
-// the same bridge, vendored SDK and credential validation as the page, against
-// REAL DynamoDB: create a `ddbsh_web_smoke_<pid>` table and wait for ACTIVE,
-// insert, a Query-selecting SELECT, UPDATE, a write transaction, EXPLAIN, SHOW
-// CONNECTION, a rejected CONNECT, and DROP (always, in `finally`). The full
-// golden corpus is devtools/run-web-golden's job; this proves the UI entry point
-// and its ordered segments.
+// Drives DdbshSession.run and runStreaming (the page's editor path, P12; both
+// run_batch) through the same bridge, vendored SDK and credential validation as
+// the page, against REAL DynamoDB: create a `ddbsh_web_smoke_<pid>` table and
+// wait for ACTIVE, insert, a Query-selecting SELECT (also through
+// runStreaming), UPDATE, a write transaction, EXPLAIN, SHOW CONNECTION, a
+// rejected CONNECT, and DROP (always, in `finally`). The full golden corpus is
+// devtools/run-web-golden's job; this proves the UI entry points and their
+// ordered output.
 //
 // Env: DDBSH_WEB_CREDS_FILE (minted by devtools/run-web-smoke; the `default`
 // entry is used), AWS_REGION (default us-east-1). Needs Node >= 20.
@@ -68,6 +69,21 @@ try {
 
     r = await run(`select * from ${table} where pk = 1;`);
     check(r.ok && r.stdout === "{pk: 1, rk: 1, v: a}\n{pk: 1, rk: 2, v: b}\n", "Query-selecting SELECT", show(r));
+
+    {
+        // The page's path (P12, D-P12-17): the same text as run(), as events.
+        const evs = [];
+        let s = session.runStreaming(`select * from ${table} where pk = 1; select * from no_such_table_${process.pid};`,
+            {}, (ev) => evs.push(ev));
+        if (s && typeof s.then === "function") {
+            s = await s;
+        }
+        const streams = evs.map((e) => e.stream).join(",");
+        const out = evs.filter((e) => e.stream === "stdout").map((e) => e.text).join("");
+        check(s.status === 1 && streams === "stdout,stderr" &&
+            out === "{pk: 1, rk: 1, v: a}\n{pk: 1, rk: 2, v: b}\n" && evs[1].text.includes("no_such_table"),
+            "runStreaming delivers the rows, then the error, as events", JSON.stringify({ s, evs }));
+    }
 
     r = await run(`explain select * from ${table} where pk = 1;`);
     check(r.ok && r.stdout.startsWith("Query({") && r.stdout.includes(`"TableName":   "${table}"`),

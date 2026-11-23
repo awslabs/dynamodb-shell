@@ -60,6 +60,7 @@ function stub(script) {
                 target: request.headers["x-amz-target"],
                 auth: request.headers["authorization"] || "",
                 token: request.headers["x-amz-security-token"] || "",
+                userAgent: request.headers["x-amz-user-agent"] || request.headers["user-agent"] || "",
                 body: request.body,
             });
             const next = script.length > 1 ? script.shift() : script[0];
@@ -146,9 +147,132 @@ console.log("send: retry");
     const ok = '{"Table":{"TableName":"t"}}';
     const { bridge, calls } = bridgeWith([{ status: 400, body: thr }, { status: 400, body: thr },
         { status: 200, body: ok }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push({ ...e, at: calls.length }));
     bridge.setCredentials(CREDS);
     eq(await bridge.send("DescribeTable", '{"TableName":"t"}'), ok, "final body after throttling retries");
     eq(calls.length, 3, "three attempts (two throttled, one success)");
+    eq(events.map((e) => e.type), ["retry", "retry", "settled"], "two retry events, then settled");
+    eq(events.slice(0, 2).map((e) => [e.operation, e.attempt, e.maxAttempts, e.errorCode, e.throttled]),
+        [["DescribeTable", 2, 11, "ThrottlingException", true],
+            ["DescribeTable", 3, 11, "ThrottlingException", true]],
+        "retry events: operation, attempt about to be made, budget, error code, throttled");
+    eq(events.map((e) => e.at), [1, 2, 3], "each retry event is raised before its attempt is sent");
+    check(events.slice(0, 2).every((e) => Number.isInteger(e.delayMs) && e.delayMs >= 0),
+        "retry events carry the backoff delay in ms");
+}
+
+// ---- retry events (P12, D-P12-18) -------------------------------------------
+console.log("send: retry events");
+{
+    // A 400 throttle, then a 200: one retry event (before the second attempt
+    // goes out), then settled.
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ProvisionedThroughputExceededException","message":"x"}';
+    const { bridge, calls } = bridgeWith([{ status: 400, body: thr }, { status: 200, body: '{"Items":[]}' }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push({ ...e, at: calls.length }));
+    bridge.setCredentials(CREDS);
+    const started = Date.now();
+    eq(await bridge.send("Scan", '{"TableName":"t"}'), '{"Items":[]}', "Scan succeeds after one throttle");
+    const elapsed = Date.now() - started;
+    eq(events.map((e) => e.type), ["retry", "settled"], "one retry event, then settled");
+    eq([events[0].operation, events[0].attempt, events[0].errorCode, events[0].throttled, events[0].at],
+        ["Scan", 2, "ProvisionedThroughputExceededException", true, 1],
+        "the retry event names Scan, attempt 2, the throttling code, before attempt 2");
+    check(elapsed >= events[0].delayMs, `the SDK slept at least the reported delay (${events[0].delayMs} ms; took ${elapsed} ms)`);
+}
+{
+    // A non-retryable error: no retry event, only settled.
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#ResourceNotFoundException","message":"nope"}';
+    const { bridge, calls } = bridgeWith([{ status: 400, body: err }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e.type));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("DescribeTable", '{"TableName":"nope"}'), err, "non-retryable error body returned");
+    eq(calls.length, 1, "one attempt");
+    eq(events, ["settled"], "no retry event for a non-retryable error");
+}
+{
+    // A retryable server error that is not throttling: throttled is false.
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#InternalServerError","message":"oops"}';
+    const { bridge } = bridgeWith([{ status: 500, body: err }, { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after a 500");
+    eq(events.map((e) => [e.type, e.errorCode, e.throttled]),
+        [["retry", "InternalServerError", false], ["settled", undefined, undefined]],
+        "a 500 retry is reported as retrying, not throttled");
+}
+{
+    // A code outside isThrottlingError's list that the SDK itself classifies
+    // as throttling still counts (errorType THROTTLING), as the C++ decorator
+    // honors ShouldThrottle().
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#RequestThrottled","message":"x"}';
+    const { bridge } = bridgeWith([{ status: 400, body: err }, { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after an SDK-classified throttle");
+    eq([events[0].type, events[0].errorCode, events[0].throttled], ["retry", "RequestThrottled", true],
+        "the SDK's own throttling classification sets throttled");
+}
+{
+    // The budget runs out: no event for the last attempt, after which the SDK
+    // gives up. maxAttempts 2 keeps the test short.
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    const s = stub([{ status: 400, body: thr }]);
+    const short = createSdkBridge({ sdk, allowedHosts: ALLOWED_HOSTS, regions: REGIONS,
+        sdkVersion: SDK_VERSION, clientConfig: { requestHandler: s.handler, maxAttempts: 2 } });
+    const events = [];
+    short.onRetryEvent((e) => events.push([e.type, e.attempt, e.maxAttempts]));
+    short.setCredentials(CREDS);
+    eq(await short.send("Query", "{}"), thr, "the last throttling body is returned when the budget runs out");
+    eq(s.calls.length, 2, "two attempts (maxAttempts 2)");
+    eq(events, [["retry", 2, 2], ["settled", undefined, undefined]],
+        "one retry event for attempt 2 of 2; none after the last attempt");
+}
+{
+    // A listener that throws breaks neither the send nor the retry.
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    const { bridge, calls } = bridgeWith([{ status: 400, body: thr }, { status: 200, body: "{}" }]);
+    const seen = [];
+    bridge.onRetryEvent(() => {
+        throw new Error("listener bug");
+    });
+    bridge.onRetryEvent((e) => seen.push(e.type));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "send succeeds although a listener throws");
+    eq(calls.length, 2, "the retry still happened");
+    eq(seen, ["retry", "settled"], "later listeners still receive every event");
+}
+{
+    // No HTTP response: a refusal before the SDK runs raises nothing; a
+    // transport failure settles.
+    const { bridge } = bridgeWith([new Error("network down")]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e.type));
+    await rejects(bridge.send("ListTables", "{}"), /no credentials/, "refused without credentials");
+    eq(events, [], "no event for a send refused before the SDK runs");
+    bridge.setCredentials(CREDS);
+    await rejects(bridge.send("ListTables", "{}"), /network down/, "transport failure rejects");
+    eq(events[events.length - 1], "settled", "a rejected send settles");
+}
+{
+    // The wrapped strategy keeps the SDK's retry mode: the user agent, which
+    // reports it (feature E = standard retries), is the same as a plain
+    // client's with the bridge's configuration.
+    const { bridge, calls } = bridgeWith([{ status: 200, body: "{}" }]);
+    bridge.setCredentials(CREDS);
+    await bridge.send("ListTables", "{}");
+    const s = stub([{ status: 200, body: "{}" }]);
+    const plain = new sdk.DynamoDBClient({ region: "us-east-1", credentials: CREDS,
+        accountIdEndpointMode: "disabled", maxAttempts: 11, retryMode: "standard",
+        requestHandler: s.handler });
+    await plain.send(new sdk.ListTablesCommand({}));
+    check(calls[0].userAgent !== "" && calls[0].userAgent === s.calls[0].userAgent,
+        `the user agent is unchanged by the wrapper (${calls[0].userAgent})`);
+    check(/ m\/[^ ]*\bE\b/.test(calls[0].userAgent), "the user agent still reports standard retries (m/…E…)");
 }
 
 // ---- transport failure -------------------------------------------------------

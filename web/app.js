@@ -6,10 +6,20 @@
 // This file owns ONLY the browser side: instantiate the WASM engine, create the
 // AWS SDK bridge (sdk-bridge.mjs) and wire its hooks onto the module, run the
 // credentials panel, bind editor events, call the DOM-free app-core.mjs for all
-// real logic, and paint results with textContent (never innerHTML — D-P6e-6).
-// No lexing, parsing, planning, execution or rendering happens here: the
-// faithful shell text comes out of the engine's Renderer in RunResult.segments
-// (tenet 3).
+// real logic, and paint results with Text nodes and textContent (never
+// innerHTML — D-P6e-6). No lexing, parsing, planning, execution or rendering
+// happens here: the faithful shell text comes out of the engine's Renderer,
+// delivered piece by piece by DdbshSession.runStreaming (tenet 3).
+//
+// Timely output (P12, D-P12-17): a submission's prompt echo is painted first,
+// then each piece of output as the engine emits it. The page repaints while
+// the engine waits for its next DynamoDB response, so SHOW TABLES row k is on
+// screen while row k+1 is being described. The event callback touches only
+// the transcript, never the module or the session (D-P6e-2).
+//
+// Throttling (P12, D-P12-18 / D-P12-19): the SDK bridge reports each retry
+// the SDK decides to make; the busy indicator shows "throttled, retrying" (or
+// "retrying") in its own color until that request settles.
 //
 // Requests go from this tab straight to Amazon DynamoDB: the engine serializes
 // each request, the vendored AWS SDK for JavaScript signs and sends it (P9,
@@ -37,7 +47,6 @@
 
 import {
     buildPrompt,
-    buildTranscriptEntries,
     createBusyClock,
     credentialEnvironmentProblem,
     credentialStatus,
@@ -45,8 +54,10 @@ import {
     createHistory,
     createHistoryRecall,
     createRunGuard,
+    createTranscriptAppender,
     historyRemovedElsewhere,
     parseCredentials,
+    streamSubmission,
     versionLabel,
 } from "./app-core.mjs";
 import { createSdkBridge, installHooks } from "./sdk-bridge.mjs";
@@ -97,21 +108,34 @@ const bridge = createSdkBridge({
     region: DEFAULT_REGION,
 });
 
-// The header's busy indicator (D-P10-16). textContent and classList only
-// (Trusted Types, D-P6e-6). performance.now() is monotonic, so a change of the
-// system clock does not skew the count; animation frames, not a timer, drive
-// the re-render (see createBusyClock).
+// The header's busy indicator (D-P10-16; retry states P12, D-P12-19).
+// textContent and classList only (Trusted Types, D-P6e-6). performance.now()
+// is monotonic, so a change of the system clock does not skew the count;
+// animation frames, not a timer, drive the re-render (see createBusyClock).
 const busyClock = createBusyClock({
     now: () => performance.now(),
     requestFrame: (fn) => window.requestAnimationFrame(fn),
     cancelFrame: (handle) => window.cancelAnimationFrame(handle),
-    render: (text) => {
+    render: (text, state) => {
         els.busyText.textContent = text === null ? "" : text;
         els.busy.classList.toggle("busy-running", text !== null);
+        els.busy.classList.toggle("busy-throttled", state === "throttled");
+        els.busy.classList.toggle("busy-retrying", state === "retrying");
     },
     announce: (text) => {
         els.busyStatus.textContent = text;
     },
+});
+
+// Retries the SDK has decided to make, and the settling of each request
+// (P12, D-P12-18). They arrive from the SDK's retry loop while the engine is
+// suspended, and touch only the busy indicator.
+bridge.onRetryEvent((ev) => {
+    if (ev.type === "retry") {
+        busyClock.setRetrying(ev.throttled ? "throttled" : "retrying");
+    } else if (ev.type === "settled") {
+        busyClock.setRetrying(null);
+    }
 });
 
 // ---- history persistence (localStorage; editor submissions only) -----------
@@ -159,23 +183,48 @@ function onStorageChanged(ev) {
     }
 }
 
-// ---- transcript painting (textContent only — D-P6e-6) ----------------------
-function appendEntries(entries) {
-    if (entries.length === 0) {
-        return;
-    }
+// ---- transcript painting (Text nodes and textContent only — D-P6e-6) -------
+// Run `change` (which adds to the transcript), then keep the transcript
+// scrolled to its end if it was there before; if the user has scrolled up to
+// read, leave their position alone.
+function paintTranscript(change) {
     const pane = els.resultPane;
-    // Preserve the user's scroll position if they have scrolled up to read.
     const atBottom = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 40;
-    for (const entry of entries) {
-        const pre = document.createElement("pre");
-        pre.className = entry.kind;
-        pre.textContent = entry.text; // never innerHTML: item data is untrusted.
-        pane.appendChild(pre);
-    }
+    const result = change();
     if (atBottom) {
         pane.scrollTop = pane.scrollHeight;
     }
+    return result;
+}
+
+// The streaming transcript's blocks are <pre> elements in the result pane.
+// Text goes in as Text nodes (pre.append(text) creates one): never innerHTML,
+// because item data is untrusted, and never `textContent +=`, which copies the
+// whole block on every event.
+function createDomTranscriptAppender() {
+    return createTranscriptAppender({
+        createBlock: (kind) => paintTranscript(() => {
+            const pre = document.createElement("pre");
+            pre.className = kind;
+            els.resultPane.appendChild(pre);
+            return pre;
+        }),
+        appendText: (pre, text) => paintTranscript(() => pre.append(text)),
+        // Clear (replaceChildren) detaches the blocks of a running submission.
+        isAttached: (pre) => pre.parentNode === els.resultPane,
+    });
+}
+
+// Append whole blocks (messages outside a submission's stream).
+function appendEntries(entries) {
+    paintTranscript(() => {
+        for (const entry of entries) {
+            const pre = document.createElement("pre");
+            pre.className = entry.kind;
+            pre.textContent = entry.text; // never innerHTML: the text may hold untrusted data.
+            els.resultPane.appendChild(pre);
+        }
+    });
 }
 
 // ---- credentials panel -----------------------------------------------------
@@ -308,19 +357,18 @@ async function submit(text, { addToHistory }) {
     try {
         // Capture the prompt BEFORE running: a CONNECT inside the submission
         // may change the region, but the echo reflects the region as typed.
+        // streamSubmission paints the echo first, then each piece of output
+        // as it arrives, then any internal error (P12, D-P12-17).
         const prompt = buildPrompt(session.region(), session.endpointOverridden());
-        let result = session.run(text);
-        if (result && typeof result.then === "function") {
-            result = await result; // Asyncify may surface run() as a Promise.
-        }
-        appendEntries(buildTranscriptEntries(prompt, text, result));
+        await streamSubmission({ session, prompt, text, appender: createDomTranscriptAppender() });
         if (addToHistory) {
             history.push(text);
             persistHistory();
         }
     } catch (e) {
-        // An unexpected JS/bridge failure (engine errors come back in the
-        // result segments). Surface it rather than losing it.
+        // An unexpected JS failure outside the run (engine errors arrive as
+        // stderr events; streamSubmission reports a failure of the run
+        // itself). Surface it rather than losing it.
         appendEntries([{ text: `internal error: ${e && e.message ? e.message : e}\n`,
                          kind: "stderr" }]);
     } finally {

@@ -19,10 +19,11 @@
 #                        WEB_OUT to the staged static bundle dir.
 #   web_offline_gates    run the offline web gates: against WEB_OUT, the glue
 #                        no-eval check (D-P9-02-9), app-core.test.mjs,
-#                        sdk-bridge.test.mjs and package.test.mjs; against the
-#                        sources, the browser-storage gate (D-P9-4) and the
-#                        upload-command drift gate (deploy.sh vs
-#                        docs/HOSTING.md). Needs WEB_OUT and NODE_BIN. Every
+#                        sdk-bridge.test.mjs, streaming.test.mjs (the built
+#                        ddbsh.wasm with stub hooks; P12) and package.test.mjs;
+#                        against the sources, the browser-storage gate
+#                        (D-P9-4) and the upload-command drift gate (deploy.sh
+#                        vs docs/HOSTING.md). Needs WEB_OUT and NODE_BIN. Every
 #                        caller runs the same set: run-web-smoke,
 #                        run-web-golden and CI (.github/workflows/
 #                        web-bundle.yml). Returns nonzero on any failure.
@@ -150,6 +151,8 @@ web_offline_gates() {
     (cd "$WEB_OUT" && "$NODE_BIN" app-core.test.mjs) || rc=1
     echo "--- sdk-bridge.test.mjs ---"
     (cd "$WEB_OUT" && "$NODE_BIN" sdk-bridge.test.mjs) || rc=1
+    echo "--- streaming.test.mjs ---"
+    (cd "$WEB_OUT" && "$NODE_BIN" streaming.test.mjs) || rc=1
     echo "--- package.test.mjs ---"
     (cd "$WEB_OUT" && "$NODE_BIN" package.test.mjs) || rc=1
 

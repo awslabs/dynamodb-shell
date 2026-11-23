@@ -25,7 +25,14 @@ the native binary. The whole golden test suite runs through this path
   `backend: Amazon DynamoDB` and the credentials status. The link opens a new
   tab, so the page keeps your credentials. While a statement or a file runs,
   `running… <N>s` at the right end counts the seconds; screen readers hear
-  when it starts and when it finishes.
+  when it starts and when it finishes. While DynamoDB throttles a request and
+  the SDK retries it, the indicator turns orange and reads
+  `running… <N>s · throttled, retrying` until that request completes; it also
+  pulses, unless your system asks for reduced motion. Other retryable errors
+  read `· retrying`. Screen readers hear the first retry of each run.
+- **Output appears as it arrives.** Each result row or line is added to the
+  transcript as soon as the response that completes it arrives, so a
+  `show tables;` over many tables, or a long scan, fills in while it runs.
 - **The editor** at the bottom opens at a fifth of the window's height; drag
   its corner to make it taller, up to 40%. Ctrl-Enter (⌘-Enter on a Mac) runs
   everything in it, Enter starts a new line, and the up and down arrows recall

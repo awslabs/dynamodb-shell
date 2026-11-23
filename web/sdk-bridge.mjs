@@ -20,13 +20,20 @@
 // client's config (D-P9-4): never on `window` or `Module`, never logged, never
 // stored.
 //
+// Retry events (P12, D-P12-18): the bridge wraps the SDK client's retry
+// strategy and tells onRetryEvent listeners about every retry the SDK has
+// decided to make, before it sleeps the backoff, and when each send settles.
+// The page turns them into the busy indicator's throttled / retrying states
+// (app-core createBusyClock). They go straight to the page; nothing enters the
+// engine.
+//
 // The JS hooks the WASM transport calls (web/js_sdk_transport.cpp):
 //   Module.ddbshSend(op, body)        -> Promise<string>   bridge.send
 //   Module.ddbshConnect(region, url)  -> string ("" = ok)  bridge.connect
 //   Module.ddbshDescriptor()          -> string            bridge.descriptor
 // installHooks(Module, bridge) wires them.
 
-import { maskAccessKeyId, validateCredentials } from "./app-core.mjs";
+import { isThrottlingError, maskAccessKeyId, validateCredentials } from "./app-core.mjs";
 
 /** The operations the ddbsh-wire codec emits (an allowlist; see entry.mjs). */
 export const OPERATIONS = Object.freeze([
@@ -98,6 +105,14 @@ export function createSdkBridge({
     let blocked = null;       // reason string while a rejected CONNECT is in force
     let client = null;
     const problemListeners = [];
+    const retryListeners = [];
+    // The sends between c.send(cmd) and its settling, oldest first:
+    // {op, holder}. The engine issues one request at a time (it is suspended
+    // in Asyncify until the request settles, and the page runs one submission
+    // at a time), so there is at most one; a retry event names its operation
+    // and error from it. With more than one, which send a retry belongs to is
+    // unknown, and the event's operation is "".
+    const inFlight = [];
 
     function notifyProblem(kind, detail) {
         for (const cb of problemListeners) {
@@ -107,6 +122,103 @@ export function createSdkBridge({
                 // a UI listener failure must never break a send.
             }
         }
+    }
+
+    function notifyRetryListeners(event) {
+        for (const cb of retryListeners) {
+            try {
+                cb(event);
+            } catch {
+                // a UI listener failure must never break a send or a retry.
+            }
+        }
+    }
+
+    // The error code of the failed attempt a retry follows: the `__type` of
+    // the response body the raw-response middleware captured for this attempt
+    // (the same parse the engine applies), or the SDK error's name when the
+    // send is unknown; "" when no HTTP response arrived (a network failure).
+    function retryErrorCode(errorInfo, ctx) {
+        const err = errorInfo && errorInfo.error;
+        if (ctx !== null) {
+            if (ctx.holder.raw === undefined) {
+                return "";
+            }
+            return errorType(ctx.holder.raw) || (err && typeof err.name === "string" ? err.name : "");
+        }
+        const status = err && err.$metadata ? err.$metadata.httpStatusCode : undefined;
+        return typeof status === "number" && typeof err.name === "string" ? err.name : "";
+    }
+
+    // Wrap a smithy retry strategy (RetryStrategyV2: acquireInitialRetryToken,
+    // refreshRetryTokenForRetry, recordSuccess) so each retry it approves is
+    // reported. refreshRetryTokenForRetry THROWS when the strategy will not
+    // retry (a non-retryable error, the attempt budget spent, no retry
+    // capacity), so an event is raised only after it returns a token, with
+    // that token's delay: the SDK's retry middleware sleeps exactly
+    // getRetryDelay() next. Every other member delegates, `mode` included (the
+    // user agent reports it). A strategy of another shape is returned as is.
+    function observingRetryStrategy(inner, maxAttempts) {
+        if (!inner || typeof inner.acquireInitialRetryToken !== "function" ||
+            typeof inner.refreshRetryTokenForRetry !== "function" ||
+            typeof inner.recordSuccess !== "function") {
+            return inner;
+        }
+        return {
+            get mode() {
+                return inner.mode;
+            },
+            acquireInitialRetryToken(scope) {
+                return inner.acquireInitialRetryToken(scope);
+            },
+            async refreshRetryTokenForRetry(token, errorInfo) {
+                const next = await inner.refreshRetryTokenForRetry(token, errorInfo);
+                const ctx = inFlight.length === 1 ? inFlight[0] : null;
+                const errorCode = retryErrorCode(errorInfo, ctx);
+                let budget = 0;
+                try {
+                    budget = Number(await maxAttempts()) || 0;
+                } catch {
+                    budget = 0; // the event says "unknown"; the retry still happens.
+                }
+                notifyRetryListeners({
+                    type: "retry",
+                    operation: ctx !== null ? ctx.op : "",
+                    attempt: next.getRetryCount() + 1,
+                    maxAttempts: budget,
+                    errorCode,
+                    throttled: isThrottlingError(errorCode) ||
+                        Boolean(errorInfo && errorInfo.errorType === "THROTTLING"),
+                    delayMs: next.getRetryDelay(),
+                });
+                return next;
+            },
+            recordSuccess(token) {
+                return inner.recordSuccess(token);
+            },
+        };
+    }
+
+    // Route a new client's retry strategy through observingRetryStrategy. The
+    // SDK resolves `config.retryStrategy` to a provider function, which its
+    // retry middleware calls at the start of every send; replacing the
+    // provider on the same config object is therefore seen by every later
+    // send. The inner strategy is the one the SDK built from maxAttempts and
+    // retryMode (or a caller's clientConfig.retryStrategy).
+    function observeRetries(c) {
+        const config = c.config;
+        const provide = config.retryStrategy;
+        if (typeof provide !== "function") {
+            return; // not the shape this SDK version resolves; no events.
+        }
+        const maxAttempts = typeof config.maxAttempts === "function"
+            ? config.maxAttempts : async () => 0;
+        let wrapped = null;
+        config.retryStrategy = () => {
+            wrapped ??= Promise.resolve(provide())
+                .then((inner) => observingRetryStrategy(inner, maxAttempts));
+            return wrapped;
+        };
     }
 
     function rebuildClient() {
@@ -131,6 +243,7 @@ export function createSdkBridge({
             retryMode: "standard",
             ...clientConfig,
         });
+        observeRetries(client);
     }
 
     // Validate CONNECT's region and optional endpoint (§5.2). Returns
@@ -300,12 +413,17 @@ export function createSdkBridge({
             const cmd = new sdk[`${op}Command`]({});
             const holder = { raw: undefined };
             addRawBodyMiddleware(c, cmd, op, body, holder);
+            const ctx = { op, holder };
+            inFlight.push(ctx);
             try {
                 await c.send(cmd);
             } catch (e) {
                 if (holder.raw === undefined) {
                     throw new Error(e && e.message ? e.message : String(e));
                 }
+            } finally {
+                inFlight.splice(inFlight.indexOf(ctx), 1);
+                notifyRetryListeners({ type: "settled" });
             }
             const type = errorType(holder.raw);
             if (CREDENTIAL_PROBLEM_TYPES.includes(type)) {
@@ -343,6 +461,23 @@ export function createSdkBridge({
         onCredentialProblem(cb) {
             if (typeof cb === "function") {
                 problemListeners.push(cb);
+            }
+        },
+
+        /**
+         * Register a UI callback for retry events (P12, D-P12-18). It receives
+         *   {type: "retry", operation, attempt, maxAttempts, errorCode,
+         *    throttled, delayMs}
+         * once for every retry the SDK has decided to make, before it sleeps
+         * `delayMs`, with the meanings of ddbsh::RetryEvent (attempt 2 = the
+         * first retry; maxAttempts 0 = unknown; errorCode "" = no HTTP
+         * response), and {type: "settled"} when a send's SDK call resolves or
+         * rejects. Never raised for a non-retryable error or after the last
+         * attempt. A callback that throws is ignored.
+         */
+        onRetryEvent(cb) {
+            if (typeof cb === "function") {
+                retryListeners.push(cb);
             }
         },
     };

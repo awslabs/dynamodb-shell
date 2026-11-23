@@ -83,12 +83,15 @@ the live parts talk to real DynamoDB.
   packages the bundle and runs the offline gates, which CI and `--web-golden`
   run too: the glue has no `eval`/`new Function`; `app-core.test.mjs`;
   `sdk-bridge.test.mjs`, which exercises the real SDK bundle with a stub HTTP
-  handler; `package.test.mjs`, which checks the packaged folder, zip and
+  handler; `streaming.test.mjs`, which runs the built engine's streaming entry
+  point with stub transport hooks and checks that each row reaches the page
+  before the next request; `package.test.mjs`, which checks the packaged folder, zip and
   `SHA256SUMS` against the publish allowlist and that `package.cmake` refuses
   bad input; a grep that keeps browser storage away from credentials; and a
   check that `web/hosting/aws/deploy.sh` and [HOSTING](HOSTING.md) carry the
   same upload commands. Then it runs a short live smoke through the page's
-  `DdbshSession.run` path on one `ddbsh_web_smoke_<pid>` table. Artifact:
+  `DdbshSession.run` and `runStreaming` paths on one `ddbsh_web_smoke_<pid>`
+  table. Artifact:
   `discussions/test-websmoke-<hash>.log`.
 - **`devtools/check-web-hosting <stack> [label]`** checks a deployed
   [hosting](HOSTING.md) stack from outside: every published file over HTTPS

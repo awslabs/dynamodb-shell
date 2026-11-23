@@ -15,7 +15,11 @@
 // cross-tab history removal (historyRemovedElsewhere), the credentials
 // controls shipping disabled in index.html, and the header's engine version
 // (versionLabel, D-P10-14), busy indicator (createBusyClock, D-P10-16) and
-// Help link (D-P10-17).
+// Help link (D-P10-17); and the P12 additions: the streaming transcript
+// (promptEntry, createTranscriptAppender, guardedEventSink; D-P12-17), the
+// throttling-code list (isThrottlingError, D-P12-18) and the busy indicator's
+// throttled / retrying states (setRetrying, D-P12-19). streamSubmission is
+// tested against the built engine in streaming.test.mjs.
 
 import { readFileSync } from "node:fs";
 
@@ -24,8 +28,14 @@ import {
     buildPrompt,
     buildTranscriptEntries,
     busyFinishedText,
+    busyRetryAnnouncement,
     busyText,
     createBusyClock,
+    createTranscriptAppender,
+    guardedEventSink,
+    isThrottlingError,
+    promptEntry,
+    THROTTLING_ERROR_CODES,
     credentialEnvironmentProblem,
     credentialStatus,
     elapsedSeconds,
@@ -576,6 +586,187 @@ eq(busyFinishedText(5), "command finished after 5 seconds", "finished: 5 seconds
         "after 2 s without frames the next frame shows 3s (the true elapsed time)");
     clock.stop();
 }
+
+// ---- busy indicator: throttled / retrying (P12, D-P12-19) -------------------
+console.log("busy indicator: retry states");
+eq(busyText(12, "running"), "running… 12s", "running state text");
+eq(busyText(12, "throttled"), "running… 12s · throttled, retrying", "throttled state text");
+eq(busyText(12, "retrying"), "running… 12s · retrying", "retrying state text");
+eq(busyRetryAnnouncement("throttled"), "DynamoDB is throttling; retrying", "throttled announcement");
+eq(busyRetryAnnouncement("retrying"), "retrying", "retrying announcement");
+{
+    let nowMs = 1000;
+    const renders = [];
+    const announcements = [];
+    let pending = null;
+    const clock = createBusyClock({
+        now: () => nowMs,
+        requestFrame: (fn) => {
+            pending = fn;
+            return 1;
+        },
+        cancelFrame: () => {
+            pending = null;
+        },
+        render: (text, state) => renders.push([text, state]),
+        announce: (text) => announcements.push(text),
+    });
+    const frame = () => {
+        const fn = pending;
+        pending = null;
+        if (fn) {
+            fn();
+        }
+    };
+    check(clock.setRetrying("throttled") === false, "setRetrying while idle is ignored");
+    eq([renders, announcements, clock.state], [[], [], null], "  … nothing rendered or announced; state idle");
+
+    clock.start();
+    eq(clock.state, "running", "start enters running");
+    eq(renders, [["running… 0s", "running"]], "running renders its text and state");
+    nowMs = 3500;
+    check(clock.setRetrying("throttled") === true, "a throttled retry enters throttled");
+    eq(clock.state, "throttled", "  state throttled");
+    eq(renders[renders.length - 1], ["running… 2s · throttled, retrying", "throttled"],
+        "  re-renders at once with the elapsed seconds and the state");
+    eq(announcements, ["command started", "DynamoDB is throttling; retrying"], "  announced once");
+    const count = renders.length;
+    clock.setRetrying("throttled");
+    eq(renders.length, count, "the same state again renders nothing");
+    nowMs = 4100;
+    frame();
+    eq(renders[renders.length - 1], ["running… 3s · throttled, retrying", "throttled"],
+        "the seconds keep counting in the throttled state");
+    check(clock.setRetrying(null) === true, "settled returns to running");
+    eq(renders[renders.length - 1], ["running… 3s", "running"], "  running text and state");
+    clock.setRetrying("throttled");
+    clock.setRetrying(null);
+    clock.setRetrying("retrying");
+    eq(renders[renders.length - 1], ["running… 3s · retrying", "retrying"], "a non-throttle retry: retrying");
+    eq(announcements, ["command started", "DynamoDB is throttling; retrying"],
+        "one retry announcement per submission, however many retries");
+    check(clock.setRetrying("bogus") === false, "an unknown kind is refused");
+    eq(clock.state, "retrying", "  and changes nothing");
+    clock.stop();
+    eq([renders[renders.length - 1], clock.state], [[null, null], null], "stop hides the indicator from any state");
+    check(clock.setRetrying(null) === false, "settled after stop is ignored");
+
+    // The next submission starts in running, with the announcement re-armed.
+    renders.length = 0;
+    announcements.length = 0;
+    clock.start();
+    eq(renders, [["running… 0s", "running"]], "the next submission starts in running");
+    clock.setRetrying("retrying");
+    clock.setRetrying("throttled");
+    eq(announcements, ["command started", "retrying"],
+        "the next submission announces its first retry state (once)");
+    clock.stop();
+}
+{
+    // The pulse is off under prefers-reduced-motion; the state colors stay.
+    const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    check(/\.busy\.busy-throttled\s*\{[^}]*animation:\s*ddbsh-pulse/.test(css),
+        "styles.css: the throttled state pulses");
+    check(/\.busy\.busy-throttled,\s*\.busy\.busy-retrying\s*\{[^}]*color:/.test(css),
+        "styles.css: the throttled and retrying states have their own color");
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/g) || [];
+    check(reduced.some((block) => /\.busy\.busy-throttled\s*\{\s*animation:\s*none;/.test(block)),
+        "styles.css: no pulse under prefers-reduced-motion: reduce");
+}
+
+// ---- streaming transcript (P12, D-P12-17) ------------------------------------
+console.log("streaming transcript");
+eq(promptEntry("p> ", "a;\nb;"), { text: "p> a;\np> b;", kind: "prompt" }, "promptEntry prefixes every line");
+eq(promptEntry("p> ", ""), null, "promptEntry: nothing for an empty input");
+{
+    const blocks = [];
+    const appender = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, parts: [], attached: true };
+            blocks.push(b);
+            return b;
+        },
+        appendText: (b, t) => b.parts.push(t),
+        isAttached: (b) => b.attached,
+    });
+    const view = () => blocks.map((b) => [b.kind, b.parts]);
+    appender.prompt("p> ", "show tables;");
+    appender.event({ type: "text", stream: "stdout", text: "t1\n" });
+    appender.event({ type: "text", stream: "stdout", text: "t2\n" });
+    eq(view(), [["prompt", ["p> show tables;"]], ["stdout", ["t1\n", "t2\n"]]],
+        "the prompt opens a block; adjacent stdout events share one block, one part each");
+    appender.event({ type: "text", stream: "stderr", text: "oops\n" });
+    appender.event({ type: "text", stream: "stdout", text: "t3\n" });
+    eq(view().slice(2), [["stderr", ["oops\n"]], ["stdout", ["t3\n"]]], "a change of stream starts a new block");
+    appender.event({ type: "text", stream: "stdout", text: "" });
+    appender.event({ type: "rows", rows: [] });
+    appender.event(null);
+    eq(blocks.length, 4, "empty text, a non-text event and null add nothing");
+    blocks[3].attached = false; // the user pressed Clear mid-run.
+    appender.write("stdout", "t4\n");
+    eq(view().slice(4), [["stdout", ["t4\n"]]], "after Clear the next text starts a new block");
+    appender.prompt("p> ", "next;");
+    appender.write("prompt", "unused");
+    eq(blocks[5].kind, "prompt", "prompt() always opens its own block");
+    // The result matches buildTranscriptEntries' model for the same segments.
+    const blocks2 = [];
+    const a2 = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, text: "" };
+            blocks2.push(b);
+            return b;
+        },
+        appendText: (b, t) => {
+            b.text += t;
+        },
+        isAttached: () => true,
+    });
+    const segments = [{ stream: "stdout", text: "A\n" }, { stream: "stdout", text: "B\n" },
+        { stream: "stderr", text: "E\n" }, { stream: "stdout", text: "C\n" }];
+    a2.prompt("p> ", "x;\ny;");
+    for (const seg of segments) {
+        a2.event({ type: "text", ...seg });
+    }
+    eq(blocks2.map((b) => ({ text: b.text, kind: b.kind })),
+        buildTranscriptEntries("p> ", "x;\ny;", { segments }),
+        "the appender builds the same blocks as buildTranscriptEntries");
+}
+{
+    const seen = [];
+    const g = guardedEventSink((ev) => {
+        if (ev === 2 || ev === 3) {
+            throw new Error(`bad ${ev}`);
+        }
+        seen.push(ev);
+    });
+    eq(g.error, null, "guardedEventSink: no error before any failure");
+    for (const ev of [1, 2, 3, 4]) {
+        g.emit(ev); // never throws
+    }
+    eq(seen, [1, 4], "events after a failure are still delivered");
+    eq(g.error.message, "bad 2", "the first exception is kept");
+    const g2 = guardedEventSink(() => {
+        throw undefined; // eslint-disable-line no-throw-literal
+    });
+    g2.emit({});
+    check(g2.error === undefined, "a thrown undefined is kept as thrown (not mistaken for none)");
+    eq(guardedEventSink(() => {}).error, null, "a callback that never throws leaves error null");
+}
+
+// ---- throttling codes (P12, D-P12-18) -----------------------------------------
+console.log("throttling codes");
+// The same six codes as ddbsh::is_throttling_error (src/retry_event.cpp);
+// tests/wire_client_retry_test.cpp pins the C++ copy. Change both together.
+eq([...THROTTLING_ERROR_CODES], ["ThrottlingException", "ProvisionedThroughputExceededException",
+    "RequestLimitExceeded", "TooManyRequestsException", "LimitExceededException",
+    "TransactionInProgressException"], "the throttling list");
+check(Object.isFrozen(THROTTLING_ERROR_CODES), "the list is frozen");
+check(THROTTLING_ERROR_CODES.every(isThrottlingError), "every listed code is throttling");
+for (const code of ["ResourceNotFoundException", "InternalServerError", "ConditionalCheckFailedException",
+    "", "throttlingexception", "com.amazonaws.dynamodb.v20120810#ThrottlingException", "THROTTLING"]) {
+    check(!isThrottlingError(code), `not throttling: ${JSON.stringify(code)}`);
+}
+check(!isThrottlingError(undefined) && !isThrottlingError(null), "a missing code is not throttling");
 
 // ---- header: index.html markup (P10, D-P10-14 / D-P10-16 / D-P10-17) -------
 console.log("header markup");

@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * styles.css — minimal styling for the ddbsh browser edition (P6e UI; P9
- * credentials panel; P10 header Help link, busy indicator and input height).
+ * credentials panel; P10 header Help link, busy indicator and input height;
+ * P12 busy indicator retry states).
  *
  * Monospace throughout so the engine Renderer's byte-exact alignment survives
  * (O-2). Zero runtime dependencies (O-4): plain CSS, no framework.
@@ -22,6 +23,7 @@
     --banner-bg: #5a1d1d;
     --dot-ready: #4ec9b0;
     --dot-loading: #d7ba7d;
+    --busy-retry: #ff9e3d; /* busy indicator while DynamoDB requests are retried */
     --link: #4fc1ff;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
 }
@@ -131,6 +133,26 @@ body {
     display: inline-flex;
 }
 
+/* While the transport retries (P12, D-P12-19): a stronger amber, and for
+   throttling a 1 s pulse. app.js sets .busy-throttled or .busy-retrying next
+   to .busy-running; the text names the state too ("· throttled, retrying"),
+   so color is never the only signal. */
+.busy.busy-throttled,
+.busy.busy-retrying {
+    color: var(--busy-retry);
+    font-weight: bold;
+}
+
+.busy.busy-throttled {
+    animation: ddbsh-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ddbsh-pulse {
+    50% {
+        opacity: 0.45;
+    }
+}
+
 .spinner {
     display: inline-block;
     width: 10px;
@@ -147,10 +169,14 @@ body {
     }
 }
 
-/* The spinner stands still for users who ask for less motion; the seconds
-   still count. */
+/* The spinner and the throttled pulse stand still for users who ask for less
+   motion; the seconds still count and the throttled color stays. */
 @media (prefers-reduced-motion: reduce) {
     .spinner {
+        animation: none;
+    }
+
+    .busy.busy-throttled {
         animation: none;
     }
 }

@@ -62,7 +62,9 @@ target_link_options(ddbsh-wasm PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
 #                   PROVENANCE.json, THIRD-PARTY-NOTICES.txt}    the pinned SDK
 #   ddbsh-node.mjs        the CLI-shaped Node shim the web golden gate drives
 #   live-smoke.mjs        the live UI-path smoke devtools/run-web-smoke runs
-#   app-core.test.mjs sdk-bridge.test.mjs package.test.mjs   the offline Node tests
+#   app-core.test.mjs sdk-bridge.test.mjs streaming.test.mjs package.test.mjs
+#                         the offline Node tests (streaming.test.mjs runs the
+#                         built ddbsh.wasm with stub transport hooks)
 #   bundle-files.txt      the publish allowlist (read by package.test.mjs)
 #   package.cmake         the packaging script (package.test.mjs runs it on
 #                         bad input to check that it refuses each case)
@@ -74,7 +76,7 @@ target_link_options(ddbsh-wasm PRIVATE ${DDBSH_WEB_LINK_OPTIONS})
 set(DDBSH_WEB_STAGED_FILES
     index.html app.js app-core.mjs sdk-bridge.mjs styles.css
     ddbsh-node.mjs live-smoke.mjs
-    app-core.test.mjs sdk-bridge.test.mjs package.test.mjs
+    app-core.test.mjs sdk-bridge.test.mjs streaming.test.mjs package.test.mjs
     bundle-files.txt package.cmake package.json
     vendor/aws-sdk/aws-sdk-dynamodb.mjs vendor/aws-sdk/allowed-hosts.mjs
     vendor/aws-sdk/PROVENANCE.json vendor/aws-sdk/THIRD-PARTY-NOTICES.txt)
