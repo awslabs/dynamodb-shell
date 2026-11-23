@@ -131,6 +131,12 @@ struct Session::Impl {
 
     std::string next_alias_prefix() { return engine::unique_prefix(alias_prefix_counter++); }
 
+    // The streaming overload's body: runs the statement against the sink.
+    // Session::execute(stmt, sink) wraps it to call sink.end_statement()
+    // afterwards (D-P12-16). Kept here, not on Session, so the public header
+    // carries no implementation detail.
+    Result<void> dispatch(const Statement& statement, OutcomeSink& sink);
+
     Impl(SessionConfig cfg, IDDBClient& c) : config(std::move(cfg)), client(c) {}
 };
 
@@ -231,12 +237,12 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
     // Every call ends with exactly one end_statement(), after the last emit,
     // on success and on failure (P12, D-P12-16), so a sink holding an open
     // result set closes it before the caller reports any error.
-    Result<void> result = dispatch(statement, sink);
+    Result<void> result = impl_->dispatch(statement, sink);
     sink.end_statement();
     return result;
 }
 
-Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
+Result<void> Session::Impl::dispatch(const Statement& statement, OutcomeSink& sink) {
     // Reject an unbound `?` marker before any serialization (see the buffering
     // overload); markers are legal only through the prepared bind path.
     if (statement.ast() != nullptr && engine::count_param_markers(*statement.ast()) > 0) {
@@ -273,14 +279,14 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
             // the injected client's transport/backend binding. Additive and
             // terminal-free — the same carry-the-line-as-data pattern SHOW
             // VERSION uses, so the engine writes to no stream. Contacts no API.
-            const std::string& region = impl_->config.region;
-            const std::string& endpoint = impl_->config.endpoint;
+            const std::string& region = config.region;
+            const std::string& endpoint = config.endpoint;
             std::vector<std::string> lines;
             lines.push_back("ddbsh - version " + version());
             lines.push_back("Region: " + (region.empty() ? std::string("(default)") : region));
             lines.push_back("Endpoint: " +
                             (endpoint.empty() ? std::string("(default)") : endpoint));
-            lines.push_back("Backend: " + impl_->client.connection_descriptor());
+            lines.push_back("Backend: " + client.connection_descriptor());
             return emit_single(ExecOutcome{ReportOutcome{std::move(lines)}});
         }
         case StatementKind::quit:
@@ -307,9 +313,9 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
             // re-resolves credentials and rebuilds its SDK client; the test
             // doubles inherit the no-op default.
             const auto& connect = std::get<engine::ConnectCmd>(statement.ast()->command);
-            impl_->config.region = connect.region;
-            impl_->config.endpoint = connect.endpoint;
-            (void)impl_->client.connect(connect.region, connect.endpoint);
+            config.region = connect.region;
+            config.endpoint = connect.endpoint;
+            (void)client.connect(connect.region, connect.endpoint);
             return emit_single(ExecOutcome{StatusOutcome{"CONNECT"}});
         }
         case StatementKind::select_statement: {
@@ -318,25 +324,24 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
                 // EXPLAIN renders the serialized GetItem/Query/Scan request
                 // (the planner still resolves the key schema; it does not read
                 // data). W6.
-                return emit_single(engine::execute_select_explain(select, impl_->client,
-                                                                  impl_->next_alias_prefix()));
+                return emit_single(
+                    engine::execute_select_explain(select, client, next_alias_prefix()));
             }
             // Stream the SELECT with bounded memory: one SelectOutcome fragment
             // per page, then a final capacity fragment if the user asked
             // (D-P5-1 / D2). Byte-identical to the old single-outcome path. The
             // CLI's RenderingSink renders each page and drops it, so a large
             // Scan is no longer resident in memory.
-            return engine::execute_select_streaming(select, impl_->client,
-                                                    impl_->next_alias_prefix(), sink);
+            return engine::execute_select_streaming(select, client, next_alias_prefix(), sink);
         }
         case StatementKind::drop_table: {
             const auto& drop = std::get<engine::DropTableCmd>(statement.ast()->command);
             if (statement.ast()->explain) {
                 // EXPLAIN renders the serialized DeleteTable request (IF EXISTS
                 // still probes existence; a missing table emits nothing). W6.
-                return emit_single(engine::execute_drop_table_explain(drop, impl_->client));
+                return emit_single(engine::execute_drop_table_explain(drop, client));
             }
-            return emit_single(engine::execute_drop_table(drop, impl_->client));
+            return emit_single(engine::execute_drop_table(drop, client));
         }
         case StatementKind::insert: {
             const auto& insert = std::get<engine::InsertCmd>(statement.ast()->command);
@@ -344,40 +349,40 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
                 // EXPLAIN renders the serialized PutItem request(s), one per
                 // row (the key schema is still resolved for the condition). W6.
                 return emit_single(engine::execute_insert_explain(
-                    insert, impl_->client, [this] { return impl_->next_alias_prefix(); }));
+                    insert, client, [this] { return next_alias_prefix(); }));
             }
             // Streaming: emit one WriteOutcome per written row BEFORE a failing
             // row's Error, so partial output survives the failure (AI-4 /
             // D-2c-12) — the original printed each row's token then the error.
             return engine::execute_insert_streaming(
-                insert, impl_->client, [this] { return impl_->next_alias_prefix(); }, sink);
+                insert, client, [this] { return next_alias_prefix(); }, sink);
         }
         case StatementKind::update_statement: {
             const auto& update = std::get<engine::UpdateCmd>(statement.ast()->command);
             return engine::execute_update(
-                update, impl_->client, [this] { return impl_->next_alias_prefix(); },
-                statement.ast()->explain, sink);
+                update, client, [this] { return next_alias_prefix(); }, statement.ast()->explain,
+                sink);
         }
         case StatementKind::del: {
             const auto& del = std::get<engine::DeleteCmd>(statement.ast()->command);
             return engine::execute_delete(
-                del, impl_->client, [this] { return impl_->next_alias_prefix(); },
-                statement.ast()->explain, sink);
+                del, client, [this] { return next_alias_prefix(); }, statement.ast()->explain,
+                sink);
         }
         case StatementKind::transaction: {
             const auto& txn = std::get<engine::TransactCmd>(statement.ast()->command);
             return engine::execute_transact(
-                txn, impl_->client, [this] { return impl_->next_alias_prefix(); },
-                statement.ast()->explain, sink);
+                txn, client, [this] { return next_alias_prefix(); }, statement.ast()->explain,
+                sink);
         }
         case StatementKind::create_table: {
             const auto& create = std::get<engine::CreateTableCmd>(statement.ast()->command);
             if (statement.ast()->explain) {
                 // EXPLAIN renders the serialized CreateTable request plus the
                 // CREATE token the original prints even when explaining. W6.
-                return emit_single(engine::execute_create_table_explain(create, impl_->client));
+                return emit_single(engine::execute_create_table_explain(create, client));
             }
-            return emit_single(engine::execute_create_table(create, impl_->client));
+            return emit_single(engine::execute_create_table(create, client));
         }
         case StatementKind::alter_table: {
             // The four ALTER AST nodes share one StatementKind::alter_table
@@ -391,27 +396,27 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
                 if (explain) {
                     // EXPLAIN renders the serialized UpdateTable request with NO
                     // trailing status token (contrast CREATE) — D-2e-11.
-                    return emit_single(engine::execute_alter_table_explain(alter, impl_->client));
+                    return emit_single(engine::execute_alter_table_explain(alter, client));
                 }
-                return emit_single(engine::execute_alter_table(alter, impl_->client));
+                return emit_single(engine::execute_alter_table(alter, client));
             }
             if (std::holds_alternative<engine::AlterTtlCmd>(command)) {
                 // SET TTL: DescribeTimeToLive + UpdateTimeToLive (the executor
                 // owns the probe-first / already-disabled short-circuit / EXPLAIN
                 // logic, D-2e-7), so pass the explain flag through.
                 const auto& ttl = std::get<engine::AlterTtlCmd>(command);
-                return emit_single(engine::execute_alter_ttl(ttl, impl_->client, explain));
+                return emit_single(engine::execute_alter_ttl(ttl, client, explain));
             }
             if (std::holds_alternative<engine::AlterPitrCmd>(command)) {
                 // SET PITR: UpdateContinuousBackups (the executor owns the EXPLAIN
                 // `UpdateContinuousBackupsRequest(...)` label quirk, D-2e-8/-11).
                 const auto& pitr = std::get<engine::AlterPitrCmd>(command);
-                return emit_single(engine::execute_alter_pitr(pitr, impl_->client, explain));
+                return emit_single(engine::execute_alter_pitr(pitr, client, explain));
             }
             // REPLICA: UpdateTable with one ReplicationGroupUpdate (D-2e-9); the
             // executor owns the EXPLAIN `UpdateTable(...)` block.
             const auto& replica = std::get<engine::AlterReplicaCmd>(command);
-            return emit_single(engine::execute_alter_replica(replica, impl_->client, explain));
+            return emit_single(engine::execute_alter_replica(replica, client, explain));
         }
         case StatementKind::show_tables: {
             // SHOW TABLES is not explainable (it is a show_command, not in the
@@ -419,7 +424,7 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
             // EXPLAIN flag), so there is no explain path to guard here.
             // Streams one row per fragment as its describes return (P12).
             const auto& show = std::get<engine::ShowTablesCmd>(statement.ast()->command);
-            return engine::execute_show_tables(show, impl_->client, sink);
+            return engine::execute_show_tables(show, client, sink);
         }
         case StatementKind::describe:
             if (statement.ast()->explain) {
@@ -427,45 +432,45 @@ Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
                 // DescribeTimeToLive/DescribeContinuousBackups/
                 // DescribeTableReplicaAutoScaling requests; no service call. W6.
                 return emit_single(engine::execute_describe_explain(
-                    std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client));
+                    std::get<engine::DescribeCmd>(statement.ast()->command), client));
             }
             // Streams up to three fragments, one per response group (P12).
             return engine::execute_describe(std::get<engine::DescribeCmd>(statement.ast()->command),
-                                            impl_->client, sink);
+                                            client, sink);
         case StatementKind::create_backup:
             // BACKUP TABLE ... CALLED ... — a ddl command, so explainable.
             return emit_single(engine::execute_create_backup(
-                std::get<engine::CreateBackupCmd>(statement.ast()->command), impl_->client,
+                std::get<engine::CreateBackupCmd>(statement.ast()->command), client,
                 statement.ast()->explain));
         case StatementKind::drop_backup:
             return emit_single(engine::execute_drop_backup(
-                std::get<engine::DropBackupCmd>(statement.ast()->command), impl_->client,
+                std::get<engine::DropBackupCmd>(statement.ast()->command), client,
                 statement.ast()->explain));
         case StatementKind::describe_backup:
             return emit_single(engine::execute_describe_backup(
-                std::get<engine::DescribeBackupCmd>(statement.ast()->command), impl_->client,
+                std::get<engine::DescribeBackupCmd>(statement.ast()->command), client,
                 statement.ast()->explain));
         case StatementKind::restore:
             return emit_single(
                 engine::execute_restore(std::get<engine::RestoreCmd>(statement.ast()->command),
-                                        impl_->client, statement.ast()->explain));
+                                        client, statement.ast()->explain));
         case StatementKind::show_backups:
             // SHOW commands are not explainable (grammar: show_command is not in
             // the explainable set, matching the oracle — EXPLAIN SHOW ... is a
             // syntax error), so there is no explain path here.
             // Streams one fragment per ListBackups page (P12).
             return engine::execute_show_backups(
-                std::get<engine::ShowBackupsCmd>(statement.ast()->command), impl_->client, sink);
+                std::get<engine::ShowBackupsCmd>(statement.ast()->command), client, sink);
         case StatementKind::show_limits:
             // The `Region:` line is sourced from the session's current region
             // (D-2f-9), threaded as a parameter — not from the client seam.
             // Streams the header after DescribeLimits, then the totals (P12).
             return engine::execute_show_limits(
-                std::get<engine::ShowLimitsCmd>(statement.ast()->command), impl_->client,
-                impl_->config.region, sink);
+                std::get<engine::ShowLimitsCmd>(statement.ast()->command), client, config.region,
+                sink);
         case StatementKind::show_create_table:
             return emit_single(engine::execute_show_create_table(
-                std::get<engine::ShowCreateTableCmd>(statement.ast()->command), impl_->client));
+                std::get<engine::ShowCreateTableCmd>(statement.ast()->command), client));
     }
     return fail(Errc::internal_error, "unhandled statement kind");
 }

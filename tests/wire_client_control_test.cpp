@@ -95,6 +95,20 @@ TEST(WireClientControl, ListTablesPageIsOneRoundTripWithTheCursor) {
     EXPECT_TRUE(transport.drained());
 }
 
+TEST(WireClientControl, ListTablesPageTreatsAnEmptyCursorAsTheFirstPage) {
+    // ListTablesPageIn: "" means the first page, so no ExclusiveStartTableName
+    // is sent (the same body as a nullopt cursor).
+    CannedTransport transport;
+    transport.push_response(R"({"TableNames":["a"]})");
+    WireClient client(transport);
+
+    auto out = client.list_tables_page(ddbsh::ListTablesPageIn{std::string()});
+    ASSERT_TRUE(out.has_value());
+    EXPECT_EQ(out->table_names, (std::vector<std::string>{"a"}));
+    ASSERT_EQ(transport.calls().size(), 1u);
+    EXPECT_EQ(transport.calls()[0].body, "{\n}\n");
+}
+
 TEST(WireClientControl, ListTablesPageMapsAServiceError) {
     CannedTransport transport;
     transport.push_response(R"({"__type":"x#AccessDeniedException","message":"no ListTables"})");
@@ -121,6 +135,11 @@ TEST(WireClientControl, DefaultListTablesPageIsTheWholeListAsOnePage) {
     ASSERT_TRUE(first.has_value());
     EXPECT_EQ(first->table_names, (std::vector<std::string>{"a", "b", "c"}));
     EXPECT_FALSE(first->last_evaluated_table_name.has_value());
+
+    // An empty cursor is the first page (ListTablesPageIn).
+    auto again = client.list_tables_page(ddbsh::ListTablesPageIn{std::string()});
+    ASSERT_TRUE(again.has_value());
+    EXPECT_EQ(again->table_names, (std::vector<std::string>{"a", "b", "c"}));
 
     // A cursor this client never issued: nothing remains.
     auto rest = client.list_tables_page(ddbsh::ListTablesPageIn{std::string("c")});

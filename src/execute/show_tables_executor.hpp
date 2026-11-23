@@ -33,10 +33,6 @@ namespace ddbsh::engine {
 /// row (P12, D-P12-11). Emits nothing when no table matches.
 Result<void> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client, OutcomeSink& sink);
 
-/// Buffering form: the same rows folded into one ReportOutcome (empty lines
-/// when no table matches), the shape Session::execute(stmt) returns.
-Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client);
-
 }  // namespace ddbsh::engine
 
 #endif  // DDBSH_SRC_EXECUTE_SHOW_TABLES_EXECUTOR_HPP

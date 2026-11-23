@@ -9,8 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "execute/report_collector.hpp"
-
 namespace ddbsh::engine {
 
 namespace {
@@ -322,15 +320,6 @@ Result<void> execute_describe(const DescribeCmd& cmd, IDDBClient& client, Outcom
     }
     flush();
     return {};
-}
-
-Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client) {
-    ReportCollector collect;
-    auto streamed = execute_describe(cmd, client, collect);
-    if (!streamed.has_value()) {
-        return fail(streamed.error());
-    }
-    return ExecOutcome{std::move(collect.report)};
 }
 
 Result<ExecOutcome> execute_describe_explain(const DescribeCmd& cmd, IDDBClient& client) {

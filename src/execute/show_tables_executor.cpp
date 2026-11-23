@@ -9,8 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "execute/report_collector.hpp"
-
 namespace ddbsh::engine {
 
 namespace {
@@ -123,17 +121,6 @@ Result<void> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client, O
         page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
     } while (page_in.exclusive_start_table_name.has_value());
     return {};
-}
-
-Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client) {
-    // Buffering form: collect the streamed rows into the one ReportOutcome
-    // this command returned before P12 (D-P12-15).
-    ReportCollector collect;
-    auto streamed = execute_show_tables(cmd, client, collect);
-    if (!streamed.has_value()) {
-        return fail(streamed.error());
-    }
-    return ExecOutcome{std::move(collect.report)};
 }
 
 }  // namespace ddbsh::engine

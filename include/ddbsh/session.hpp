@@ -131,7 +131,8 @@ public:
     /// INSERT row, per SHOW TABLES row, per SHOW BACKUPS page, per DESCRIBE /
     /// SHOW LIMITS response group, per bulk-write RETURN VALUES item, and per
     /// bulk EXPLAIN request group. After the last fragment, success or failure,
-    /// this calls sink.end_statement() exactly once (D-P12-16).
+    /// this calls sink.end_statement() exactly once (D-P12-16); an exception
+    /// thrown by the sink's emit() propagates and skips it.
     Result<void> execute(const Statement& statement, OutcomeSink& sink);
 
     /// Convenience: parse then execute (buffering).
@@ -150,10 +151,6 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-
-    // The streaming overload's body: runs the statement against the sink.
-    // execute(stmt, sink) wraps it to call sink.end_statement() afterwards.
-    Result<void> dispatch(const Statement& statement, OutcomeSink& sink);
 
     // Narrow engine-internal access to impl_ for the connection layer's lazy
     // SELECT cursor (D-P5-1). SessionAccess is defined in session.cpp where

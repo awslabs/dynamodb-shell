@@ -51,7 +51,8 @@ public:
     /// on failure, before it returns. A sink that holds state across fragments
     /// (an open result set in a formatted output) closes it here, so its
     /// closing bytes precede the error the caller prints. The default does
-    /// nothing.
+    /// nothing. If emit() throws, the exception propagates out of
+    /// Session::execute and end_statement() is not called.
     virtual void end_statement() {}
 };
 

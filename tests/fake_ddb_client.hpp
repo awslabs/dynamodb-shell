@@ -121,6 +121,14 @@ public:
     /// executor exercises its pagination loop.
     void set_pages(std::vector<std::vector<ItemRow>> pages) { pages_ = std::move(pages); }
 
+    /// Make ONLY the query/scan call that reads 0-based page `page` fail with
+    /// `error` (the earlier pages succeed) — the partial-output-on-failure
+    /// path of the bulk UPDATE/DELETE read loops.
+    void set_read_error_at_page(std::size_t page, Error error) {
+        read_error_ = std::move(error);
+        read_error_at_page_ = page;
+    }
+
     /// Consumed capacity attached to every read response (per page).
     void set_consumed_capacity(ConsumedCapacity cc) { consumed_capacity_ = std::move(cc); }
 
@@ -218,6 +226,9 @@ public:
         ++read_calls_;
         QueryOut out;
         std::size_t page = page_index(in.exclusive_start_key);
+        if (read_error_.has_value() && page == read_error_at_page_) {
+            return fail(*read_error_);
+        }
         if (page < pages_.size()) {
             out.items = pages_[page];
         }
@@ -230,6 +241,9 @@ public:
         ++read_calls_;
         ScanOut out;
         std::size_t page = page_index(in.exclusive_start_key);
+        if (read_error_.has_value() && page == read_error_at_page_) {
+            return fail(*read_error_);
+        }
         if (page < pages_.size()) {
             out.items = pages_[page];
         }
@@ -698,6 +712,8 @@ private:
     std::optional<Error> search_vectors_error_;
     std::vector<SearchVectorsIn> search_vectors_requests_;
     int read_calls_ = 0;
+    std::optional<Error> read_error_;
+    std::size_t read_error_at_page_ = 0;
     std::vector<PutItemIn> put_requests_;
     std::optional<Error> put_error_;
     std::optional<std::size_t> put_error_at_;

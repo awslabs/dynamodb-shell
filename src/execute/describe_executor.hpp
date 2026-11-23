@@ -41,10 +41,6 @@ namespace ddbsh::engine {
 /// nothing emitted, if the table cannot be described.
 Result<void> execute_describe(const DescribeCmd& cmd, IDDBClient& client, OutcomeSink& sink);
 
-/// Buffering form: the whole report in one ReportOutcome, or an Error if the
-/// table cannot be described.
-Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client);
-
 /// EXPLAIN a DESCRIBE: serialize the four requests the report WOULD issue, in
 /// call order, into an ExplainOutcome — DescribeTable and DescribeTimeToLive in
 /// COMPACT form (the original used strip_newlines for these two, via

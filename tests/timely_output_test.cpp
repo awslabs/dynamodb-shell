@@ -615,6 +615,33 @@ TEST(TimelyOutput, BulkUpdateFailureKeepsTheItemsAlreadyReturned) {
     EXPECT_EQ(log, expected);
 }
 
+TEST(TimelyOutput, BulkDeleteFailureKeepsTheItemsAlreadyReturned) {
+    // D-P12-14: the second DeleteItem fails (not a ccf); the first returned
+    // item stays emitted, the Error follows, and no accounting line is
+    // emitted (the original gated it on !retval, delete.cpp).
+    Log log;
+    RecordingClient client(log);
+    seed_two_pages(client);
+    client.set_delete_attributes(ItemRow{ValueMap{{"pk", num("7")}}});
+    client.set_delete_item_error_at(1, service_error("DeleteItem failed"));
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    auto result = stream(session, "delete from t where x = 0 return values all old;", sink);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().message, "DeleteItem failed");
+    const Log expected{
+        "call:DescribeTable:t", "call:Scan",       "call:DeleteItem",
+        "emit:{pk: 7}|",        "call:DeleteItem", "end",
+    };
+    EXPECT_EQ(log, expected);
+
+    // The buffering overload discards the partial output.
+    auto buffered = session.run("delete from t where x = 0 return values all old;");
+    ASSERT_FALSE(buffered.has_value());
+    EXPECT_EQ(buffered.error().message, "DeleteItem failed");
+}
+
 TEST(TimelyOutput, BulkUpdateWithoutReturnValuesEmitsOnlyTheAccountingLine) {
     Log log;
     RecordingClient client(log);
@@ -688,6 +715,96 @@ TEST(TimelyOutput, ExplainBulkDeleteEmitsTheScanBlockBeforeTheScan) {
     ASSERT_NE(explain, nullptr);
     EXPECT_EQ(explain->blocks.size(), 4u);
     EXPECT_EQ(render(*buffered), render_all(sink.parts));
+}
+
+// D-P12-14, path 5: a bulk EXPLAIN whose read fails on page 2 keeps the
+// blocks already emitted (page 1's read block and its write blocks, then
+// page 2's read block when the executor emits one per page), and the Error
+// follows them.
+
+TEST(TimelyOutput, ExplainBulkUpdateScanFailureOnPageTwoKeepsTheEarlierBlocks) {
+    Log log;
+    RecordingClient client(log);
+    seed_two_pages(client);
+    client.set_explain_body("{}");
+    client.set_read_error_at_page(1, service_error("Scan failed"));
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    auto result = stream(session, "explain update t set x = 9 where x = 0;", sink);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().message, "Scan failed");
+    const Log expected{
+        "call:DescribeTable:t",
+        "emit:Scan({})|",
+        "call:Scan",
+        "emit:UpdateItem({})|UpdateItem({})|",
+        "emit:Scan({})|",
+        "call:Scan",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+
+    // The buffering overload discards the partial output.
+    auto buffered = session.run("explain update t set x = 9 where x = 0;");
+    ASSERT_FALSE(buffered.has_value());
+    EXPECT_EQ(buffered.error().message, "Scan failed");
+}
+
+TEST(TimelyOutput, ExplainBulkUpdateQueryFailureOnPageTwoKeepsTheEarlierBlocks) {
+    // A hash-and-range table with only the hash given: the UPDATE enumerates
+    // through Query (filter on x), one Query block per page.
+    Log log;
+    RecordingClient client(log);
+    client.set_table(table("t", TableKeySchema{{"pk"}, {"rk"}}));
+    client.set_pages({{pk_row("1"), pk_row("1")}, {pk_row("1")}});
+    client.set_explain_body("{}");
+    client.set_read_error_at_page(1, service_error("Query failed"));
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    auto result = stream(session, "explain update t set x = 9 where pk = 1 and x = 0;", sink);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().message, "Query failed");
+    const Log expected{
+        "call:DescribeTable:t",
+        "emit:Query({})|",
+        "call:Query",
+        "emit:UpdateItem({})|UpdateItem({})|",
+        "emit:Query({})|",
+        "call:Query",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+}
+
+TEST(TimelyOutput, ExplainBulkDeleteScanFailureOnPageTwoKeepsTheEarlierBlocks) {
+    // The Scan block is emitted once, before the first scan; page 1's
+    // DeleteItem blocks follow it; page 2's scan fails.
+    Log log;
+    RecordingClient client(log);
+    seed_two_pages(client);
+    client.set_explain_body("{}");
+    client.set_read_error_at_page(1, service_error("Scan failed"));
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    auto result = stream(session, "explain delete from t where x = 0;", sink);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().message, "Scan failed");
+    const Log expected{
+        "call:DescribeTable:t",
+        "emit:Scan({})|",
+        "call:Scan",
+        "emit:DeleteItem({})|DeleteItem({})|",
+        "call:Scan",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+
+    auto buffered = session.run("explain delete from t where x = 0;");
+    ASSERT_FALSE(buffered.has_value());
+    EXPECT_EQ(buffered.error().message, "Scan failed");
 }
 
 // ---- T10: multi-row INSERT (unchanged) --------------------------------------

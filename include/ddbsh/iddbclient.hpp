@@ -424,7 +424,9 @@ struct ListTablesOut {
 // (P12, D-P12-12). No Limit is sent; DynamoDB's default page is 100 names, the
 // page size the original asked for.
 struct ListTablesPageIn {
-    std::optional<std::string> exclusive_start_table_name;  ///< nullopt => first page
+    /// The previous page's last_evaluated_table_name. nullopt, or an empty
+    /// string (which DynamoDB never returns as a cursor), => the first page.
+    std::optional<std::string> exclusive_start_table_name;
 };
 struct ListTablesPageOut {
     std::vector<std::string> table_names;
@@ -833,9 +835,10 @@ public:
     /// working (its SHOW TABLES output is still correct, only less timely).
     /// AwsDDBClient and WireClient override it with one request per call.
     virtual Result<ListTablesPageOut> list_tables_page(const ListTablesPageIn& in) {
-        if (in.exclusive_start_table_name.has_value()) {
+        if (in.exclusive_start_table_name.has_value() && !in.exclusive_start_table_name->empty()) {
             // The default never returns a cursor, so a caller passing one is
             // continuing a listing this client did not page: nothing remains.
+            // An empty cursor means the first page (see ListTablesPageIn).
             return ListTablesPageOut{};
         }
         auto all = list_tables(ListTablesIn{});

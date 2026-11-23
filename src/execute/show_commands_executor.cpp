@@ -8,8 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "execute/report_collector.hpp"
-
 namespace ddbsh::engine {
 
 namespace {
@@ -314,15 +312,6 @@ Result<void> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client,
     return {};
 }
 
-Result<ExecOutcome> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client) {
-    ReportCollector collect;
-    auto streamed = execute_show_backups(cmd, client, collect);
-    if (!streamed.has_value()) {
-        return fail(streamed.error());
-    }
-    return ExecOutcome{std::move(collect.report)};
-}
-
 Result<void> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client,
                                  const std::string& region, OutcomeSink& sink) {
     auto limits = client.describe_limits(DescribeLimitsIn{});
@@ -383,16 +372,6 @@ Result<void> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client,
                            std::to_string(wcus + gsiwcus));
     sink.emit(ExecOutcome{std::move(totals)});
     return {};
-}
-
-Result<ExecOutcome> execute_show_limits(const ShowLimitsCmd& cmd, IDDBClient& client,
-                                        const std::string& region) {
-    ReportCollector collect;
-    auto streamed = execute_show_limits(cmd, client, region, collect);
-    if (!streamed.has_value()) {
-        return fail(streamed.error());
-    }
-    return ExecOutcome{std::move(collect.report)};
 }
 
 Result<ExecOutcome> execute_show_create_table(const ShowCreateTableCmd& cmd, IDDBClient& client) {

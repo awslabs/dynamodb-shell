@@ -1677,7 +1677,8 @@ Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
 
 Result<ListTablesPageOut> AwsDDBClient::list_tables_page(const ListTablesPageIn& in) {
     // One ListTables request (P12, D-P12-12). No Limit: the service default
-    // page (100 names) is what the original show_tables.cpp asked for.
+    // page (100 names) is what the original show_tables.cpp asked for. An
+    // empty cursor means the first page (see ListTablesPageIn).
     Aws::DynamoDB::Model::ListTablesRequest request;
     if (in.exclusive_start_table_name.has_value() && !in.exclusive_start_table_name->empty()) {
         request.SetExclusiveStartTableName(in.exclusive_start_table_name->c_str());

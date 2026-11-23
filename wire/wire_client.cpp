@@ -308,8 +308,14 @@ Result<ListTablesOut> WireClient::list_tables(const ListTablesIn&) {
 
 Result<ListTablesPageOut> WireClient::list_tables_page(const ListTablesPageIn& in) {
     // One ListTables round trip (P12, D-P12-12); the cursor is threaded through
-    // serialize_list_tables, so the wire body is the one list_tables sends.
-    const WireRequest req = serialize_list_tables(in.exclusive_start_table_name);
+    // serialize_list_tables, so the wire body is the one list_tables sends. An
+    // empty cursor means the first page (see ListTablesPageIn), as in
+    // AwsDDBClient, so it is not sent as an ExclusiveStartTableName.
+    std::optional<std::string> cursor = in.exclusive_start_table_name;
+    if (cursor.has_value() && cursor->empty()) {
+        cursor.reset();
+    }
+    const WireRequest req = serialize_list_tables(cursor);
     auto body = send_retrying(req.operation, req.body);
     if (!body) {
         return fail(body.error());
