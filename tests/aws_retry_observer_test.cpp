@@ -16,14 +16,19 @@
 //      (127.0.0.1:1, connection refused, a retryable SDK network error), with
 //      the fake inner strategy supplied through base_config: rebuild() wraps
 //      the caller's strategy, the event names the operation, and the
-//      registration survives connect(). No AWS service is contacted; fixed
-//      dummy credentials keep the SDK off the credential chain's network
+//      registration survives connect(). The same end-to-end path then runs
+//      with no retryStrategy in the base configuration and with the
+//      two-argument constructor (the two ways the CLI builds its client), so
+//      rebuild() wraps the DynamoDB client's own default strategy and the
+//      attempt budget equals that default's. No AWS service is contacted;
+//      fixed dummy credentials keep the SDK off the credential chain's network
 //      providers.
 //
 // The binary has its own main() (one AwsApiGuard for the process; dummy
 // credentials set before InitAPI), so it links GTest::gtest.
 
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -38,6 +43,7 @@
 #include <aws/core/client/RetryStrategy.h>
 #include <aws/core/http/HttpResponse.h>
 #include <aws/core/utils/Outcome.h>
+#include <aws/dynamodb/DynamoDBClientConfiguration.h>
 
 #include "ddbsh/aws/aws_api_guard.hpp"
 #include "ddbsh/aws/aws_ddb_client.hpp"
@@ -345,6 +351,55 @@ TEST(AwsDDBClientRetryObserver, RegistrationSurvivesConnectAndClears) {
     EXPECT_FALSE(client.list_tables_page(ddbsh::ListTablesPageIn{}).has_value());
     EXPECT_EQ(observer.events.size(), 1u);    // cleared: nothing more
     EXPECT_EQ(inner->should_retry_calls, 4);  // the retries still happened
+}
+
+// The default-strategy branch of rebuild(), the one the CLI always takes (R-S2-1):
+// no retryStrategy in the base configuration, so rebuild() wraps the strategy
+// the DynamoDB client's own factory builds. The expected budget is read from
+// that same factory (DynamoDBClientConfiguration replaces the core default),
+// so the test pins "retry behavior is unchanged" without hard-coding the SDK's
+// number. The SDK's real backoff runs, so each case takes a few seconds.
+long dynamodb_default_max_attempts() {
+    const Aws::DynamoDB::DynamoDBClientConfiguration ddb_cfg(Aws::Client::ClientConfiguration{});
+    return ddb_cfg.configFactories.retryStrategyCreateFn()->GetMaxAttempts();
+}
+
+void expect_default_strategy_events(const RecordingObserver& observer) {
+    const long max_attempts = dynamodb_default_max_attempts();
+    ASSERT_GE(max_attempts, 2);  // the default strategy retries at all
+    ASSERT_EQ(static_cast<long>(observer.events.size()), max_attempts - 1);
+    for (std::size_t i = 0; i < observer.events.size(); ++i) {
+        const ddbsh::RetryEvent& event = observer.events[i];
+        EXPECT_EQ(event.operation, "DescribeTable");
+        EXPECT_EQ(event.attempt, static_cast<int>(i) + 2);
+        EXPECT_EQ(event.max_attempts, max_attempts);
+        EXPECT_FALSE(event.throttled);
+        EXPECT_TRUE(event.delay.has_value()) << "event " << i << " has no delay";
+    }
+}
+
+TEST(AwsDDBClientRetryObserver, BaseConfigWithoutStrategyWrapsTheDynamoDBDefault) {
+    // The CLI's --ca-bundle path: a base configuration with no retryStrategy.
+    Aws::Client::ClientConfiguration cfg;
+    ASSERT_EQ(cfg.retryStrategy, nullptr);
+    cfg.connectTimeoutMs = 1000;
+    cfg.requestTimeoutMs = 1000;
+    ddbsh::aws::AwsDDBClient client("us-east-1", kRefusedEndpoint, cfg);
+    RecordingObserver observer;
+    client.set_retry_observer(&observer);
+
+    EXPECT_FALSE(client.describe_table(ddbsh::DescribeTableIn{"t"}).has_value());
+    expect_default_strategy_events(observer);
+}
+
+TEST(AwsDDBClientRetryObserver, TwoArgumentConstructorWrapsTheDynamoDBDefault) {
+    // The CLI's path without --ca-bundle: no base configuration at all.
+    ddbsh::aws::AwsDDBClient client("us-east-1", kRefusedEndpoint);
+    RecordingObserver observer;
+    client.set_retry_observer(&observer);
+
+    EXPECT_FALSE(client.describe_table(ddbsh::DescribeTableIn{"t"}).has_value());
+    expect_default_strategy_events(observer);
 }
 
 }  // namespace

@@ -12,8 +12,8 @@ namespace ddbsh {
 
 bool is_throttling_error(std::string_view error_code) {
     // The DynamoDB-reachable subset of the codes the AWS SDK for C++ treats as
-    // throttling (aws-cpp-sdk-core CoreErrors.cpp). The browser's app-core.mjs
-    // carries the same list, pinned by its own test.
+    // throttling (aws-cpp-sdk-core CoreErrors.cpp). The browser edition does
+    // not classify throttling yet; when it does, it needs this same list.
     static constexpr std::array<std::string_view, 6> kThrottlingCodes = {
         "ThrottlingException",    "ProvisionedThroughputExceededException",
         "RequestLimitExceeded",   "TooManyRequestsException",
