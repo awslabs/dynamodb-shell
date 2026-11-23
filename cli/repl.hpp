@@ -18,6 +18,7 @@
 #ifndef DDBSH_CLI_REPL_HPP
 #define DDBSH_CLI_REPL_HPP
 
+#include <cstdio>
 #include <functional>
 #include <istream>
 #include <optional>
@@ -29,6 +30,26 @@
 #include "ddbsh/session.hpp"
 
 namespace ddbsh::cli {
+
+/// The CLI's file-writing sink: renders each outcome fragment as the engine
+/// emits it and flushes, so a streaming command's output appears as its data
+/// arrives (P12, D-P12-1) and a multi-row INSERT interleaves its written
+/// status tokens with a mid-batch error exactly as the original did (AI-4 /
+/// D-2c-12). `out` gets the result bytes; `err` gets any diagnostics the
+/// outcome carries (a transaction's non-reducible-SELECT message, D-2d-6).
+/// Both default to the process's stdout/stderr; tests pass a temporary file.
+class FileRenderingSink : public ddbsh::OutcomeSink {
+public:
+    explicit FileRenderingSink(const ddbsh::render::Renderer& renderer, std::FILE* out = stdout,
+                               std::FILE* err = stderr)
+        : renderer_(renderer), out_(out), err_(err) {}
+    void emit(const ddbsh::ExecOutcome& fragment) override;
+
+private:
+    const ddbsh::render::Renderer& renderer_;
+    std::FILE* out_;
+    std::FILE* err_;
+};
 
 // The batch terminator. Either a BLANK line ends the batch, or a word on its
 // own line (default `go`) does. A deliberate CLI-layer concept — the engine

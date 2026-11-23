@@ -10,7 +10,8 @@
 namespace ddbsh::engine {
 
 Result<SelectRowCursor> open_select_cursor(const SelectCmd& cmd, IDDBClient& client,
-                                           const std::string& alias_prefix) {
+                                           const std::string& alias_prefix,
+                                           RateLimiter::Clock clock, RateLimiter::Sleep sleep) {
     auto planned = plan_select(cmd, client, alias_prefix);
     if (!planned.has_value()) {
         return fail(planned.error());
@@ -37,7 +38,8 @@ Result<SelectRowCursor> open_select_cursor(const SelectCmd& cmd, IDDBClient& cli
     // do_query/do_scan). GetItem is a single request — the original builds no
     // limiter for the GetItem path — so only Query/Scan construct one.
     if (cmd.ratelimit.has_value() && plan.api != SelectApi::get_item) {
-        cursor.limiter_.emplace(cmd.ratelimit->rcu, cmd.ratelimit->wcu);
+        cursor.limiter_.emplace(cmd.ratelimit->rcu, cmd.ratelimit->wcu, std::move(clock),
+                                std::move(sleep));
     }
 
     return cursor;
@@ -50,6 +52,18 @@ Result<const std::vector<ItemRow>*> SelectRowCursor::next_page() {
     // the caller emits output solely for pages that carry rows (matching
     // "print each item as you read each page", arch §7/§10).
     while (more_) {
+        // The ratelimit sleep owed for the previous page is taken here, at the
+        // start of the next fetch, not at the end of the previous page (P12,
+        // D-P12-13). The sleeps and their order against the API calls are the
+        // original's (do_query/do_scan: readlimit() after setting the next
+        // ExclusiveStartKey, before the next request); the difference is that
+        // the previous page has already been returned to the caller, and so
+        // emitted, before the sleep.
+        if (throttle_pending_) {
+            throttle_pending_ = false;
+            limiter_->readlimit();
+        }
+
         std::vector<ItemRow> items;
         std::optional<ConsumedCapacity> cc;
         std::optional<ValueMap> last_evaluated_key;
@@ -110,12 +124,12 @@ Result<const std::vector<ItemRow>*> SelectRowCursor::next_page() {
                 } else {
                     scan_.exclusive_start_key = std::move(last_evaluated_key);
                 }
-                // Throttle before the next fetch (do_query/do_scan: readlimit()
-                // after setting the next ExclusiveStartKey). Output is
-                // unaffected — the limiter only sleeps (arch §10).
-                if (limiter_.has_value()) {
-                    limiter_->readlimit();
-                }
+                // Owe a throttle before the next fetch (do_query/do_scan:
+                // readlimit() after setting the next ExclusiveStartKey). It is
+                // taken at the top of the next iteration or next_page() call,
+                // after this page is returned. Output bytes are unaffected —
+                // the limiter only sleeps (arch §10).
+                throttle_pending_ = limiter_.has_value();
             }
         }
 

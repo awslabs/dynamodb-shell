@@ -156,6 +156,18 @@ built as a default-on CTest (`ddbshlib_features_sample`). See
 > remains public for embedders who need the raw fragment stream or who inject
 > their own backend. Most applications want the `Connection`/`Database` surface
 > above.
+>
+> `Session::execute(stmt, sink)` hands each fragment to `OutcomeSink::emit` as
+> soon as the DynamoDB response that completes it arrives: one per `SELECT`
+> page, per written `INSERT` row, per `SHOW TABLES` row, per `SHOW BACKUPS`
+> page, per `DESCRIBE` or `SHOW LIMITS` response group, and per returned item of
+> a bulk `UPDATE`/`DELETE … RETURN VALUES`. Fragments emitted before a later
+> failure stay emitted; the returned `Error` follows them. After the last
+> fragment, on success or failure, the session calls
+> `OutcomeSink::end_statement()` once (the default does nothing). A custom
+> `IDDBClient` can override `list_tables_page` so `SHOW TABLES` streams page by
+> page; the default reads the whole list with `list_tables` first. The
+> buffering `Session::execute(stmt)` still returns one outcome per command.
 
 #### Getting the AWS SDK for C++
 

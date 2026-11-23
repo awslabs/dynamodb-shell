@@ -97,6 +97,7 @@ public:
     Result<ListBackupsOut> list_backups(const ListBackupsIn&) override;
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
+    Result<ListTablesPageOut> list_tables_page(const ListTablesPageIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
     Result<TimeToLiveOut> describe_time_to_live(const DescribeTimeToLiveIn&) override;
     Result<ContinuousBackupsOut> describe_continuous_backups(

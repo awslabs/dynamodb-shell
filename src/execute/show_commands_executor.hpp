@@ -35,16 +35,28 @@
 
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/iddbclient.hpp"
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
 
-/// SHOW [type] BACKUPS [<t>] -> paginated ListBackups. ReportOutcome of rows.
+/// SHOW [type] BACKUPS [<t>] -> paginated ListBackups, streaming: one
+/// ReportOutcome fragment per non-empty page, emitted before the next page is
+/// requested (P12, D-P12-11).
+Result<void> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client, OutcomeSink& sink);
+
+/// Buffering form of SHOW BACKUPS: every row in one ReportOutcome.
 Result<ExecOutcome> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client);
 
-/// SHOW LIMITS -> DescribeLimits + paged ListTables/DescribeTable. `region` is
-/// the session's current region, used for the `Region:` line (D-2f-9).
+/// SHOW LIMITS -> DescribeLimits + paged ListTables/DescribeTable, streaming:
+/// the three header lines as one fragment right after DescribeLimits, then the
+/// three totals lines as a second fragment (P12, D-P12-11). `region` is the
+/// session's current region, used for the `Region:` line (D-2f-9).
+Result<void> execute_show_limits(const ShowLimitsCmd& cmd, IDDBClient& client,
+                                 const std::string& region, OutcomeSink& sink);
+
+/// Buffering form of SHOW LIMITS: all six lines in one ReportOutcome.
 Result<ExecOutcome> execute_show_limits(const ShowLimitsCmd& cmd, IDDBClient& client,
                                         const std::string& region);
 

@@ -7,6 +7,9 @@
 
 #include <regex>
 #include <string>
+#include <utility>
+
+#include "execute/report_collector.hpp"
 
 namespace ddbsh::engine {
 
@@ -66,9 +69,27 @@ std::string status_row(const std::string& name, const DescribeTableOut& td,
     return row;
 }
 
+/// One SHOW TABLES line for `name`: just the name for BRIEF, or when either
+/// DescribeTable or DescribeTimeToLive fails (the original's has_dtr() &&
+/// has_ttl() guard in show_tables.cpp); else the full status row.
+std::string table_row(const ShowTablesCmd& cmd, IDDBClient& client, const std::string& name) {
+    if (cmd.brief) {
+        return name;
+    }
+    auto described = client.describe_table(DescribeTableIn{name});
+    if (!described.has_value()) {
+        return name;
+    }
+    auto ttl = client.describe_time_to_live(DescribeTimeToLiveIn{name});
+    if (!ttl.has_value()) {
+        return name;
+    }
+    return status_row(name, described.value(), ttl.value());
+}
+
 }  // namespace
 
-Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client) {
+Result<void> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client, OutcomeSink& sink) {
     // Build the LIKE matcher up front. An invalid pattern is reported as an
     // Error rather than throwing across the boundary (D12; the original
     // constructed std::regex(m_regexp) unguarded).
@@ -81,40 +102,38 @@ Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& cl
         }
     }
 
-    auto listed = client.list_tables(ListTablesIn{});
-    if (!listed.has_value()) {
-        return fail(listed.error());
+    // Read ListTables one page at a time and emit each row as soon as its
+    // describe calls return, before the next row's calls and before the next
+    // page is requested (P12, D-P12-11/-12) — the original show_tables.cpp
+    // printed each row inside its page loop the same way. A ListTables failure
+    // on a later page leaves the rows already emitted in place and returns the
+    // Error after them (D-P12-14).
+    ListTablesPageIn page_in;
+    do {
+        auto page = client.list_tables_page(page_in);
+        if (!page.has_value()) {
+            return fail(page.error());
+        }
+        for (const auto& name : page->table_names) {
+            if (matcher.has_value() && !std::regex_match(name, *matcher)) {
+                continue;
+            }
+            sink.emit(ExecOutcome{ReportOutcome{{table_row(cmd, client, name)}}});
+        }
+        page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
+    } while (page_in.exclusive_start_table_name.has_value());
+    return {};
+}
+
+Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client) {
+    // Buffering form: collect the streamed rows into the one ReportOutcome
+    // this command returned before P12 (D-P12-15).
+    ReportCollector collect;
+    auto streamed = execute_show_tables(cmd, client, collect);
+    if (!streamed.has_value()) {
+        return fail(streamed.error());
     }
-
-    ReportOutcome report;
-    for (const auto& name : listed.value().table_names) {
-        if (matcher.has_value() && !std::regex_match(name, *matcher)) {
-            continue;
-        }
-
-        if (cmd.brief) {
-            report.lines.push_back(name);
-            continue;
-        }
-
-        // A non-brief row needs BOTH DescribeTable and DescribeTimeToLive to
-        // succeed; if either fails the original prints just the table name
-        // (has_dtr() && has_ttl() guard in show_tables.cpp).
-        auto described = client.describe_table(DescribeTableIn{name});
-        if (!described.has_value()) {
-            report.lines.push_back(name);
-            continue;
-        }
-        auto ttl = client.describe_time_to_live(DescribeTimeToLiveIn{name});
-        if (!ttl.has_value()) {
-            report.lines.push_back(name);
-            continue;
-        }
-
-        report.lines.push_back(status_row(name, described.value(), ttl.value()));
-    }
-
-    return ExecOutcome{std::move(report)};
+    return ExecOutcome{std::move(collect.report)};
 }
 
 }  // namespace ddbsh::engine

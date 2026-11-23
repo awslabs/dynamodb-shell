@@ -196,6 +196,11 @@ std::string render_bulk_write(const BulkWriteOutcome& b) {
         out += show_item(item);
         out += '\n';
     }
+    if (b.partial) {
+        // A streaming RETURN VALUES fragment (D-P12-15): items only; the
+        // accounting line comes with the final fragment.
+        return out;
+    }
     const char* verb = b.verb == BulkWriteOutcome::Verb::update   ? "UPDATE"
                        : b.verb == BulkWriteOutcome::Verb::upsert ? "UPSERT"
                                                                   : "DELETE";

@@ -53,26 +53,6 @@ std::string_view strip_quotes(std::string_view s) {
     return s;
 }
 
-// The CLI's FD-writing sink: render each outcome fragment to stdout as the
-// engine emits it, so a multi-row INSERT (or any future streaming write)
-// interleaves its already-written status tokens with a mid-batch error exactly
-// as the original did (AI-4 / D-2c-12). stdout gets the result bytes; stderr
-// gets any diagnostics the outcome carries (a transaction's non-reducible-SELECT
-// message, D-2d-6). Both are flushed so a mid-batch error interleaves correctly.
-struct FdRenderingSink : ddbsh::OutcomeSink {
-    const ddbsh::render::Renderer& renderer;
-    explicit FdRenderingSink(const ddbsh::render::Renderer& r) : renderer(r) {}
-    void emit(const ddbsh::ExecOutcome& fragment) override {
-        std::fputs(renderer.render(fragment).c_str(), stdout);
-        std::fflush(stdout);
-        std::string diag = renderer.render_stderr(fragment);
-        if (!diag.empty()) {
-            std::fputs(diag.c_str(), stderr);
-            std::fflush(stderr);
-        }
-    }
-};
-
 // A failing statement's error (and a trailing parse error) go to stderr,
 // flushed so a mid-batch error interleaves with already-written stdout tokens.
 void report_error_to_stderr(const std::string& rendered) {
@@ -81,6 +61,18 @@ void report_error_to_stderr(const std::string& rendered) {
 }
 
 }  // namespace
+
+void FileRenderingSink::emit(const ddbsh::ExecOutcome& fragment) {
+    // Flush after every fragment so each one is on the terminal (or pipe)
+    // before the engine makes its next API call (P12, D-P12-1).
+    std::fputs(renderer_.render(fragment).c_str(), out_);
+    std::fflush(out_);
+    std::string diag = renderer_.render_stderr(fragment);
+    if (!diag.empty()) {
+        std::fputs(diag.c_str(), err_);
+        std::fflush(err_);
+    }
+}
 
 std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
                                              const char* env_value,
@@ -203,13 +195,13 @@ BatchStatus run_batch(ddbsh::Session& session, const ddbsh::render::Renderer& re
 
 BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
                            std::string_view text, bool abort_on_error) {
-    FdRenderingSink sink(renderer);
+    FileRenderingSink sink(renderer);
     return run_batch(session, renderer, text, abort_on_error, sink, report_error_to_stderr);
 }
 
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
                Terminator& term, bool abort_on_error) {
-    FdRenderingSink sink(renderer);
+    FileRenderingSink sink(renderer);
     return run_source(session, renderer, src, term, abort_on_error, sink, report_error_to_stderr);
 }
 

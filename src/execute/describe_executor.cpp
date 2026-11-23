@@ -9,6 +9,8 @@
 #include <string>
 #include <utility>
 
+#include "execute/report_collector.hpp"
+
 namespace ddbsh::engine {
 
 namespace {
@@ -85,7 +87,7 @@ std::string key_schema_text(const TableKeySchema& ks) {
 
 }  // namespace
 
-Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client) {
+Result<void> execute_describe(const DescribeCmd& cmd, IDDBClient& client, OutcomeSink& sink) {
     auto described = client.describe_table(DescribeTableIn{cmd.table});
     if (!described.has_value()) {
         // The original CDescribeHelper logs the failure and run() returns -1
@@ -103,8 +105,20 @@ Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client)
     // has_dtr()).
     (void)client.describe_time_to_live(DescribeTimeToLiveIn{cmd.table});
 
+    // The report goes out in three fragments, each as soon as the response it
+    // depends on has arrived (P12, D-P12-11), in the order the original
+    // describe.cpp printed them: basic info, billing and warm throughput after
+    // DescribeTable/DescribeTimeToLive; PITR through SSE after
+    // DescribeContinuousBackups; the replica lines after
+    // DescribeTableReplicaAutoScaling.
     ReportOutcome report;
     auto& lines = report.lines;
+    auto flush = [&sink, &report]() {
+        if (!report.lines.empty()) {
+            sink.emit(ExecOutcome{std::move(report)});
+            report.lines.clear();
+        }
+    };
 
     // ---- __show_table_basic_info ------------------------------------------
     lines.push_back("Name: " + td.table_name + " (" + td.table_status + ")");
@@ -167,6 +181,8 @@ Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client)
                         std::to_string(wt.write_units_per_second) + " WCU, Status " + wt.status +
                         ")");
     }
+
+    flush();
 
     // ---- PITR (DescribeContinuousBackups) ---------------------------------
     // Best-effort: a failure skips the section (the original's IsSuccess()
@@ -289,6 +305,8 @@ Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client)
         lines.push_back("SSE: Not set");
     }
 
+    flush();
+
     // ---- __show_autoscaling (DescribeTableReplicaAutoScaling) -------------
     // Best-effort: a failure skips the section (the original's IsSuccess()
     // guard).
@@ -302,8 +320,17 @@ Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client)
             }
         }
     }
+    flush();
+    return {};
+}
 
-    return ExecOutcome{std::move(report)};
+Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client) {
+    ReportCollector collect;
+    auto streamed = execute_describe(cmd, client, collect);
+    if (!streamed.has_value()) {
+        return fail(streamed.error());
+    }
+    return ExecOutcome{std::move(collect.report)};
 }
 
 Result<ExecOutcome> execute_describe_explain(const DescribeCmd& cmd, IDDBClient& client) {

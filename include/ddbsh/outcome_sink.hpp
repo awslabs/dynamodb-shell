@@ -26,10 +26,18 @@
 namespace ddbsh {
 
 /// A consumer of ExecOutcome fragments emitted by the engine during execution.
-/// A single-outcome command emits exactly once; a multi-row INSERT emits once
-/// per written row; a bulk UPDATE/DELETE emits its one BulkWriteOutcome. The
-/// embedder owns the sink and decides what to do with each fragment (render it,
-/// buffer it, count it). The engine never buffers to a stream itself.
+/// A single-outcome command emits exactly once. A command whose output comes
+/// from several API responses emits one fragment per unit as soon as the
+/// response that completes it arrives (P12, D-P12-1/D-P12-11): a SELECT one
+/// per page, a multi-row INSERT one per written row, SHOW TABLES one per row,
+/// SHOW BACKUPS one per ListBackups page, SHOW LIMITS and DESCRIBE one per
+/// response group, a bulk UPDATE/DELETE with RETURN VALUES one per returned
+/// item before its accounting line. The embedder owns the sink and decides
+/// what to do with each fragment (render it, buffer it, count it). The engine
+/// never buffers to a stream itself.
+///
+/// Fragments emitted before a later API failure stay emitted; the caller sees
+/// the Error after them (D-2c-12, D-P12-14).
 class OutcomeSink {
 public:
     virtual ~OutcomeSink() = default;
@@ -37,6 +45,14 @@ public:
     /// Receive one outcome fragment, in production order. Called zero or more
     /// times per statement before Session::execute returns.
     virtual void emit(const ExecOutcome& fragment) = 0;
+
+    /// The statement is over (P12, D-P12-16). Session::execute(stmt, sink)
+    /// calls this exactly once per call, after the last emit(), on success and
+    /// on failure, before it returns. A sink that holds state across fragments
+    /// (an open result set in a formatted output) closes it here, so its
+    /// closing bytes precede the error the caller prints. The default does
+    /// nothing.
+    virtual void end_statement() {}
 };
 
 }  // namespace ddbsh

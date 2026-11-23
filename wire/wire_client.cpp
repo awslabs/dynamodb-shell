@@ -289,26 +289,37 @@ Result<DeleteTableOut> WireClient::delete_table(const DeleteTableIn& in) {
 
 Result<ListTablesOut> WireClient::list_tables(const ListTablesIn&) {
     // Page internally on LastEvaluatedTableName so the caller gets the complete
-    // list, exactly as the AWS adapter's list_tables loop (ListTablesIn carries
-    // no cursor field, so the cursor is threaded through serialize_list_tables).
+    // list, exactly as the AWS adapter's list_tables loop does, one
+    // list_tables_page request at a time.
     ListTablesOut out;
-    std::optional<std::string> cursor;  // nullopt => first page
+    ListTablesPageIn page_in;  // no cursor => first page
     do {
-        const WireRequest req = serialize_list_tables(cursor);
-        auto body = send_retrying(req.operation, req.body);
-        if (!body) {
-            return fail(body.error());
-        }
-        auto page = parse_list_tables(*body);
+        auto page = list_tables_page(page_in);
         if (!page) {
             return fail(page.error());
         }
         for (auto& name : page->table_names) {
             out.table_names.push_back(std::move(name));
         }
-        cursor = page->last_evaluated_table_name;
-    } while (cursor.has_value());
+        page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
+    } while (page_in.exclusive_start_table_name.has_value());
     return out;
+}
+
+Result<ListTablesPageOut> WireClient::list_tables_page(const ListTablesPageIn& in) {
+    // One ListTables round trip (P12, D-P12-12); the cursor is threaded through
+    // serialize_list_tables, so the wire body is the one list_tables sends.
+    const WireRequest req = serialize_list_tables(in.exclusive_start_table_name);
+    auto body = send_retrying(req.operation, req.body);
+    if (!body) {
+        return fail(body.error());
+    }
+    auto page = parse_list_tables(*body);
+    if (!page) {
+        return fail(page.error());
+    }
+    return ListTablesPageOut{std::move(page->table_names),
+                             std::move(page->last_evaluated_table_name)};
 }
 
 Result<DescribeTableOut> WireClient::describe_table(const DescribeTableIn& in) {

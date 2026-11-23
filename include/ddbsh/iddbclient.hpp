@@ -418,6 +418,19 @@ struct ListTablesOut {
     std::vector<std::string> table_names;
 };
 
+// ---- ListTables, one page (SHOW TABLES) -------------------------------------
+// SHOW TABLES reads ListTables one page at a time so each row reaches the sink
+// as soon as its describe calls return, as the original show_tables.cpp did
+// (P12, D-P12-12). No Limit is sent; DynamoDB's default page is 100 names, the
+// page size the original asked for.
+struct ListTablesPageIn {
+    std::optional<std::string> exclusive_start_table_name;  ///< nullopt => first page
+};
+struct ListTablesPageOut {
+    std::vector<std::string> table_names;
+    std::optional<std::string> last_evaluated_table_name;  ///< nullopt => last page
+};
+
 // ---- DescribeTable ---------------------------------------------------------
 // Two consumers share this one DescribeTable view:
 //   * the planner, which needs only the key schema to decide GetItem/Query/Scan
@@ -812,6 +825,26 @@ public:
 
     virtual Result<DeleteTableOut> delete_table(const DeleteTableIn&) = 0;
     virtual Result<ListTablesOut> list_tables(const ListTablesIn&) = 0;
+
+    /// One page of ListTables (SHOW TABLES; P12, D-P12-12). The executor loops
+    /// on `last_evaluated_table_name` and emits each page's rows before it
+    /// requests the next page. The default returns the whole list_tables()
+    /// result as a single last page, so a client that predates paging keeps
+    /// working (its SHOW TABLES output is still correct, only less timely).
+    /// AwsDDBClient and WireClient override it with one request per call.
+    virtual Result<ListTablesPageOut> list_tables_page(const ListTablesPageIn& in) {
+        if (in.exclusive_start_table_name.has_value()) {
+            // The default never returns a cursor, so a caller passing one is
+            // continuing a listing this client did not page: nothing remains.
+            return ListTablesPageOut{};
+        }
+        auto all = list_tables(ListTablesIn{});
+        if (!all.has_value()) {
+            return fail(all.error());
+        }
+        return ListTablesPageOut{std::move(all->table_names), std::nullopt};
+    }
+
     virtual Result<DescribeTableOut> describe_table(const DescribeTableIn&) = 0;
 
     /// UpdateItem for a single addressed item (UPDATE/UPSERT; arch §7). A

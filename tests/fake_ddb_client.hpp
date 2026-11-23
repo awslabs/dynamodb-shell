@@ -17,6 +17,8 @@
 #ifndef DDBSH_TESTS_FAKE_DDB_CLIENT_HPP
 #define DDBSH_TESTS_FAKE_DDB_CLIENT_HPP
 
+#include <algorithm>
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <string>
@@ -55,6 +57,22 @@ public:
 
     /// Make list_tables() fail with this Error. nullopt => succeed.
     void set_list_tables_error(std::optional<Error> error) { list_error_ = std::move(error); }
+
+    /// Serve list_tables_page() in pages of `n` names (0, the default => one
+    /// page holding every name), so SHOW TABLES exercises its page loop.
+    void set_list_tables_page_size(std::size_t n) { list_page_size_ = n; }
+
+    /// Make ONLY list_tables_page() for 0-based page `page` fail with `error`
+    /// (the earlier pages succeed) — the partial-output-on-failure path.
+    void set_list_tables_error_at_page(std::size_t page, Error error) {
+        list_page_error_ = std::move(error);
+        list_page_error_at_ = page;
+    }
+
+    /// The list_tables_page() requests issued, in order.
+    const std::vector<ListTablesPageIn>& list_tables_page_requests() const {
+        return list_tables_page_requests_;
+    }
 
     /// Register a table's TimeToLive description (SHOW TABLES / DESCRIBE).
     void set_ttl(const std::string& table, TimeToLiveOut ttl) {
@@ -144,9 +162,21 @@ public:
     /// conditional-check failure). nullopt => succeed.
     void set_update_error(std::optional<Error> error) { update_error_ = std::move(error); }
 
+    /// Make ONLY the update_item call at 0-based `index` fail with `error`.
+    void set_update_error_at(std::size_t index, Error error) {
+        update_error_ = std::move(error);
+        update_error_at_ = index;
+    }
+
     /// Make the next delete_item(s) fail with this Error. nullopt => succeed.
     void set_delete_item_error(std::optional<Error> error) {
         delete_item_error_ = std::move(error);
+    }
+
+    /// Make ONLY the delete_item call at 0-based `index` fail with `error`.
+    void set_delete_item_error_at(std::size_t index, Error error) {
+        delete_item_error_ = std::move(error);
+        delete_item_error_at_ = index;
     }
 
     /// The UpdateItem requests issued, in order (for request-shape assertions).
@@ -229,8 +259,10 @@ public:
     }
 
     Result<UpdateItemOut> update_item(const UpdateItemIn& in) override {
+        const std::size_t call = update_requests_.size();
         update_requests_.push_back(in);
-        if (update_error_.has_value()) {
+        if (update_error_.has_value() &&
+            (!update_error_at_.has_value() || call == *update_error_at_)) {
             return fail(*update_error_);
         }
         UpdateItemOut out;
@@ -240,8 +272,10 @@ public:
     }
 
     Result<DeleteItemOut> delete_item(const DeleteItemIn& in) override {
+        const std::size_t call = delete_item_requests_.size();
         delete_item_requests_.push_back(in);
-        if (delete_item_error_.has_value()) {
+        if (delete_item_error_.has_value() &&
+            (!delete_item_error_at_.has_value() || call == *delete_item_error_at_)) {
             return fail(*delete_item_error_);
         }
         DeleteItemOut out;
@@ -470,17 +504,23 @@ public:
     void set_list_backups_error(std::optional<Error> error) {
         list_backups_error_ = std::move(error);
     }
+    /// Make ONLY list_backups() for 0-based page `page` fail with `error`.
+    void set_list_backups_error_at_page(std::size_t page, Error error) {
+        list_backups_error_ = std::move(error);
+        list_backups_error_at_ = page;
+    }
     const std::vector<ListBackupsIn>& list_backups_requests() const {
         return list_backups_requests_;
     }
     Result<ListBackupsOut> list_backups(const ListBackupsIn& in) override {
         list_backups_requests_.push_back(in);
-        if (list_backups_error_.has_value()) {
-            return fail(*list_backups_error_);
-        }
         std::size_t page = 0;
         if (in.exclusive_start_backup_arn.has_value()) {
             page = static_cast<std::size_t>(std::stoul(*in.exclusive_start_backup_arn));
+        }
+        if (list_backups_error_.has_value() &&
+            (!list_backups_error_at_.has_value() || page == *list_backups_error_at_)) {
+            return fail(*list_backups_error_);
         }
         ListBackupsOut out;
         if (page < backup_pages_.size()) {
@@ -516,6 +556,32 @@ public:
         }
         ListTablesOut out;
         out.table_names = table_names_;
+        return out;
+    }
+
+    Result<ListTablesPageOut> list_tables_page(const ListTablesPageIn& in) override {
+        list_tables_page_requests_.push_back(in);
+        // The cursor is the index of the page's first name, as a string.
+        std::size_t start = 0;
+        if (in.exclusive_start_table_name.has_value()) {
+            start = static_cast<std::size_t>(std::stoul(*in.exclusive_start_table_name));
+        }
+        const std::size_t size = list_page_size_ == 0 ? table_names_.size() : list_page_size_;
+        const std::size_t page = size == 0 ? 0 : start / size;
+        if (list_error_.has_value()) {
+            return fail(*list_error_);
+        }
+        if (list_page_error_.has_value() && page == list_page_error_at_) {
+            return fail(*list_page_error_);
+        }
+        ListTablesPageOut out;
+        const std::size_t end = std::min(table_names_.size(), start + size);
+        for (std::size_t i = start; i < end; ++i) {
+            out.table_names.push_back(table_names_[i]);
+        }
+        if (end < table_names_.size()) {
+            out.last_evaluated_table_name = std::to_string(end);
+        }
         return out;
     }
 
@@ -674,6 +740,13 @@ private:
     std::vector<std::vector<BackupSummaryRow>> backup_pages_;
     std::vector<ListBackupsIn> list_backups_requests_;
     std::optional<Error> list_backups_error_;
+    std::optional<std::size_t> list_backups_error_at_;
+    std::size_t list_page_size_ = 0;
+    std::optional<Error> list_page_error_;
+    std::size_t list_page_error_at_ = 0;
+    std::vector<ListTablesPageIn> list_tables_page_requests_;
+    std::optional<std::size_t> update_error_at_;
+    std::optional<std::size_t> delete_item_error_at_;
     std::vector<std::string> waited_active_;
     std::vector<ExplainRequest> explain_requests_;
     std::string explain_body_ = "{\n\t\"stub\":\t\"explain\"\n}";

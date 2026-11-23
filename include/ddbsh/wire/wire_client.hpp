@@ -88,6 +88,7 @@ public:
     Result<ListBackupsOut> list_backups(const ListBackupsIn&) override;
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
+    Result<ListTablesPageOut> list_tables_page(const ListTablesPageIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
     Result<SearchVectorsOut> search_vectors(const SearchVectorsIn&) override;
     Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn&) override;

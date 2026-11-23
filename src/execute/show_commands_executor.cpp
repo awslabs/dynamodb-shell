@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "execute/report_collector.hpp"
+
 namespace ddbsh::engine {
 
 namespace {
@@ -274,7 +276,8 @@ std::string reconstruct_ddl(const ShowCreateTableCmd& cmd, const DescribeTableOu
 
 }  // namespace
 
-Result<ExecOutcome> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client) {
+Result<void> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client,
+                                  OutcomeSink& sink) {
     ListBackupsIn request;
     if (!cmd.table.empty()) {
         request.table_name = cmd.table;
@@ -284,41 +287,61 @@ Result<ExecOutcome> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& 
     }
     request.limit = 100;
 
-    ReportOutcome report;
+    // One fragment per non-empty ListBackups page, emitted before the next
+    // page is requested (P12, D-P12-11), as the original show_backups.cpp
+    // printed each page's summaries inside its loop. A failure on a later page
+    // leaves the earlier pages emitted (D-P12-14).
     for (;;) {
         auto page = client.list_backups(request);
         if (!page.has_value()) {
             return fail(page.error());
         }
+        ReportOutcome report;
         for (const auto& s : page->summaries) {
             report.lines.push_back("Table: " + s.table_name + ", Backup: " + s.backup_name +
                                    ", Status: " + s.backup_status + ", ARN: " + s.backup_arn +
                                    ", On: " + s.creation_datetime +
                                    ", Expires: " + s.expiry_datetime);
         }
+        if (!report.lines.empty()) {
+            sink.emit(ExecOutcome{std::move(report)});
+        }
         if (!page->last_evaluated_backup_arn.has_value()) {
             break;
         }
         request.exclusive_start_backup_arn = page->last_evaluated_backup_arn;
     }
-    return ExecOutcome{std::move(report)};
+    return {};
 }
 
-Result<ExecOutcome> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client,
-                                        const std::string& region) {
+Result<ExecOutcome> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client) {
+    ReportCollector collect;
+    auto streamed = execute_show_backups(cmd, client, collect);
+    if (!streamed.has_value()) {
+        return fail(streamed.error());
+    }
+    return ExecOutcome{std::move(collect.report)};
+}
+
+Result<void> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client,
+                                 const std::string& region, OutcomeSink& sink) {
     auto limits = client.describe_limits(DescribeLimitsIn{});
     if (!limits.has_value()) {
         return fail(limits.error());
     }
 
-    ReportOutcome report;
-    report.lines.push_back("Region: " + region);
-    report.lines.push_back("Account Max (RCU, WCU): " + std::to_string(limits->account_max_rcu) +
+    // The three header lines go out as soon as DescribeLimits returns, before
+    // the ListTables/DescribeTable calls that the totals need (P12,
+    // D-P12-11), as the original show_limits.cpp printed them.
+    ReportOutcome header;
+    header.lines.push_back("Region: " + region);
+    header.lines.push_back("Account Max (RCU, WCU): " + std::to_string(limits->account_max_rcu) +
                            ", " + std::to_string(limits->account_max_wcu));
     // NOTE: two spaces after the colon on this line — the original's literal
     // ("Table Max (RCU, WCU):  %lld, %lld").
-    report.lines.push_back("Table Max (RCU, WCU):  " + std::to_string(limits->table_max_rcu) +
+    header.lines.push_back("Table Max (RCU, WCU):  " + std::to_string(limits->table_max_rcu) +
                            ", " + std::to_string(limits->table_max_wcu));
+    sink.emit(ExecOutcome{std::move(header)});
 
     auto listed = client.list_tables(ListTablesIn{});
     if (!listed.has_value()) {
@@ -351,13 +374,25 @@ Result<ExecOutcome> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client
         }
     }
 
-    report.lines.push_back("Total Tables (RCU, WCU): " + std::to_string(rcus) + ", " +
+    ReportOutcome totals;
+    totals.lines.push_back("Total Tables (RCU, WCU): " + std::to_string(rcus) + ", " +
                            std::to_string(wcus));
-    report.lines.push_back("Total GSI (RCU, WCU): " + std::to_string(gsircus) + ", " +
+    totals.lines.push_back("Total GSI (RCU, WCU): " + std::to_string(gsircus) + ", " +
                            std::to_string(gsiwcus));
-    report.lines.push_back("Total (RCU, WCU): " + std::to_string(rcus + gsircus) + ", " +
+    totals.lines.push_back("Total (RCU, WCU): " + std::to_string(rcus + gsircus) + ", " +
                            std::to_string(wcus + gsiwcus));
-    return ExecOutcome{std::move(report)};
+    sink.emit(ExecOutcome{std::move(totals)});
+    return {};
+}
+
+Result<ExecOutcome> execute_show_limits(const ShowLimitsCmd& cmd, IDDBClient& client,
+                                        const std::string& region) {
+    ReportCollector collect;
+    auto streamed = execute_show_limits(cmd, client, region, collect);
+    if (!streamed.has_value()) {
+        return fail(streamed.error());
+    }
+    return ExecOutcome{std::move(collect.report)};
 }
 
 Result<ExecOutcome> execute_show_create_table(const ShowCreateTableCmd& cmd, IDDBClient& client) {

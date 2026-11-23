@@ -152,6 +152,15 @@ struct BulkWriteOutcome {
     /// `(n read, m modified, k ccf)` status after), and `-s`-stable because
     /// `'U'`/`'D'` sort above `'{'` (arch §7, update.cpp/delete.cpp).
     std::vector<ItemRow> returned_items{};
+    /// A streaming fragment that carries RETURN VALUES items only (P12,
+    /// D-P12-15). A bulk UPDATE/UPSERT/DELETE with RETURN VALUES emits one
+    /// partial fragment per returned item, as soon as its write succeeds, then
+    /// the final (non-partial) fragment with the accounting line. The Renderer
+    /// renders a partial fragment's items and no accounting line. The counts of
+    /// a partial fragment are not meaningful. The buffering
+    /// Session::execute(stmt) folds the partial fragments into the final one,
+    /// so it still returns one BulkWriteOutcome with every returned item.
+    bool partial = false;
 };
 
 struct MultiOutcome;  // defined below (recursive variant member)

@@ -11,7 +11,11 @@
 
 #include "ddbsh/session.hpp"
 
+#include <algorithm>
+#include <iterator>
+#include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ddbsh/version.hpp"
@@ -35,6 +39,83 @@
 #include "parser/param_bind.hpp"
 
 namespace ddbsh {
+
+namespace {
+
+/// Fold the fragments of a command that streams per response (P12) back into
+/// the one outcome the buffering Session::execute(stmt) returned before P12
+/// (D-P12-15). Returns nullopt for every other command, whose fragments keep
+/// the generic 0 / 1 / MultiOutcome shape.
+///   * SHOW TABLES / SHOW BACKUPS / SHOW LIMITS / DESCRIBE: every
+///     ReportOutcome's lines, in order, in one ReportOutcome (empty when the
+///     command emitted nothing, e.g. SHOW TABLES over no tables).
+///   * bulk UPDATE / UPSERT / DELETE under EXPLAIN: every ExplainOutcome's
+///     blocks, in order, in one ExplainOutcome.
+///   * bulk UPDATE / UPSERT / DELETE with RETURN VALUES: the partial
+///     fragments' items, in order, ahead of the final fragment's, in that one
+///     final BulkWriteOutcome.
+std::optional<ExecOutcome> fold_streamed(const Statement& statement,
+                                         std::vector<ExecOutcome>& parts) {
+    const bool explain = statement.ast() != nullptr && statement.ast()->explain;
+    switch (statement.kind()) {
+        case StatementKind::show_tables:
+        case StatementKind::show_backups:
+        case StatementKind::show_limits:
+        case StatementKind::describe: {
+            if (explain) {
+                return std::nullopt;  // EXPLAIN DESCRIBE emits one ExplainOutcome
+            }
+            ReportOutcome report;
+            for (auto& part : parts) {
+                if (auto* r = std::get_if<ReportOutcome>(&part)) {
+                    std::move(r->lines.begin(), r->lines.end(), std::back_inserter(report.lines));
+                }
+            }
+            return ExecOutcome{std::move(report)};
+        }
+        case StatementKind::update_statement:
+        case StatementKind::del: {
+            if (parts.size() < 2) {
+                return std::nullopt;
+            }
+            // Every fragment is of one arm (the executors emit only
+            // ExplainOutcome under EXPLAIN, only BulkWriteOutcome otherwise);
+            // anything else falls back to the generic shape.
+            if (std::holds_alternative<ExplainOutcome>(parts.front())) {
+                ExplainOutcome merged;
+                for (auto& part : parts) {
+                    auto* e = std::get_if<ExplainOutcome>(&part);
+                    if (e == nullptr) {
+                        return std::nullopt;
+                    }
+                    std::move(e->blocks.begin(), e->blocks.end(),
+                              std::back_inserter(merged.blocks));
+                    if (e->trailing_status.has_value()) {
+                        merged.trailing_status = std::move(e->trailing_status);
+                    }
+                }
+                return ExecOutcome{std::move(merged)};
+            }
+            std::vector<ItemRow> items;
+            for (auto& part : parts) {
+                auto* b = std::get_if<BulkWriteOutcome>(&part);
+                if (b == nullptr) {
+                    return std::nullopt;
+                }
+                std::move(b->returned_items.begin(), b->returned_items.end(),
+                          std::back_inserter(items));
+            }
+            BulkWriteOutcome final_part = std::move(std::get<BulkWriteOutcome>(parts.back()));
+            final_part.returned_items = std::move(items);
+            final_part.partial = false;
+            return ExecOutcome{std::move(final_part)};
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
+}  // namespace
 
 struct Session::Impl {
     SessionConfig config;
@@ -132,6 +213,11 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
     if (!streamed.has_value()) {
         return fail(streamed.error());
     }
+    // The commands that stream per response since P12 return the single
+    // outcome they returned before it (D-P12-15).
+    if (auto folded = fold_streamed(statement, sink.parts); folded.has_value()) {
+        return std::move(*folded);
+    }
     if (sink.parts.empty()) {
         return ExecOutcome{EmptyOutcome{}};
     }
@@ -142,6 +228,15 @@ Result<ExecOutcome> Session::execute(const Statement& statement) {
 }
 
 Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
+    // Every call ends with exactly one end_statement(), after the last emit,
+    // on success and on failure (P12, D-P12-16), so a sink holding an open
+    // result set closes it before the caller reports any error.
+    Result<void> result = dispatch(statement, sink);
+    sink.end_statement();
+    return result;
+}
+
+Result<void> Session::dispatch(const Statement& statement, OutcomeSink& sink) {
     // Reject an unbound `?` marker before any serialization (see the buffering
     // overload); markers are legal only through the prepared bind path.
     if (statement.ast() != nullptr && engine::count_param_markers(*statement.ast()) > 0) {
@@ -322,8 +417,9 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
             // SHOW TABLES is not explainable (it is a show_command, not in the
             // grammar's `explainable` set — SHOW/CONNECT/QUIT never carry the
             // EXPLAIN flag), so there is no explain path to guard here.
+            // Streams one row per fragment as its describes return (P12).
             const auto& show = std::get<engine::ShowTablesCmd>(statement.ast()->command);
-            return emit_single(engine::execute_show_tables(show, impl_->client));
+            return engine::execute_show_tables(show, impl_->client, sink);
         }
         case StatementKind::describe:
             if (statement.ast()->explain) {
@@ -333,8 +429,9 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
                 return emit_single(engine::execute_describe_explain(
                     std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client));
             }
-            return emit_single(engine::execute_describe(
-                std::get<engine::DescribeCmd>(statement.ast()->command), impl_->client));
+            // Streams up to three fragments, one per response group (P12).
+            return engine::execute_describe(std::get<engine::DescribeCmd>(statement.ast()->command),
+                                            impl_->client, sink);
         case StatementKind::create_backup:
             // BACKUP TABLE ... CALLED ... — a ddl command, so explainable.
             return emit_single(engine::execute_create_backup(
@@ -356,14 +453,16 @@ Result<void> Session::execute(const Statement& statement, OutcomeSink& sink) {
             // SHOW commands are not explainable (grammar: show_command is not in
             // the explainable set, matching the oracle — EXPLAIN SHOW ... is a
             // syntax error), so there is no explain path here.
-            return emit_single(engine::execute_show_backups(
-                std::get<engine::ShowBackupsCmd>(statement.ast()->command), impl_->client));
+            // Streams one fragment per ListBackups page (P12).
+            return engine::execute_show_backups(
+                std::get<engine::ShowBackupsCmd>(statement.ast()->command), impl_->client, sink);
         case StatementKind::show_limits:
             // The `Region:` line is sourced from the session's current region
             // (D-2f-9), threaded as a parameter — not from the client seam.
-            return emit_single(engine::execute_show_limits(
+            // Streams the header after DescribeLimits, then the totals (P12).
+            return engine::execute_show_limits(
                 std::get<engine::ShowLimitsCmd>(statement.ast()->command), impl_->client,
-                impl_->config.region));
+                impl_->config.region, sink);
         case StatementKind::show_create_table:
             return emit_single(engine::execute_show_create_table(
                 std::get<engine::ShowCreateTableCmd>(statement.ast()->command), impl_->client));

@@ -73,7 +73,8 @@ public:
 
 private:
     friend Result<SelectRowCursor> open_select_cursor(const SelectCmd&, IDDBClient&,
-                                                      const std::string&);
+                                                      const std::string&, RateLimiter::Clock,
+                                                      RateLimiter::Sleep);
 
     explicit SelectRowCursor(IDDBClient& client) : client_(&client) {}
 
@@ -89,6 +90,9 @@ private:
     std::vector<ItemRow> page_{};  ///< the most recently yielded page
     bool more_ = true;             ///< a further request may yield rows
     bool started_ = false;         ///< at least one request has been issued
+    /// A ratelimit sleep is owed before the next request (D-P12-13): set after
+    /// a page that has a successor, taken at the start of the next fetch.
+    bool throttle_pending_ = false;
 };
 
 /// Open a streaming cursor for a (non-EXPLAIN) SELECT. Plans the SAME access
@@ -97,9 +101,13 @@ private:
 /// Precondition: the SELECT is NOT a vector search (the caller routes a vector
 /// SELECT to execute_select, which buffers the single SearchVectors request);
 /// a vector plan returns an Error here. `alias_prefix` seeds the one SymbolTable
-/// the planner uses (Session::next_alias_prefix()).
+/// the planner uses (Session::next_alias_prefix()). `clock`/`sleep` reach the
+/// WITH RATELIMIT limiter (empty => the real steady clock and sleep_for); tests
+/// inject them to observe where the sleeps fall against the API calls.
 Result<SelectRowCursor> open_select_cursor(const SelectCmd& cmd, IDDBClient& client,
-                                           const std::string& alias_prefix);
+                                           const std::string& alias_prefix,
+                                           RateLimiter::Clock clock = {},
+                                           RateLimiter::Sleep sleep = {});
 
 }  // namespace ddbsh::engine
 

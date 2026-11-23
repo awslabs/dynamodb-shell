@@ -1661,25 +1661,42 @@ Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
     // Follow LastEvaluatedTableName so the caller gets the complete list even
     // when the account has more tables than one page returns.
     ListTablesOut out;
-    Aws::String start_table;
+    ListTablesPageIn page_in;
     do {
-        Aws::DynamoDB::Model::ListTablesRequest request;
-        if (!start_table.empty()) {
-            request.SetExclusiveStartTableName(start_table);
+        auto page = list_tables_page(page_in);
+        if (!page.has_value()) {
+            return fail(page.error());
         }
-        auto outcome = client_->ListTables(request);
-        if (!outcome.IsSuccess()) {
-            const auto& err = outcome.GetError();
-            return fail(Error{Errc::service_error, err.GetMessage().c_str(),
-                              std::string(err.GetExceptionName().c_str()),
-                              std::string(err.GetRequestId().c_str())});
+        for (auto& name : page->table_names) {
+            out.table_names.push_back(std::move(name));
         }
-        const auto& result = outcome.GetResult();
-        for (const auto& name : result.GetTableNames()) {
-            out.table_names.emplace_back(name.c_str());
-        }
-        start_table = result.GetLastEvaluatedTableName();
-    } while (!start_table.empty());
+        page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
+    } while (page_in.exclusive_start_table_name.has_value());
+    return out;
+}
+
+Result<ListTablesPageOut> AwsDDBClient::list_tables_page(const ListTablesPageIn& in) {
+    // One ListTables request (P12, D-P12-12). No Limit: the service default
+    // page (100 names) is what the original show_tables.cpp asked for.
+    Aws::DynamoDB::Model::ListTablesRequest request;
+    if (in.exclusive_start_table_name.has_value() && !in.exclusive_start_table_name->empty()) {
+        request.SetExclusiveStartTableName(in.exclusive_start_table_name->c_str());
+    }
+    auto outcome = client_->ListTables(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& result = outcome.GetResult();
+    ListTablesPageOut out;
+    for (const auto& name : result.GetTableNames()) {
+        out.table_names.emplace_back(name.c_str());
+    }
+    if (!result.GetLastEvaluatedTableName().empty()) {
+        out.last_evaluated_table_name = std::string(result.GetLastEvaluatedTableName().c_str());
+    }
     return out;
 }
 

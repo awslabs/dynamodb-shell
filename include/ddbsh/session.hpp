@@ -113,7 +113,11 @@ public:
     /// INSERT). On failure it returns the Error and the fragments produced
     /// before the failure are discarded; an embedder that needs the original's
     /// partial-output-then-error behavior (the CLI) uses the streaming overload
-    /// below. (D-2c-12.)
+    /// below. (D-2c-12.) The commands that stream per response since P12 keep
+    /// their single-outcome shape here: SHOW TABLES, SHOW BACKUPS, SHOW LIMITS
+    /// and DESCRIBE return one ReportOutcome; a bulk UPDATE/DELETE returns one
+    /// BulkWriteOutcome (RETURN VALUES items included) or, under EXPLAIN, one
+    /// ExplainOutcome (D-P12-15).
     Result<ExecOutcome> execute(const Statement& statement);
 
     /// Execute a parsed Statement, emitting each outcome fragment to `sink` in
@@ -122,7 +126,12 @@ public:
     /// failure are the command's partial output (e.g. a multi-row INSERT that
     /// writes k rows then fails emits k WriteOutcome fragments and returns the
     /// Error). The engine writes to no stream; the sink is the embedder's
-    /// (D-2c-12).
+    /// (D-2c-12). Each fragment is emitted as soon as the API response that
+    /// completes it arrives (P12, D-P12-1): one per SELECT page, per written
+    /// INSERT row, per SHOW TABLES row, per SHOW BACKUPS page, per DESCRIBE /
+    /// SHOW LIMITS response group, per bulk-write RETURN VALUES item, and per
+    /// bulk EXPLAIN request group. After the last fragment, success or failure,
+    /// this calls sink.end_statement() exactly once (D-P12-16).
     Result<void> execute(const Statement& statement, OutcomeSink& sink);
 
     /// Convenience: parse then execute (buffering).
@@ -141,6 +150,10 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+
+    // The streaming overload's body: runs the statement against the sink.
+    // execute(stmt, sink) wraps it to call sink.end_statement() afterwards.
+    Result<void> dispatch(const Statement& statement, OutcomeSink& sink);
 
     // Narrow engine-internal access to impl_ for the connection layer's lazy
     // SELECT cursor (D-P5-1). SessionAccess is defined in session.cpp where
