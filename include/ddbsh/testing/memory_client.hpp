@@ -628,7 +628,13 @@ private:
                 if constexpr (std::is_same_v<T, TransactPut>) {
                     ItemRow row;
                     row.attributes = w.item;
-                    t->put(key_string(extract_key(row, t->schema)), std::move(row));
+                    // Compute the key first, in its own statement. Function
+                    // arguments are indeterminately sequenced, and GCC on
+                    // x86_64 evaluates them right to left: a key computed
+                    // inside the put() call read the moved-from, empty row,
+                    // which filed every Put under one empty key (P11 F2).
+                    std::string k = key_string(extract_key(row, t->schema));
+                    t->put(k, std::move(row));
                 } else if constexpr (std::is_same_v<T, TransactUpdate>) {
                     std::string k = key_string(w.key);
                     ItemRow row;
