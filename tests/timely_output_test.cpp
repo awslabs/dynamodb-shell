@@ -636,7 +636,11 @@ TEST(TimelyOutput, BulkDeleteFailureKeepsTheItemsAlreadyReturned) {
     };
     EXPECT_EQ(log, expected);
 
-    // The buffering overload discards the partial output.
+    // The buffering overload discards the partial output. The fake's error
+    // index counts every DeleteItem it has served, so re-arm it for this
+    // run's second delete.
+    client.set_delete_item_error_at(client.delete_item_requests().size() + 1,
+                                    service_error("DeleteItem failed"));
     auto buffered = session.run("delete from t where x = 0 return values all old;");
     ASSERT_FALSE(buffered.has_value());
     EXPECT_EQ(buffered.error().message, "DeleteItem failed");
