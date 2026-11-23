@@ -96,11 +96,29 @@ Result<std::string> WireClient::send_retrying(std::string_view operation, std::s
             // string the one-shot path would have (§4.1, fidelity).
             return resp;
         }
-        retry_backoff(attempt);  // sleep, then re-send
+        // The retry is decided: compute the backoff, tell the observer (P12,
+        // D-P12-18) with the delay about to be slept, then sleep and re-send.
+        const std::chrono::milliseconds delay = retry_delay(attempt);
+        if (retry_observer_ != nullptr) {
+            RetryEvent event;
+            event.operation = std::string(operation);
+            event.attempt = static_cast<int>(attempt) + 2;  // the send about to happen
+            event.max_attempts = static_cast<int>(max_retry_attempts_);
+            event.error_code = *name;
+            event.throttled = is_throttling_error(*name);
+            event.delay = delay;
+            try {
+                retry_observer_->on_retry(event);
+            } catch (...) {
+                // A notification only (retry_event.hpp): an observer's
+                // exception must not abandon a retry already decided on.
+            }
+        }
+        backoff_sleep(delay);
     }
 }
 
-void WireClient::retry_backoff(unsigned attempt) {
+std::chrono::milliseconds WireClient::retry_delay(unsigned attempt) {
     // Full jitter over an exponentially growing, capped ceiling (§4.5): base
     // 50ms, doubling per attempt, capped at 1000ms; actual sleep is a uniform
     // draw in [0, ceiling]. Full jitter de-synchronizes a burst (e.g. the
@@ -115,7 +133,11 @@ void WireClient::retry_backoff(unsigned attempt) {
         ceiling = std::min(scaled, kCapMs);
     }
     const auto sleep_ms = static_cast<long long>(jitter_unit() * static_cast<double>(ceiling));
-    backoff_sleep(std::chrono::milliseconds{sleep_ms});
+    return std::chrono::milliseconds{sleep_ms};
+}
+
+void WireClient::set_retry_observer(RetryObserver* observer) {
+    retry_observer_ = observer;
 }
 
 template <class Out>

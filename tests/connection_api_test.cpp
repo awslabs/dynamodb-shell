@@ -370,4 +370,55 @@ TEST(ConnectionApi, OwningClientConstructor) {
     EXPECT_EQ(rows->size(), 0u);
 }
 
+// P12 (D-P12-18): Connection::set_retry_observer forwards to its client, keeps
+// working after reconnect(), and refuses a closed handle.
+class ObserverRecordingClient : public MemoryClient {
+public:
+    void set_retry_observer(ddbsh::RetryObserver* observer) override {
+        last = observer;
+        ++calls;
+    }
+    ddbsh::RetryObserver* last = nullptr;
+    int calls = 0;
+};
+
+class NoopObserver : public ddbsh::RetryObserver {
+public:
+    void on_retry(const ddbsh::RetryEvent& /*event*/) override {}
+};
+
+TEST(ConnectionApi, SetRetryObserverForwardsToTheClient) {
+    ObserverRecordingClient client;
+    NoopObserver observer;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+
+    ASSERT_TRUE(db.set_retry_observer(&observer).has_value());
+    EXPECT_EQ(client.last, &observer);
+    ASSERT_TRUE(db.reconnect("us-west-2").has_value());
+    EXPECT_EQ(client.last, &observer);  // reconnect does not touch the registration
+    ASSERT_TRUE(db.set_retry_observer(nullptr).has_value());
+    EXPECT_EQ(client.last, nullptr);
+    EXPECT_EQ(client.calls, 2);
+}
+
+TEST(ConnectionApi, SetRetryObserverOnAClosedConnectionFails) {
+    ObserverRecordingClient client;
+    NoopObserver observer;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    db.close();
+    auto r = db.set_retry_observer(&observer);
+    ASSERT_FALSE(r.has_value());
+    EXPECT_EQ(r.error().code, ddbsh::Errc::invalid_argument);
+    EXPECT_EQ(client.calls, 0);
+}
+
+TEST(ConnectionApi, DefaultClientIgnoresTheRetryObserver) {
+    // A client with no retry loop (MemoryClient) inherits the IDDBClient no-op.
+    MemoryClient client;
+    NoopObserver observer;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    EXPECT_TRUE(db.set_retry_observer(&observer).has_value());
+    ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
+}
+
 }  // namespace

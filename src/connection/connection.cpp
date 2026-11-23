@@ -899,6 +899,14 @@ bool Connection::endpoint_overridden() const {
     return impl_->session->connection_hint().endpoint_overridden;
 }
 
+Result<void> Connection::set_retry_observer(RetryObserver* observer) {
+    if (impl_->closed) {
+        return fail(Errc::invalid_argument, "connection is closed");
+    }
+    impl_->client->set_retry_observer(observer);
+    return {};
+}
+
 void Connection::close() {
     impl_->session.reset();
     impl_->owned.reset();

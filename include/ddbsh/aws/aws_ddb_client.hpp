@@ -40,6 +40,10 @@
 
 namespace ddbsh::aws {
 
+namespace detail {
+struct RetryObserverSlot;  // aws/retry_observer_strategy.hpp (internal)
+}  // namespace detail
+
 /// Concrete IDDBClient backed by the AWS SDK for C++.
 class AwsDDBClient : public ddbsh::IDDBClient {
 public:
@@ -113,6 +117,14 @@ public:
     /// proxy); the session reports the region/endpoint separately.
     std::string connection_descriptor() const override;
 
+    /// Register the retry observer (P12, D-P12-18). rebuild() wraps the SDK
+    /// client's RetryStrategy (the caller's base_config retryStrategy when set,
+    /// else the SDK default) in a decorator that raises one RetryEvent per
+    /// retry the SDK decides to make, before it sleeps. The registration lives
+    /// in a slot this client owns, so it survives connect(). Borrowed pointer;
+    /// nullptr clears.
+    void set_retry_observer(ddbsh::RetryObserver* observer) override;
+
 private:
     // Construct (or replace) the underlying SDK client for a region/endpoint.
     // Shared by the ctor and connect() so both resolve credentials/endpoint the
@@ -124,6 +136,11 @@ private:
     std::optional<Aws::Client::ClientConfiguration> base_config_;  // caller's base (R-P4d-3)
     std::optional<std::chrono::milliseconds> waiter_timeout_;      // waiter poll budget (D27)
     std::string profile_;                                          // explicit credential profile
+    // The retry-observer registration shared with every decorator rebuild()
+    // installs (P12). Held by shared_ptr so a strategy the SDK still holds
+    // never points into a destroyed client. Opaque here: the decorator is the
+    // component's internal aws/retry_observer_strategy.hpp.
+    std::shared_ptr<detail::RetryObserverSlot> retry_slot_;
 };
 
 /// Read the `ca_bundle` setting from the resolved AWS config profile (D-P8-1/3).

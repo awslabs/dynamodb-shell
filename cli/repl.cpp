@@ -74,6 +74,29 @@ void FileRenderingSink::emit(const ddbsh::ExecOutcome& fragment) {
     }
 }
 
+std::string format_retry_line(const ddbsh::RetryEvent& event) {
+    std::string line = "ddbsh: ";
+    line += event.operation.empty() ? std::string("request") : event.operation;
+    line += event.throttled ? " throttled" : " failed";
+    if (!event.error_code.empty()) {
+        line += " (" + event.error_code + ")";
+    }
+    line += "; attempt " + std::to_string(event.attempt);
+    if (event.max_attempts > 0) {
+        line += " of " + std::to_string(event.max_attempts);
+    }
+    if (event.delay.has_value()) {
+        line += " in " + std::to_string(event.delay->count()) + " ms";
+    }
+    line += "\n";
+    return line;
+}
+
+void RetryLineWriter::on_retry(const ddbsh::RetryEvent& event) {
+    std::fputs(format_retry_line(event).c_str(), err_);
+    std::fflush(err_);
+}
+
 std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
                                              const char* env_value,
                                              const std::optional<std::string>& profile_value) {

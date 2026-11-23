@@ -27,6 +27,7 @@
 
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/renderer.hpp"
+#include "ddbsh/retry_event.hpp"
 #include "ddbsh/session.hpp"
 
 namespace ddbsh::cli {
@@ -48,6 +49,27 @@ public:
 private:
     const ddbsh::render::Renderer& renderer_;
     std::FILE* out_;
+    std::FILE* err_;
+};
+
+/// The text of one `--show-retries` line (P12, D-P12-20), newline included:
+///   ddbsh: Scan throttled (ProvisionedThroughputExceededException); attempt 2 of 3 in 150 ms
+///   ddbsh: Query failed (InternalServerError); attempt 3 of 3 in 40 ms
+/// "throttled" when the event is a throttle, else "failed"; the error code in
+/// parentheses only when there is one; " of N" only when the transport knows
+/// its budget; " in N ms" only when it knows the delay. An event with no
+/// operation name says "request". CLI presentation policy, not engine logic.
+std::string format_retry_line(const ddbsh::RetryEvent& event);
+
+/// The `--show-retries` observer: writes format_retry_line(event) to `err`
+/// (default stderr) and flushes, so the line appears while the CLI waits out
+/// the backoff. stdout is untouched, so the result bytes are unchanged.
+class RetryLineWriter : public ddbsh::RetryObserver {
+public:
+    explicit RetryLineWriter(std::FILE* err = stderr) : err_(err) {}
+    void on_retry(const ddbsh::RetryEvent& event) override;
+
+private:
     std::FILE* err_;
 };
 

@@ -108,6 +108,12 @@ public:
     // half.
     std::string connection_descriptor() const override;
 
+    // ---- retry notification (P12, D-P12-18) --------------------------------
+    // send_retrying raises one RetryEvent per retry it decides to make, after
+    // computing the backoff and before sleeping it. The waiters' DescribeTable
+    // polls are not retries and raise none. Borrowed pointer; nullptr clears.
+    void set_retry_observer(RetryObserver* observer) override;
+
 protected:
     /// The backoff sleep, shared by the two table waiters and the retry path
     /// (D-P6c-6; extended for HT-1 retry). Default: emscripten_sleep under
@@ -144,10 +150,11 @@ private:
     /// non-waiter op routes through; the two waiters keep their own poll loop.
     Result<std::string> send_retrying(std::string_view operation, std::string_view body);
 
-    /// Sleep the full-jitter backoff interval for the given 0-based attempt
-    /// (HT-1 §4.5): a uniform draw in [0, min(cap, base * 2^attempt)], base
-    /// 50ms, cap 1000ms. Calls backoff_sleep for the actual wait.
-    void retry_backoff(unsigned attempt);
+    /// The full-jitter backoff interval for the given 0-based attempt (HT-1
+    /// §4.5): a uniform draw in [0, min(cap, base * 2^attempt)], base 50ms, cap
+    /// 1000ms. send_retrying reports it in the RetryEvent, then passes it to
+    /// backoff_sleep, so the reported delay is the slept delay (P12, D-P12-18).
+    std::chrono::milliseconds retry_delay(unsigned attempt);
 
     /// serialize -> send_retrying -> parse for an op whose response maps
     /// straight to its *Out (no composed error, no paging). Defined in
@@ -156,6 +163,7 @@ private:
     Result<Out> round_trip(const WireRequest& req, Result<Out> (*parse)(const std::string&));
 
     Transport& transport_;
+    RetryObserver* retry_observer_ = nullptr;  // borrowed (set_retry_observer)
     std::string region_;
     std::string endpoint_;
     std::mt19937_64 rng_{std::random_device{}()};

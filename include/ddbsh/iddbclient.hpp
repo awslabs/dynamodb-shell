@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "ddbsh/result.hpp"
+#include "ddbsh/retry_event.hpp"
 #include "ddbsh/table_schema.hpp"
 #include "ddbsh/value.hpp"
 
@@ -930,6 +931,15 @@ public:
     /// overrides it to report its Transport's descriptor, and the CLI's
     /// AwsDDBClient overrides it to report the AWS SDK binding.
     virtual std::string connection_descriptor() const { return "direct client"; }
+
+    /// Register the observer the transport notifies before each retry it makes
+    /// (P12, D-P12-18; see retry_event.hpp). The pointer is borrowed: the
+    /// caller keeps the observer alive until it clears it or destroys the
+    /// client. `nullptr` clears it. A registration survives connect(). The
+    /// default ignores the observer, for a client with no retry loop of its
+    /// own (the test doubles, MemoryClient); AwsDDBClient and WireClient
+    /// override it.
+    virtual void set_retry_observer(RetryObserver* observer) { (void)observer; }
 };
 
 }  // namespace ddbsh

@@ -267,7 +267,7 @@ create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c)
 ## CLI flags, config, and environment
 
 ```
-Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [-c "<cmds>" | -f <file>]
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] [-c "<cmds>" | -f <file>]
 ```
 
 - `-c "<cmds>"` — run a batch string, then exit (mutually exclusive with `-f`).
@@ -291,6 +291,14 @@ Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [-c "<cmds>" | -f <f
   `aws configure set/get ca_bundle --profile` commands, and fail-closed TLS) is
   documented in
   [configuration 2 — native ddbsh against a local ExtendDB server](../configurations/02-native-extenddb.md).
+- `--show-retries` — write one line to stderr for every retry the AWS SDK makes
+  when DynamoDB throttles a request or a request fails with a transient error,
+  before the SDK waits out its backoff. Off by default; stdout is unchanged
+  either way. A line reads
+  `ddbsh: Scan throttled (ProvisionedThroughputExceededException); attempt 2 of 3 in 150 ms`.
+  "throttled" becomes "failed" for an error that is not a throttle; the error
+  code, the `of N` budget and the `in N ms` delay are left out when the SDK
+  does not supply them. Nothing is printed for an error the SDK will not retry.
 
 At startup the CLI loads a config file (`DDBSH_CONFIG_FILE`, else
 `~/.ddbsh_config`) if present and reads/writes interactive history at

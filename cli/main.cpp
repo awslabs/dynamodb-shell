@@ -45,6 +45,10 @@
 //                the resolved profile's `ca_bundle` config setting > system
 //                trust. Needed to reach an endpoint with a self-signed cert
 //                (e.g. a local ExtendDB server).
+//   --show-retries
+//                write one line to stderr for every retry the AWS SDK makes
+//                (throttling or a transient error), before its backoff (P12,
+//                D-P12-20). Off by default.
 
 #include <csignal>
 #include <cstdio>
@@ -164,15 +168,17 @@ int main(int argc, char** argv) {
     std::optional<std::string> cmdstring;
     std::optional<std::string> inputfile;
     std::optional<std::string> ca_bundle_flag;  // --ca-bundle <file> (D1)
+    bool show_retries = false;                  // --show-retries (P12, D-P12-20)
     Terminator term;                            // default: the word `go`
 
     // --ca-bundle has no short form (matching the AWS CLI, which exposes only
     // the long flag); give it a val outside the ASCII range so the switch below
-    // can distinguish it.
-    enum { OPT_CA_BUNDLE = 1000 };
+    // can distinguish it. --show-retries likewise.
+    enum { OPT_CA_BUNDLE = 1000, OPT_SHOW_RETRIES };
     static const struct option long_opts[] = {
         {"terminator", optional_argument, nullptr, 't'},
         {"ca-bundle", required_argument, nullptr, OPT_CA_BUNDLE},
+        {"show-retries", no_argument, nullptr, OPT_SHOW_RETRIES},
         {nullptr, 0, nullptr, 0},
     };
 
@@ -209,10 +215,13 @@ int main(int argc, char** argv) {
             case OPT_CA_BUNDLE:
                 ca_bundle_flag = optarg;
                 break;
+            case OPT_SHOW_RETRIES:
+                show_retries = true;
+                break;
             default:
                 std::fputs(
                     "Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] "
-                    "[-c \"<cmds>\" | -f <file>]\n",
+                    "[--show-retries] [-c \"<cmds>\" | -f <file>]\n",
                     stderr);
                 return 1;
         }
@@ -243,6 +252,9 @@ int main(int argc, char** argv) {
     const std::optional<std::string> ca_bundle =
         ddbsh::cli::resolve_ca_bundle(ca_bundle_flag, std::getenv("AWS_CA_BUNDLE"), profile_ca);
 
+    // Declared before the client so it outlives the client's borrowed pointer.
+    ddbsh::cli::RetryLineWriter retry_writer;
+
     std::optional<ddbsh::aws::AwsDDBClient> client_storage;
     if (ca_bundle.has_value()) {
         Aws::Client::ClientConfiguration cfg;
@@ -252,6 +264,11 @@ int main(int argc, char** argv) {
         client_storage.emplace(region, endpoint);
     }
     ddbsh::aws::AwsDDBClient& client = *client_storage;
+    // --show-retries (P12, D-P12-20): one stderr line per SDK retry, before
+    // its backoff. Off by default, so default output is byte-identical.
+    if (show_retries) {
+        client.set_retry_observer(&retry_writer);
+    }
     ddbsh::Session session(ddbsh::SessionConfig{region, endpoint}, client);
     ddbsh::render::Renderer renderer;
 

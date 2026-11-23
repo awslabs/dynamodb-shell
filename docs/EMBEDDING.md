@@ -105,6 +105,21 @@ error, never silently executed.
 retry strategy, max connections, proxy); ddbsh overlays region/endpoint and its
 own user-agent. A separate `waiter_timeout` bounds the CREATE/DROP waiters.
 
+**Watching retries.** When DynamoDB throttles a request, or a request fails with
+a transient error, the AWS SDK backs off and sends it again; the engine never
+sees those retries. To watch them, register a `ddbsh::RetryObserver`
+(`ddbsh/retry_event.hpp`) with `db->connection().set_retry_observer(&observer)`.
+Its `on_retry(const ddbsh::RetryEvent&)` is called on the requesting thread
+once per retry the SDK has decided to make, before it sleeps. The event carries
+the operation (`"Scan"`), the attempt about to be made (2 for the first retry),
+the SDK's attempt budget, the error code, whether it is a throttle, and the
+delay about to be slept. No event is raised for an error the SDK will not retry
+or for the last attempt. The pointer is borrowed: keep the observer alive until
+you pass `nullptr` or close the connection. The registration survives
+`reconnect()` and `CONNECT`. `IDDBClient::set_retry_observer` is the same hook
+for an embedder that owns its client; `ddbsh::is_throttling_error(code)` is the
+throttling-code test the events use.
+
 **Header boundary:** `ddbsh/*.hpp` (including `ddbsh/connection.hpp`) are
 SDK-free (compile with only a C++23 toolchain); `ddbsh/aws/*.hpp` require the
 AWS SDK for C++. Link `ddbsh::ddbsh` for the engine alone, `ddbsh::aws` for the
