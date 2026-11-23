@@ -50,8 +50,10 @@ jobs:
         with:
           version: 3.1.61
 
-      # After emsdk, which puts its own Node on PATH: the offline gates run on
-      # this pinned Node, not on whichever Node the emsdk checkout bundles.
+      # After emsdk, which puts its own Node on PATH: the vendor check and the
+      # offline gates run on this pinned Node. This emsdk brings Node 18.20.3,
+      # older than the SDK's floor; the devtools scripts keep a Node 20+ that
+      # is already on PATH (devtools/lib-web.sh, web_select_node).
       - name: Set up Node (>= 20, the AWS SDK for JavaScript floor)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

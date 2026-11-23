@@ -273,8 +273,10 @@ for anyone with the deployer policy.
   whose commit differs. The cache key contains the version, the runner image
   and the compiler version, so a change to any of them builds the SDK once
   more; raise the key's `-r1` suffix when the build recipe changes.
-- **Emscripten** is pinned to 3.1.61 in `web-bundle.yml`, and the offline web
-  gates run on Node 22.
+- **Emscripten** is pinned to 3.1.61 in `web-bundle.yml`. The vendor check and
+  the offline web gates run on Node 22 from `actions/setup-node`: the emsdk that
+  `setup-emsdk` installs brings Node 18.20.3, and the devtools scripts prefer a
+  Node 20+ on `PATH` to it.
 - **clang-format** is 15 (15.0.7, the `clang-format-15` package of Ubuntu
   24.04). The `format` job runs on `ubuntu-24.04` so the version stays fixed.
   Format with the same major version locally:

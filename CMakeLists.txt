@@ -407,6 +407,13 @@ if(DDBSH_BUILD_TESTS)
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/golden_absence_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
 
+    # P11 F1: the Node that devtools/vendor-aws-sdk-js and devtools/lib-web.sh
+    # pick (web_select_node): a Node 20+ on PATH wins over emsdk's bundled
+    # Node. Offline: stubs stand in for Node, npm and emcmake.
+    add_test(NAME web_node_selection_check
+             COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_node_selection_check.sh"
+                     "${CMAKE_CURRENT_SOURCE_DIR}")
+
     # OFFLINE embedding sample (D29): built in-tree against the SDK-free engine
     # and run as a default-on, credential-less CTest. It drives the embedding
     # API (ddbsh::Connection) over the in-memory ddbsh::testing::MemoryClient,

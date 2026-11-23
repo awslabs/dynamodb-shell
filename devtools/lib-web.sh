@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # devtools/lib-web.sh — shared setup for the browser-edition devtools
-# (run-web-smoke, run-web-golden, serve-web). Source it; do not execute it.
+# (run-web-smoke, run-web-golden, serve-web, vendor-aws-sdk-js). Source it; do
+# not execute it.
 #
 # Provides:
+#   web_select_node      make `node` on PATH a Node >= 20 (the floor of the
+#                        vendored AWS SDK for JavaScript): keep a Node 20+ that
+#                        is already on PATH, else put emsdk's newest bundled
+#                        Node first. vendor-aws-sdk-js and web_setup_emsdk both
+#                        use it, so they always pick the same Node.
 #   web_setup_emsdk      locate the pinned emsdk, pick a python >= 3.10 for its
-#                        scripts, put emcc/emcmake and emsdk's Node on PATH, and
-#                        set NODE_BIN (Node >= 20 is required by the SDK bundle).
+#                        scripts, put emcc/emcmake on PATH, pick Node with
+#                        web_select_node, and set NODE_BIN.
 #   web_build_bundle     configure (once) + build the wasm-release preset and
 #                        its packaging step (ddbsh-web-package), and set
 #                        WEB_OUT to the staged static bundle dir.
@@ -48,18 +54,59 @@ web_setup_emsdk() {
     fi
     export EMSDK_PYTHON
     export EMSDK="$EMSDK_ROOT"
-    local node_bin
-    node_bin="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | sort -V | tail -1)" 2>/dev/null || true)"
-    export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten${node_bin:+:$node_bin}:$PATH"
+    export PATH="$EMSDK_ROOT:$EMSDK_ROOT/upstream/emscripten:$PATH"
     if ! command -v emcmake >/dev/null 2>&1; then
         echo "error: emcmake not on PATH after emsdk setup (EMSDK=$EMSDK_ROOT)." >&2
         return 1
     fi
+    web_select_node "$EMSDK_ROOT" || return 1
     NODE_BIN="$(command -v node)"
-    if ! "$NODE_BIN" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
-        echo "error: Node >= 20 required by the AWS SDK bundle (found $("$NODE_BIN" --version) at $NODE_BIN)." >&2
-        return 1
+}
+
+# web_node_ok <node>
+# True when <node> runs and is Node 20 or newer, the floor of the vendored AWS
+# SDK for JavaScript (SDK >= 3.950). False for an empty argument.
+web_node_ok() {
+    [ -n "$1" ] &&
+        "$1" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' \
+            >/dev/null 2>&1
+}
+
+# web_node_version <node>
+# "<version> (<path>)" for an error message, or "no Node" for an empty
+# argument or a node that does not run.
+web_node_version() {
+    local v
+    if [ -n "$1" ] && v="$("$1" --version 2>/dev/null)"; then
+        printf '%s (%s)' "$v" "$1"
+    else
+        printf 'no Node'
     fi
+}
+
+# web_select_node <emsdk-root>
+# Make `node` on PATH a Node 20 or newer. A Node 20+ already on PATH is kept:
+# CI's actions/setup-node, or a developer's own install. Only when PATH has no
+# Node 20+ does emsdk's newest bundled Node go first on PATH. The Node that
+# emsdk bundles depends on the emsdk checkout, not on the Emscripten version:
+# for 3.1.61, CI's setup-emsdk v16 brings Node 18.20.3 and a current emsdk
+# checkout brings Node 24. So emsdk's Node never shadows a newer one (P11 F1).
+# Returns 1, naming both candidates, when neither is Node 20+.
+web_select_node() {
+    local emsdk_root="$1" path_node emsdk_node emsdk_bin
+    path_node="$(command -v node || true)"
+    if web_node_ok "$path_node"; then
+        return 0
+    fi
+    emsdk_node="$(ls -d "$emsdk_root"/node/*/bin/node 2>/dev/null | sort -V | tail -1 || true)"
+    if web_node_ok "$emsdk_node"; then
+        emsdk_bin="$(dirname "$emsdk_node")"
+        PATH="$emsdk_bin:$PATH"
+        export PATH
+        return 0
+    fi
+    echo "error: Node >= 20 required; found $(web_node_version "$path_node") on PATH and $(web_node_version "$emsdk_node") in emsdk ($emsdk_root). Put Node 20+ on PATH, or install emsdk per web/README.md." >&2
+    return 1
 }
 
 web_build_bundle() {

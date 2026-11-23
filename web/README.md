@@ -79,8 +79,9 @@ unchanged, and service errors arrive as their verbatim `__type` document.
   The link flags in `CMakeLists.txt` (Asyncify, embind, ES6 `MODULARIZE`,
   `-sDYNAMIC_EXECUTION=0`) are known-good for 3.1.61; re-verify them on a bump.
 - **Node.js 20+** for the tests, the gates and `devtools/vendor-aws-sdk-js`
-  (SDK ≥ 3.950 requires it). emsdk's bundled Node (24.x) is picked up by the
-  devtools scripts.
+  (SDK ≥ 3.950 requires it). The devtools scripts use the `node` on `PATH` when
+  it is 20 or newer, and otherwise emsdk's newest bundled Node (24.x in a
+  current emsdk checkout).
 
 ## Build and serve
 

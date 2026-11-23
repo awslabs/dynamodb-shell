@@ -28,7 +28,8 @@
 #             index.html). Exit 1 on any difference. Used by CI so the committed
 #             bundle is a reproducible build, not an opaque blob.
 #
-# Needs Node >= 20 (SDK >= 3.950); emsdk's bundled Node is used when present.
+# Needs Node >= 20 (SDK >= 3.950): the node on PATH when it is 20 or newer,
+# else emsdk's newest bundled Node (web_select_node, devtools/lib-web.sh).
 # Network access to the npm registry is needed for npm ci. No AWS access.
 
 set -euo pipefail
@@ -46,15 +47,11 @@ case "${1:-}" in
 esac
 
 # --- Node >= 20 -------------------------------------------------------------
-EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
-EMSDK_NODE_BIN="$(dirname "$(ls -d "$EMSDK_ROOT"/node/*/bin/node 2>/dev/null | sort -V | tail -1)" 2>/dev/null || true)"
-if [ -n "$EMSDK_NODE_BIN" ] && [ -x "$EMSDK_NODE_BIN/node" ]; then
-    export PATH="$EMSDK_NODE_BIN:$PATH"
-fi
-if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
-    echo "error: Node >= 20 required (found $(node --version)); install emsdk per web/README.md or put Node 20+ on PATH." >&2
-    exit 1
-fi
+# The same rule as the other web devtools: a Node 20+ on PATH wins, and emsdk's
+# newest bundled Node is the fallback. CI's emsdk brings Node 18 (P11 F1).
+# shellcheck source=devtools/lib-web.sh
+. "$REPO_DIR/devtools/lib-web.sh"
+web_select_node "${EMSDK:-$HOME/emsdk}" || exit 1
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -105,7 +102,7 @@ if [ "$MODE" = "check" ]; then
         rc=1
     fi
     if [ "$rc" -eq 0 ]; then
-        echo "vendor check OK: @aws-sdk/client-dynamodb $SDK_VERSION, esbuild $ESBUILD_VERSION, outputs match PROVENANCE.json"
+        echo "vendor check OK: @aws-sdk/client-dynamodb $SDK_VERSION, esbuild $ESBUILD_VERSION, Node $(node --version), outputs match PROVENANCE.json"
     fi
     exit "$rc"
 fi
