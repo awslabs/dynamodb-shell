@@ -174,13 +174,21 @@ fails with that explanation instead of skipping silently.
 A maintainer can run the suite on the change by pushing it to a branch of
 `awslabs/dynamodb-shell` and opening a pull request from that branch.
 **Review the whole change before you push it.** From the push on, the
-branch's code runs with this repository's secrets and the CI role:
+branch's code runs with this repository's secrets and `GITHUB_TOKEN`, and with
+the CI role:
 
 - a workflow that the change adds or edits can run on the push itself, before
   any pull request exists, with every secret this repository's workflows can
   read and with its `ci` environment. One of those secrets is `TOKEN`, which
   `homebrew.yml` uses to update the `aws/homebrew-tap` formula that Homebrew
   users of ddbsh install;
+- the branch's workflows can also give their `GITHUB_TOKEN` write access with
+  a `permissions:` key. Unless a ruleset limits who may create `v*` tags, the
+  token can create a version tag and, through `workflow_dispatch`, start on
+  that tag any workflow that has that trigger on `main`. The run uses the
+  workflow file as it is at the tag, so a job in it can use the `site`
+  environment, sign in as `ddbsh-web-site-publisher` and replace the site,
+  the page where visitors paste short-term AWS credentials;
 - the pull request runs the branch's workflows, `devtools/` scripts, build
   and tests, and the `ddbsh` it builds, in a job that signs in as
   `ddbsh-ci-tests`. That role may use DynamoDB throughout 291751120739 and
