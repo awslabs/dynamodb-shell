@@ -1,0 +1,183 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# publish-site.yml — publish the browser edition to the project's site,
+# https://www.ddbsh.org/, for every numbered release tag (D-P11-6, D-P11-30).
+#
+#   bundle   builds, packages and checks the bundle from the tagged commit
+#            (the reusable web-bundle.yml, the same build pull requests run).
+#   publish  runs in the GitHub environment `site`, which accepts only tags
+#            matching v[0-9]*. It checks that the tag is a numbered version
+#            on main and the newest one, checks the bundle it received,
+#            signs in to the site account through OIDC, uploads the bundle
+#            with the tag's own web/hosting/aws/deploy.sh, and then checks
+#            the live site anonymously: the publisher role may upload and
+#            invalidate, but may not read the bucket or the invalidation.
+#
+# A failure before the upload leaves the site unchanged. To repeat a failed
+# publish, re-run the failed jobs, or run this workflow on the tag. To roll
+# back, revert on main and tag the next patch version: this workflow never
+# publishes an older version. docs/CI.md has the details.
+
+name: Publish the site
+
+on:
+  push:
+    # Numbered versions only: no -rc and no other tags.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  # A re-publish of a tag; the site environment refuses branch refs.
+  workflow_dispatch: {}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bundle:
+    uses: ./.github/workflows/web-bundle.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish to www.ddbsh.org
+    needs: bundle
+    runs-on: ubuntu-latest
+    environment: site
+    concurrency:
+      group: site-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 30
+    env:
+      # D-P11-20. The publisher role cannot read the stack's outputs, and a new
+      # GitHub variable would be a settings change, so the address is fixed.
+      SITE_URL: https://www.ddbsh.org/
+      SITE_BUCKET: ${{ vars.SITE_BUCKET }}
+      SITE_DISTRIBUTION_ID: ${{ vars.SITE_DISTRIBUTION_ID }}
+      SITE_REGION: ${{ vars.SITE_REGION }}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+
+    steps:
+      - name: Check out the code, with the tags and main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Before any AWS call.
+      - name: "Guards: a numbered tag, on main, the newest"
+        id: guards
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if [ "$GITHUB_REF_TYPE" != "tag" ] || [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The site is published only from a numbered release tag (vMAJOR.MINOR.PATCH), and this run is not on one. Run the workflow on the tag."
+            exit 1
+          fi
+          commit="$(git rev-parse HEAD)"
+          if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$commit" ]; then
+            echo "::error::The checkout is not the commit that $tag points to."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::$tag is not on main. Tag the merge commit on main, not a commit on a branch."
+            exit 1
+          fi
+          # Among the numbered tags on main: a stray tag on a branch is refused
+          # above and does not block a release.
+          newest="$(git tag --merged origin/main -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          if [ "$tag" != "$newest" ]; then
+            echo "::error::$tag is older than $newest, and the site carries only the newest release. To roll back, revert on main and tag the next patch version."
+            exit 1
+          fi
+          if [[ ! "$SITE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] ||
+             [[ ! "$SITE_DISTRIBUTION_ID" =~ ^E[A-Z0-9]+$ ]] ||
+             [[ ! "$SITE_REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]]; then
+            echo "::error::The site environment's variables SITE_BUCKET, SITE_DISTRIBUTION_ID and SITE_REGION are missing or malformed (docs/CI.md)."
+            exit 1
+          fi
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tag ($commit) to $SITE_URL"
+
+      - name: Download the bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ddbsh-web-bundle
+          path: dist
+
+      # The bundle job already checked byte-identity and the page's load graph
+      # (package.test.mjs); this covers the transfer between the two jobs.
+      - name: Check the bundle
+        env:
+          VERSION: ${{ steps.guards.outputs.version }}
+        run: |
+          if ! (cd dist && sha256sum -c --quiet SHA256SUMS); then
+            echo "::error::The downloaded bundle does not match its SHA256SUMS."
+            exit 1
+          fi
+          dir="dist/ddbsh-web-$VERSION"
+          if [ ! -d "$dir" ]; then
+            echo "::error::The bundle is not ddbsh-web-$VERSION: the tag and the CMake project version differ."
+            exit 1
+          fi
+          want="$(grep -vE '^\s*(#|$)' web/bundle-files.txt | tr -d '\r' | sed 's/[[:space:]]*$//' | LC_ALL=C sort)"
+          got="$(cd "$dir" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
+          if [ "$want" != "$got" ]; then
+            diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") || true
+            echo "::error::The bundle's files differ from web/bundle-files.txt."
+            exit 1
+          fi
+          echo "BUNDLE_DIR=$dir" >> "$GITHUB_ENV"
+
+      # As a profile, as in test.yml. The account is fixed here, so a changed
+      # variable cannot point the publish at another account.
+      - name: Credentials for the site account
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.SITE_REGION }}
+          aws-profile: default
+          role-session-name: ddbsh-site-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 900
+          allowed-account-ids: "321345175056"
+
+      - name: Upload the bundle and invalidate the distribution
+        run: bash web/hosting/aws/deploy.sh "$BUNDLE_DIR" "$SITE_BUCKET" "$SITE_DISTRIBUTION_ID"
+
+      # Polls until the site serves this bundle, then checks every file, the
+      # headers and the redirect, and that the bucket refuses anonymous reads.
+      - name: Check the live site anonymously
+        id: check
+        run: |
+          DDBSH_WEB_DIST_DIR="$PWD/dist" devtools/check-web-hosting --anonymous "$SITE_URL" \
+            --bucket-domain "$SITE_BUCKET.s3.$SITE_REGION.amazonaws.com" --wait 900 site-publish
+
+      - name: Upload the check's log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: discussions/test-site-publish-*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Job summary
+        if: always()
+        env:
+          VERSION: ${{ steps.guards.outputs.version }}
+          CHECK: ${{ steps.check.outcome }}
+        run: |
+          {
+            echo "### Site publish"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Version | ${VERSION:-(the guards stopped the publish)} |"
+            echo "| Commit | $(git rev-parse HEAD) |"
+            echo "| Site | $SITE_URL |"
+            echo "| Live check | ${CHECK:-not run} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -252,8 +252,8 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
         std::string bound_text = bound->render();
 
         ASSERT_TRUE(db->reconnect(region).has_value());
-        auto lit = db->exec("explain select * from " + table +
-                            " where id = \"show\" and year = 2016;");
+        auto lit =
+            db->exec("explain select * from " + table + " where id = \"show\" and year = 2016;");
         ASSERT_TRUE(lit.has_value()) << (lit.has_value() ? "" : lit.error().message);
         std::string lit_text = lit->render();
 
@@ -301,8 +301,7 @@ TEST(ConnectionLive, FullRoundTripAgainstRealDynamoDB) {
         auto w = db->exec(*ins);
         ASSERT_TRUE(w.has_value()) << (w.has_value() ? "" : w.error().message);
 
-        auto rows = db->query("select * from " + table +
-                              " where id = \"binset\" and year = 1;");
+        auto rows = db->query("select * from " + table + " where id = \"binset\" and year = 1;");
         ASSERT_TRUE(rows.has_value()) << (rows.has_value() ? "" : rows.error().message);
         ASSERT_EQ(rows->size(), 1u);
         const auto* genres = (*rows)[0].cell("genres").as_string_set();

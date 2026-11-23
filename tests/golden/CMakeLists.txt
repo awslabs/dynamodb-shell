@@ -15,8 +15,9 @@
 #
 #   families/   — one manifest .txt per command family (basic, create-drop,
 #                 select, insert-replace, update, delete, transactions, pitr,
-#                 symbol-table, return-values, cross-account, explain, show,
-#                 help, global-tables, test-cleanup). The original add_test
+#                 symbol-table, return-values, composite-gsi, vector,
+#                 cross-account, explain, show, help, global-tables,
+#                 test-cleanup, test-cleanup-last). The original add_test
 #                 lines are reused verbatim; `ddbshtest` is an IMPORTED target
 #                 that resolves to the harness (see below).
 #   results/    — ALL golden `.exp` files (the relocated original suite goldens
@@ -42,8 +43,9 @@
 # harness, which drives the shipping `ddbsh`.
 #
 # The global-tables family runs against a real multi-region setup (primary
-# us-east-2, replica us-west-1) as of phase 2j (AI-2j-2); it is registered last
-# and gated by region-aware ddbsh-wait settling polls.
+# us-east-2, replica us-west-1) as of phase 2j (AI-2j-2); it is registered after
+# every other command family and gated by region-aware ddbsh-wait settling
+# polls. Only test-cleanup-last comes after it.
 #
 # Configuration inputs (set by devtools/run-tests or on the command line):
 #   -DDDBSH_SHELL_BIN=<path>   the shipping ddbsh binary (required)
@@ -103,8 +105,12 @@ set(DATA "${GOLDEN_DIR}/data")
 #   * explain / show / help are self-contained (each creates+drops its own
 #     tables or needs none), so their position is independent.
 #   * global-tables is self-contained (its own `gttest` table in
-#     us-east-2/us-west-1) and is registered LAST, contiguous
-#     (setup -> check -> completion), gated by region-aware ddbsh-wait polls.
+#     us-east-2/us-west-1) and is registered after every other command family,
+#     contiguous (setup -> check -> completion), gated by region-aware
+#     ddbsh-wait polls.
+#   * test-cleanup-last is registered LAST. It waits until create-drop's
+#     icdwarmthroughput0 has finished building its GSI (or is gone), then
+#     drops it; at the end of the suite that wait is shortest (DEV-P11-17).
 set(GOLDEN_FAMILIES
     basic
     create-drop
@@ -123,7 +129,8 @@ set(GOLDEN_FAMILIES
     help
     explain
     show
-    global-tables)
+    global-tables
+    test-cleanup-last)
 
 foreach(family IN LISTS GOLDEN_FAMILIES)
     include("${GOLDEN_DIR}/families/${family}.txt")

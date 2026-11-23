@@ -1,0 +1,94 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# web-bundle.yml — build, package and check the browser edition's static
+# bundle, and upload it as the artifact ddbsh-web-bundle (D-P11-21).
+#
+# A reusable workflow, so the pull-request build (build.yml, job build-wasm)
+# and the site publish (publish-site.yml) build the bundle the same way. The
+# SDK-free engine and the ddbsh-wire codec compile to WebAssembly with the
+# pinned emsdk; the page calls DynamoDB directly with the vendored, pinned AWS
+# SDK for JavaScript v3. This job needs no AWS SDK for C++ and no AWS account
+# (the wasm-release preset sets DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_WEB=ON).
+#
+# The offline web gates are devtools/lib-web.sh's web_offline_gates, the same
+# set devtools/run-web-smoke and devtools/run-web-golden run (D-P11-29). The
+# live web gates need credentials and run outside CI.
+
+name: Browser bundle
+
+on:
+  workflow_call: {}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bundle:
+    name: Build and check the browser bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install cmake flex bison
+
+      - name: Set up Emscripten (pinned)
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
+        with:
+          version: 3.1.61
+
+      # The vendor check and the offline gates run on this pinned Node.
+      # setup-emsdk installs 3.1.61 with Node 18.20.3, older than the SDK's
+      # floor, and exports it as EMSDK_NODE for Emscripten without adding it
+      # to PATH; devtools/vendor-aws-sdk-js keeps a Node 20+ that is already
+      # on PATH rather than emsdk's (devtools/lib-web.sh, web_select_node).
+      - name: Set up Node (>= 20, the AWS SDK for JavaScript floor)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: The vendored AWS SDK bundle is a reproducible build
+        run: devtools/vendor-aws-sdk-js --check
+
+      - name: Configure and build the wasm module and stage the bundle
+        run: |
+          emcmake cmake --preset wasm-release
+          cmake --build build-preset/wasm-release
+
+      - name: Package the bundle (allowlisted files, zip, SHA256SUMS)
+        run: cmake --build build-preset/wasm-release --target ddbsh-web-package
+
+      - name: Offline web gates
+        run: |
+          NODE_BIN="$(command -v node)"
+          echo "node: $NODE_BIN ($("$NODE_BIN" --version))"
+          if ! "$NODE_BIN" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
+            echo "::error::The offline web gates need Node 20 or later; found $("$NODE_BIN" --version)."
+            exit 1
+          fi
+          WEB_OUT="$PWD/build-preset/wasm-release/web"
+          # shellcheck source=devtools/lib-web.sh
+          . devtools/lib-web.sh
+          web_offline_gates
+
+      # The packaged bundle: ddbsh-web-<version>/ (exactly the files a host
+      # publishes, web/bundle-files.txt), its zip, and SHA256SUMS.
+      - name: Upload the static browser bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ddbsh-web-bundle
+          path: build-preset/wasm-release/dist/
+          if-no-files-found: error

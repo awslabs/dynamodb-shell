@@ -44,6 +44,12 @@
 #                                          # (devtools/run-web-smoke)
 #   devtools/run-tests --live-sample       # also build + run the live embedding
 #                                          # tests (opt-in; creates a real table)
+#   devtools/run-tests --build-only        # build build-engine/ddbsh and
+#                                          # configure build-golden exactly as a
+#                                          # full run does, then exit 0: no AWS
+#                                          # call, no target echo, no artifact
+#                                          # (CI builds before any credential
+#                                          # exists on the runner, D-P11-28)
 #   devtools/run-tests --help              # print this usage and exit; builds,
 #                                          # runs and writes nothing (also -h)
 #   AWS_PROFILE=p AWS_REGION=us-east-1 devtools/run-tests
@@ -62,6 +68,12 @@
 #
 # Env overrides: DDBSH_ENGINE_BUILD_DIR, DDBSH_GOLDEN_BUILD_DIR, DDBSH_SDK_PREFIX,
 # DDBSH_SDK_LIB, CC/CXX.
+#
+# DDBSH_REDACT_KEY_ID=1 shows the access key id in the golden run's target echo
+# only by its first and last four characters (ASIA…WXYZ). CI sets it, because
+# anyone signed in to GitHub can read its artifacts (DEV-P11-12). Unset, empty
+# or 0 shows the whole id, as local runs do; any other value is refused. The web
+# gates (--web-golden, --web-smoke) always show the minted id whole.
 #
 # WARNING: this talks to a real AWS account. create/insert/update/delete/drop
 # operate on real tables and data, incur real cost, and are irreversible. Use a
@@ -103,6 +115,9 @@ WEB_GOLDEN=0
 # devtools/run-web-smoke. Takes no further args. Its artifact is
 # discussions/test-websmoke-<hash>.log.
 WEB_SMOKE=0
+# --build-only (D-P11-28): build the CLI and configure the golden project, then
+# stop before the target echo. Takes no further args.
+BUILD_ONLY=0
 CTEST_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -126,6 +141,10 @@ while [ $# -gt 0 ]; do
             WEB_SMOKE=1
             shift
             ;;
+        --build-only)
+            BUILD_ONLY=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -136,6 +155,24 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# DDBSH_REDACT_KEY_ID (DEV-P11-12): 1 shortens the access key id in the target
+# echo; unset, empty or 0 shows it whole. Checked before anything is built, and
+# any other value is refused, so a typo cannot show the whole id where it was
+# meant to be hidden.
+REDACT_KEY_ID="${DDBSH_REDACT_KEY_ID:-0}"
+if [ "$REDACT_KEY_ID" != "0" ] && [ "$REDACT_KEY_ID" != "1" ]; then
+    echo "error: DDBSH_REDACT_KEY_ID must be 0 or 1 (got: $REDACT_KEY_ID)." >&2
+    exit 2
+fi
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    if [ "${#CTEST_ARGS[@]}" -gt 0 ] || [ -n "$SUITE" ] || [ "$FULL_ENGINE" -eq 1 ] ||
+       [ "$LIVE_SAMPLE" -eq 1 ] || [ "$WEB_GOLDEN" -eq 1 ] || [ "$WEB_SMOKE" -eq 1 ]; then
+        echo "error: --build-only takes no further arguments." >&2
+        exit 2
+    fi
+fi
 
 if [ "$WEB_GOLDEN" -eq 1 ] && [ "$WEB_SMOKE" -eq 1 ]; then
     echo "error: --web-golden and --web-smoke are separate runs; pass one." >&2
@@ -246,11 +283,27 @@ cmake -S "$GOLDEN_SRC" -B "$GOLDEN_BUILD" \
     -DDDBSH_SDK_LIB="$DDBSH_SDK_LIB" \
     -DGOLDEN_DIR="$GOLDEN_DIR_PATH"
 
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "=== Build only ($HASH): built $ENGINE_BIN, configured $GOLDEN_BUILD; no AWS call, no artifact ==="
+    exit 0
+fi
+
 # --- Target echo + verification ---------------------------------------------
 # No endpoint override => the real regional DynamoDB endpoint.
 ENDPOINT="dynamodb.${REGION}.amazonaws.com (real DynamoDB, no override)"
 ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-$(aws configure get aws_access_key_id 2>/dev/null || true)}"
 [ -z "$ACCESS_KEY_ID" ] && ACCESS_KEY_ID="(unresolved)"
+# What the echo shows: the whole id, or with DDBSH_REDACT_KEY_ID=1 its 4-character
+# prefix and last four characters, the form the browser edition's SHOW
+# CONNECTION uses (web/app-core.mjs, maskAccessKeyId).
+ACCESS_KEY_SHOWN="$ACCESS_KEY_ID"
+if [ "$REDACT_KEY_ID" = "1" ] && [ "$ACCESS_KEY_ID" != "(unresolved)" ]; then
+    if [ "${#ACCESS_KEY_ID}" -gt 8 ]; then
+        ACCESS_KEY_SHOWN="${ACCESS_KEY_ID:0:4}…${ACCESS_KEY_ID: -4} (shortened: DDBSH_REDACT_KEY_ID=1)"
+    else
+        ACCESS_KEY_SHOWN="… (shortened: DDBSH_REDACT_KEY_ID=1)"
+    fi
+fi
 CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text --region "$REGION" 2>/dev/null || echo '(sts unavailable)')"
 
 {
@@ -260,7 +313,7 @@ CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text --region "$R
     echo "  timestamp:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "  region:        $REGION"
     echo "  endpoint:      $ENDPOINT"
-    echo "  access key id: $ACCESS_KEY_ID"
+    echo "  access key id: $ACCESS_KEY_SHOWN"
     echo "  caller arn:    $CALLER_ARN"
 } | tee "$SUMMARY_FILE"
 

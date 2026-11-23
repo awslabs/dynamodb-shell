@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.12.1
+        VERSION 0.12.2
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -405,6 +405,13 @@ if(DDBSH_BUILD_TESTS)
     # fidelity contract stays intact. This gate makes that guarantee mechanical.
     add_test(NAME golden_absence_check
              COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/golden_absence_check.sh"
+                     "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # P11 F1: the Node that devtools/vendor-aws-sdk-js and devtools/lib-web.sh
+    # pick (web_select_node): a Node 20+ on PATH wins over emsdk's bundled
+    # Node. Offline: stubs stand in for Node, npm and emcmake.
+    add_test(NAME web_node_selection_check
+             COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_node_selection_check.sh"
                      "${CMAKE_CURRENT_SOURCE_DIR}")
 
     # OFFLINE embedding sample (D29): built in-tree against the SDK-free engine

@@ -12,12 +12,13 @@
 #
 #   1. locate emsdk + Node >= 20, build the wasm-release preset (stages the
 #      static bundle into build-preset/wasm-release/web/);
-#   2. offline gates: glue no-eval check (the page CSP has no 'unsafe-eval'),
-#      app-core.test.mjs, sdk-bridge.test.mjs (real SDK, stub HTTP handler);
-#   3. source grep gates: no browser storage API in sdk-bridge.mjs, and in
-#      app.js only the command-history key (D-P9-4); deploy.sh and
-#      docs/HOSTING.md carry the same seven upload commands (P10);
-#   4. a LIVE UI-path smoke (web/live-smoke.mjs, DdbshSession.run) against real
+#   2. the offline web gates (web_offline_gates in devtools/lib-web.sh, the
+#      same set CI runs): glue no-eval check (the page CSP has no
+#      'unsafe-eval'), app-core.test.mjs, sdk-bridge.test.mjs (real SDK, stub
+#      HTTP handler), package.test.mjs, the browser-storage grep gate
+#      (D-P9-4), and the check that deploy.sh and docs/HOSTING.md carry the
+#      same seven upload commands (P10);
+#   3. a LIVE UI-path smoke (web/live-smoke.mjs, DdbshSession.run) against real
 #      DynamoDB with STS-minted short-term credentials for the default profile:
 #      creates and drops one ddbsh_web_smoke_<pid> table.
 #
@@ -26,7 +27,7 @@
 # Env: AWS_REGION (default us-east-1), DDBSH_WEB_CRED_SECONDS, plus
 # devtools/lib-web.sh's (EMSDK, EMSDK_PYTHON, DDBSH_WASM_BUILD_DIR).
 #
-# WARNING: step 4 talks to a real AWS account (one small table, dropped).
+# WARNING: step 3 talks to a real AWS account (one small table, dropped).
 
 set -euo pipefail
 
@@ -59,38 +60,6 @@ set +e
 web_offline_gates 2>&1 | tee -a "$LOG_FILE"
 [ "${PIPESTATUS[0]}" -eq 0 ] || RC=1
 set -e
-
-echo "=== Storage grep gate (D-P9-4) ===" | tee -a "$LOG_FILE"
-STORAGE_RE='localStorage|sessionStorage|indexedDB|document\.cookie'
-if grep -nE "$STORAGE_RE" "$REPO_DIR/web/sdk-bridge.mjs" | tee -a "$LOG_FILE" | grep -q .; then
-    echo "FAIL: sdk-bridge.mjs touches browser storage" | tee -a "$LOG_FILE"
-    RC=1
-fi
-# app.js: only the history key's calls may mention localStorage (read, write,
-# and the "Clear history" removal).
-BAD="$(grep -nE "$STORAGE_RE" "$REPO_DIR/web/app.js" | grep -vE 'localStorage\.(getItem|setItem|removeItem)\(HISTORY_KEY' | grep -vE '^[0-9]+:\s*//' || true)"
-if [ -n "$BAD" ]; then
-    echo "$BAD" | tee -a "$LOG_FILE"
-    echo "FAIL: app.js uses browser storage beyond the command history" | tee -a "$LOG_FILE"
-    RC=1
-else
-    echo "ok: no credential-capable storage use" | tee -a "$LOG_FILE"
-fi
-
-# The upload commands exist twice by design: web/hosting/aws/deploy.sh runs
-# them and docs/HOSTING.md shows them for copy-paste (P10). Each sets the
-# Content-Type browsers need, so the two copies must not drift apart.
-echo "=== Upload-command drift gate (deploy.sh vs docs/HOSTING.md) ===" | tee -a "$LOG_FILE"
-upload_commands() { grep -E '^aws (s3 sync|cloudfront create-invalidation) ' "$1" || true; }
-DEPLOY_CMDS="$(upload_commands "$REPO_DIR/web/hosting/aws/deploy.sh")"
-GUIDE_CMDS="$(upload_commands "$REPO_DIR/docs/HOSTING.md")"
-if [ "$(printf '%s\n' "$DEPLOY_CMDS" | grep -c .)" -ne 7 ] || [ "$DEPLOY_CMDS" != "$GUIDE_CMDS" ]; then
-    diff <(printf '%s\n' "$DEPLOY_CMDS") <(printf '%s\n' "$GUIDE_CMDS") | tee -a "$LOG_FILE"
-    echo "FAIL: deploy.sh and docs/HOSTING.md must carry the same seven upload commands" | tee -a "$LOG_FILE"
-    RC=1
-else
-    echo "ok: deploy.sh and docs/HOSTING.md carry the same seven upload commands" | tee -a "$LOG_FILE"
-fi
 
 echo "=== Live UI-path smoke (real DynamoDB) ===" | tee -a "$LOG_FILE"
 CRED_DIR="$(mktemp -d)"

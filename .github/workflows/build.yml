@@ -1,3 +1,9 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# build.yml — build the release binary and the browser bundle. The test suites
+# run in test.yml; the site publish is publish-site.yml (docs/CI.md).
+
 name: Build DynamoDB Shell
 
 on:
@@ -5,6 +11,8 @@ on:
     types: [created]
   pull_request:
   workflow_dispatch:
+
+permissions: {}
 
 jobs:
   build-linux:
@@ -18,10 +26,14 @@ jobs:
     # objects. ddbsh-aws stays STATIC and links the one shared SDK .so, so there
     # is a single copy of the SDK's global state (no double-InitAPI hazard).
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install dependencies
         run: |
@@ -56,67 +68,17 @@ jobs:
           ldd ./build/ddbsh | grep -i crypto
 
       - name: Upload binaries as artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-linux
           path: |
                 build/ddbsh
 
-  # The browser edition (P9): the SDK-free engine + ddbsh-wire codec compile to
-  # WebAssembly via the pinned emsdk, and the page calls DynamoDB directly with
-  # the vendored, pinned AWS SDK for JavaScript v3. Linux-only (one portable
-  # bundle serves every browser); needs no AWS SDK for C++ and no AWS account
-  # (the wasm-release preset sets DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_WEB=ON).
-  # The live gates (run-web-smoke, run-web-golden) need credentials and run
-  # outside CI.
+  # The browser edition (P9): built, packaged and checked offline by the
+  # reusable web-bundle.yml, which the site publish (publish-site.yml) also
+  # calls, so both build the bundle the same way. The live gates
+  # (run-web-smoke, run-web-golden) need credentials and run outside CI.
   build-wasm:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get -y update
-          sudo apt-get -y install cmake flex bison
-
-      - name: Set up Node (>= 20, the AWS SDK for JavaScript floor)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Set up Emscripten (pinned)
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 3.1.61
-
-      - name: Vendored AWS SDK bundle is a reproducible build
-        run: devtools/vendor-aws-sdk-js --check
-
-      - name: Configure + build the wasm module and stage the bundle
-        run: |
-          emcmake cmake --preset wasm-release
-          cmake --build build-preset/wasm-release
-
-      - name: Package the bundle (allowlisted files, zip, SHA256SUMS)
-        run: cmake --build build-preset/wasm-release --target ddbsh-web-package
-
-      - name: Glue has no eval / new Function (page CSP has no 'unsafe-eval')
-        run: |
-          ! grep -nE 'newFunc\(Function|new Function|[^A-Za-z_.]eval\(' build-preset/wasm-release/web/ddbsh.js
-
-      - name: Offline web unit tests
-        working-directory: build-preset/wasm-release/web
-        run: |
-          node app-core.test.mjs
-          node sdk-bridge.test.mjs
-          node package.test.mjs
-
-      # The packaged bundle: ddbsh-web-<version>/ (exactly the files a host
-      # publishes, web/bundle-files.txt), its zip, and SHA256SUMS.
-      - name: Upload the static browser bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: ddbsh-web-bundle
-          path: build-preset/wasm-release/dist/
+    uses: ./.github/workflows/web-bundle.yml
+    permissions:
+      contents: read

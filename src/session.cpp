@@ -395,7 +395,9 @@ namespace engine {
 
 // Narrow friend accessors into Session::Impl (declared in session_internal.hpp).
 // Defined here, where Impl is complete.
-IDDBClient& SessionAccess::client(Session& session) { return session.impl_->client; }
+IDDBClient& SessionAccess::client(Session& session) {
+    return session.impl_->client;
+}
 
 std::string SessionAccess::next_alias_prefix(Session& session) {
     return session.impl_->next_alias_prefix();

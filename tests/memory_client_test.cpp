@@ -33,8 +33,7 @@ void seed_filter_table(Connection& db) {
     ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
     ASSERT_TRUE(
         db.exec("insert into t ( id, n, tag ) values ( \"a\", 1, \"alpha\" );").has_value());
-    ASSERT_TRUE(
-        db.exec("insert into t ( id, n, tag ) values ( \"b\", 5, \"beta\" );").has_value());
+    ASSERT_TRUE(db.exec("insert into t ( id, n, tag ) values ( \"b\", 5, \"beta\" );").has_value());
     ASSERT_TRUE(
         db.exec("insert into t ( id, n, tag ) values ( \"c\", 9, \"gamma\" );").has_value());
 }
@@ -230,6 +229,42 @@ TEST(MemoryClientTxn, WriteTransactionCommits) {
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->error(), std::nullopt);
 
+    auto rows = db.query("select * from t;");
+    ASSERT_TRUE(rows.has_value());
+    EXPECT_EQ(rows->size(), 2u);
+}
+
+// P11 F2: a transactional Put must be stored under its own primary key.
+// MemoryClient once computed that key in the same call that moved the row into
+// the table, and on GCC x86_64 the move ran first, so every Put landed under
+// one empty key. A row count misses that for a single Put; reading each item
+// back by key, and replacing an existing item, show it.
+TEST(MemoryClientTxn, TransactPutStoresEachItemUnderItsOwnKey) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
+    ASSERT_TRUE(db.exec("insert into t ( id, v ) values ( \"x\", 1 );").has_value());
+
+    // One transaction: REPLACE overwrites "x", INSERT adds "y".
+    auto r = db.exec(
+        "begin; "
+        "replace into t ( id, v ) values ( \"x\", 10 ); "
+        "insert into t ( id, v ) values ( \"y\", 20 ); "
+        "commit;");
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->error(), std::nullopt);
+
+    // Each item reads back by its key (GetItem) with the value its Put wrote.
+    auto x = db.query("select * from t where id = \"x\";");
+    ASSERT_TRUE(x.has_value());
+    ASSERT_EQ(x->size(), 1u);
+    EXPECT_EQ((*x)[0].get_int("v").value_or(-1), 10);
+    auto y = db.query("select * from t where id = \"y\";");
+    ASSERT_TRUE(y.has_value());
+    ASSERT_EQ(y->size(), 1u);
+    EXPECT_EQ((*y)[0].get_int("v").value_or(-1), 20);
+
+    // The REPLACE overwrote "x" in place: two items, not three.
     auto rows = db.query("select * from t;");
     ASSERT_TRUE(rows.has_value());
     EXPECT_EQ(rows->size(), 2u);

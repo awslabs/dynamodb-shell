@@ -108,7 +108,7 @@ TEST(SelectStream, ScanEmitsOneFragmentPerPage) {
     for (const auto& part : sink.parts) {
         const auto* s = std::get_if<SelectOutcome>(&part);
         ASSERT_NE(s, nullptr);
-        EXPECT_EQ(s->items.size(), 2u);                 // the page's rows
+        EXPECT_EQ(s->items.size(), 2u);                  // the page's rows
         EXPECT_FALSE(s->consumed_capacity.has_value());  // no cc on item pages
     }
     EXPECT_EQ(render_all(sink.parts), "{a: 1}\n{a: 2}\n{a: 3}\n{a: 4}\n{a: 5}\n{a: 6}\n");

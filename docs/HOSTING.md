@@ -10,6 +10,10 @@ module. It has no server-side component. Visitors paste their own short-term
 AWS credentials into it, and the page calls DynamoDB directly from their
 browser (see [configuration 3](configurations/03-browser-aws.md)).
 
+The project runs its own copy of the page at <https://www.ddbsh.org/>, deployed
+with this guide's template. A GitHub workflow publishes each release tag to it
+([CI](CI.md#the-site-publish)).
+
 This guide publishes the page on AWS: a private S3 bucket that only a
 CloudFront distribution can read, deployed with one CloudFormation template
 (`web/hosting/aws/ddbsh-web-hosting.yaml`). The last section lists what any
@@ -259,8 +263,8 @@ name that serves nothing else (see [where the page may
 live](#before-you-start-where-the-page-may-live)). Whoever can change its DNS
 records can point it at a server of their own and serve a modified page with a
 valid certificate, so protect your DNS provider account as you protect the
-bucket. The template's domain parameters have been checked by the
-CloudFormation linter but not yet deployed by this project's tests.
+bucket. The project's own site, `www.ddbsh.org`, uses the template's domain
+parameters.
 
 1. Request a certificate. CloudFront accepts only certificates issued in
    us-east-1, whatever region your stack is in:

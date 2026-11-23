@@ -120,6 +120,8 @@ flex/bison translation units are the only `-Wno-error` exceptions.
   target (endpoint + access key id) is echoed and must be verified.
 - **No test is skipped.** A missing credential is an infrastructure failure, not
   a skip.
+- **CI runs these suites too, in its own AWS accounts** (`docs/CI.md`): GitHub
+  Actions signs in through OIDC, and local runs never use those accounts.
 - **Native unit tests** (GoogleTest, offline, zero cost) are the fastest signal
   while iterating; they include the EXPLAIN-via-`FakeDDBClient` fidelity tests
   and the `engine_boundary_check`. They are built by the preset builds and run
@@ -192,10 +194,11 @@ still parses `;`-terminated statements.
 
 Single project version in `CMakeLists.txt`. The developer bumps the **patch**
 as part of the Developer → Reviewer handoff (every merge is a unique version).
-Minor/major are human-directed; the principal reviewer tags the merge commit
-`v<MAJOR>.<MINOR>.<PATCH>`. The three pinned version assertions live in
-`tests/walking_path_test.cpp` and `tests/reentrancy_test.cpp` — update them with
-every bump.
+Minor/major are human-directed; the human tags the upstream merge commit
+`v<MAJOR>.<MINOR>.<PATCH>`, which publishes the site (`docs/CI.md`). The unit
+tests derive the expected version from `ddbsh::version()`; a bump also updates
+the version shown in `README.md`, `docs/configurations/` and
+`docs/reference/control.md`.
 
 ## Agent workflow (orchestration repo)
 

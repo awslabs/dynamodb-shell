@@ -1,0 +1,21 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cleanup that runs at the end of the suite (DEV-P11-17).
+#
+# icd-create-table-35 adds a GSI with warm throughput to icdwarmthroughput0,
+# and DynamoDB can take more than 25 minutes to build it. While an index is
+# being created, DynamoDB refuses DeleteTable ("Cannot delete table while
+# indexes are being created, updated, or deleted."), so test-cleanup's drop of
+# the table can fail without failing that test (see test-cleanup.txt).
+#
+# These two tests wait until the table is gone, or ACTIVE with every GSI ACTIVE,
+# and then drop it with a waiting DROP as the only statement, so a refused drop
+# fails the test. They are registered last because the wait is shortest there:
+# about 21 minutes after the index was created, in a full run. ddbsh-wait's
+# default ceiling (15 minutes) then covers builds of up to about 36 minutes, and
+# a wait that runs out fails the test. Their names start with test-cleanup, so
+# ctest -R '^test-cleanup' (CI's cleanup step, and the recovery after a failed
+# run) runs them too.
+add_test(NAME test-cleanup-icdwarmthroughput0-wait COMMAND ${GOLDEN_DIR}/ddbsh-wait table-settled-or-gone icdwarmthroughput0)
+add_test(NAME test-cleanup-icdwarmthroughput0 COMMAND ddbshtest -c "drop table if exists icdwarmthroughput0")

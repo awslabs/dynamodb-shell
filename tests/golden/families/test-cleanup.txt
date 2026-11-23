@@ -28,3 +28,17 @@ add_test(NAME test-cleanup COMMAND ddbshtest -c "drop table if exists nowait ddb
                                               drop table if exists icdthroughput; \
                                               drop table if exists nowait icdwarmthroughput0; \
                                               drop table if exists icdwarmthroughput1; ")
+
+# DEV-P11-17: while icd-create-table-35's GSI is still being built, DynamoDB
+# refuses to delete icdwarmthroughput0, so the nowait drop above can fail. This
+# test still passes, because its exit status is that of its last statement, as
+# in the original. The test-cleanup-last family, at the end of the suite, waits
+# until that table is gone or its GSI is ACTIVE, then drops it on its own, so a
+# refused drop fails there.
+
+# N25 (D-P11-1): the cross-account family's table lives in the cross account,
+# so it needs that profile. After a failed run, run the cleanup tests by
+# themselves (ctest -R '^test-cleanup', which includes test-cleanup-last) to
+# remove what the run left.
+add_test(NAME test-cleanup-cross-account COMMAND ddbshtest -c "drop table if exists nowait ddbsh_test_table_1")
+set_property(TEST test-cleanup-cross-account PROPERTY ENVIRONMENT "AWS_DEFAULT_PROFILE=cross-acct;DDBSH_LOGLEVEL_DEBUG=1")

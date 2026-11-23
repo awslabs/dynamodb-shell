@@ -130,7 +130,8 @@ compiles the engine to WebAssembly with Emscripten. It needs no AWS SDK for C++.
 - **emsdk 3.1.61** (the version CI pins), installed per
   [`web/README.md`](../web/README.md); its scripts need Python 3.10 or newer.
 - **Node.js 20 or newer** for the Node-side tests and gates (the bundled AWS SDK
-  for JavaScript requires it). emsdk ships one; the devtools scripts use it.
+  for JavaScript requires it). The devtools scripts use the `node` on `PATH`
+  when it is 20 or newer, and otherwise the newest Node that emsdk installed.
 
 ```sh
 emcmake cmake --preset wasm-release

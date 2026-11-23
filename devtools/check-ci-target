@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/check-ci-target — verify which AWS identities a golden run would
+# use, before any test runs (D-P11-25). The CI workflow test.yml runs it after
+# the credentials step and before devtools/run-tests; it fails closed.
+#
+# Usage:
+#   devtools/check-ci-target <main-arn-prefix> <cross-arn-prefix> <ddbsh-binary>
+#
+#   <main-arn-prefix>   what `aws sts get-caller-identity` must start with,
+#                       for example arn:aws:sts::<account>:assumed-role/<role>/
+#   <cross-arn-prefix>  what the cross-acct profile must resolve to, both for
+#                       the AWS CLI and for ddbsh itself
+#   <ddbsh-binary>      the binary the golden suite runs (build-engine/ddbsh)
+#
+# The check passes only if all of these hold:
+#   1. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_PROFILE
+#      and AWS_DEFAULT_PROFILE are unset or empty. Credentials in the
+#      environment take precedence over the cross-acct profile in ddbsh, so
+#      the cross-account family would run in the main account without any
+#      test noticing. AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE are unset or
+#      empty too: together they are a web identity, which the AWS CLI prefers
+#      to the [default] profile, while ddbsh (the AWS SDK for C++'s default
+#      chain) prefers the profile, so check 2 would see a different identity
+#      from the one the suite uses. No endpoint override is set either:
+#      DDBSH_ENDPOINT_OVERRIDE or any AWS_ENDPOINT_URL* variable.
+#   2. `aws sts get-caller-identity` starts with <main-arn-prefix>.
+#   3. `aws sts get-caller-identity --profile cross-acct` starts with
+#      <cross-arn-prefix>.
+#   4. ddbsh, run with AWS_DEFAULT_PROFILE=cross-acct as the cross-account
+#      family runs it, names <cross-arn-prefix> when it describes a table the
+#      cross role may not read (ddbsh_ci_identity_probe): DynamoDB's
+#      AccessDenied message names the identity ddbsh itself resolved. This
+#      needs a cross role that may read only its own tables, as in CI.
+#
+# It prints the three identities and no access key id (in CI, the credentials
+# action also masks the keys in the log).
+# Exit codes: 0 all checks passed, 1 a check failed, 2 usage error.
+#
+# Env: AWS_REGION (default us-east-1), DDBSH_SDK_LIB (prepended to
+# LD_LIBRARY_PATH for the ddbsh probe), AWS_CONFIG_FILE and
+# AWS_SHARED_CREDENTIALS_FILE as usual.
+
+set -uo pipefail
+
+if [ $# -ne 3 ]; then
+    echo "usage: $0 <main-arn-prefix> <cross-arn-prefix> <ddbsh-binary>" >&2
+    exit 2
+fi
+MAIN_PREFIX="$1"
+CROSS_PREFIX="$2"
+DDBSH_BIN="$3"
+if [ -z "$MAIN_PREFIX" ] || [ -z "$CROSS_PREFIX" ]; then
+    echo "error: the ARN prefixes must not be empty." >&2
+    exit 2
+fi
+
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+export AWS_REGION="$REGION"
+export AWS_STS_REGIONAL_ENDPOINTS="${AWS_STS_REGIONAL_ENDPOINTS:-regional}"
+export AWS_PAGER=""
+if [ -n "${DDBSH_SDK_LIB:-}" ]; then
+    export LD_LIBRARY_PATH="$DDBSH_SDK_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+FAIL=0
+ok() { echo "  ok   $*"; }
+bad() { echo "  FAIL $*"; FAIL=$((FAIL + 1)); }
+
+echo "=== CI target check ==="
+echo "  region:          $REGION"
+echo "  expected main:   $MAIN_PREFIX"
+echo "  expected cross:  $CROSS_PREFIX"
+
+# 1. Nothing in the environment may override the profiles or the endpoint.
+for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE \
+         AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+    if [ -n "${!v:-}" ]; then
+        bad "$v is set; credentials must reach the runner only as profiles"
+    fi
+done
+while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    if [ -n "${!v:-}" ]; then
+        bad "$v is set; the suite runs against the real regional endpoints only"
+    fi
+done < <({ echo DDBSH_ENDPOINT_OVERRIDE; compgen -e | grep '^AWS_ENDPOINT_URL'; } || true)
+[ "$FAIL" -eq 0 ] && ok "no credential, profile or endpoint override in the environment"
+
+if ! command -v aws >/dev/null 2>&1; then
+    bad "the AWS CLI is not on PATH"
+fi
+if [ ! -x "$DDBSH_BIN" ]; then
+    bad "ddbsh binary not found or not executable: $DDBSH_BIN"
+fi
+if [ "$FAIL" -ne 0 ]; then
+    echo "=== CI target check: $FAIL FAILED ==="
+    exit 1
+fi
+
+# 2 and 3. The AWS CLI's view of both profiles.
+main_arn="$(aws sts get-caller-identity --query Arn --output text --region "$REGION" 2>&1)" || main_arn="(sts failed: $main_arn)"
+cross_arn="$(aws sts get-caller-identity --profile cross-acct --query Arn --output text --region "$REGION" 2>&1)" || cross_arn="(sts failed: $cross_arn)"
+echo "  main identity:   $main_arn"
+echo "  cross identity:  $cross_arn"
+if [[ "$main_arn" == "$MAIN_PREFIX"* ]]; then
+    ok "the default credentials are the main identity"
+else
+    bad "the default credentials are not the main identity"
+fi
+if [[ "$cross_arn" == "$CROSS_PREFIX"* ]]; then
+    ok "the cross-acct profile is the cross identity"
+else
+    bad "the cross-acct profile is not the cross identity"
+fi
+
+# 4. ddbsh's own view of the cross-acct profile, the way the cross-account
+# family runs it.
+probe="$(AWS_DEFAULT_PROFILE=cross-acct "$DDBSH_BIN" -q -c 'describe ddbsh_ci_identity_probe;' 2>&1)"
+probe_arn="$(grep -oE 'arn:aws:(sts|iam)::[0-9]{12}:[^ ]+' <<<"$probe" | head -1)"
+echo "  ddbsh identity:  ${probe_arn:-(none named)}"
+if grep -qF -- "$CROSS_PREFIX" <<<"$probe"; then
+    ok "ddbsh resolves the cross-acct profile to the cross identity"
+else
+    bad "ddbsh did not name the cross identity; its output was:"
+    while IFS= read -r line; do
+        echo "         $line"
+    done <<<"$probe"
+fi
+
+if [ "$FAIL" -eq 0 ]; then
+    echo "=== CI target check: all passed ==="
+    exit 0
+fi
+echo "=== CI target check: $FAIL FAILED ==="
+exit 1
