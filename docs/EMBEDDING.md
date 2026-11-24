@@ -116,15 +116,13 @@ the SDK's attempt budget, the error code, whether it is a throttle, and the
 delay about to be slept. No event is raised for an error the SDK will not retry
 or for the last attempt. The pointer is borrowed: keep the observer alive until
 you pass `nullptr` or close the connection, and until no `on_retry` call is
-still running. You may clear the observer from another thread while a
-request is retrying (the registration is atomic), but clearing does not wait
-for an `on_retry` call already running on the requesting thread. The
-registration survives
-`reconnect()` and `CONNECT`. `IDDBClient::set_retry_observer` is the same hook
-for an embedder that owns its client (`AwsDDBClient` and the SDK-free
+still running. You may clear the observer from another thread while a request
+is retrying (the registration is atomic), but clearing does not wait for an
+`on_retry` call already running on the requesting thread. The registration
+survives `reconnect()` and `CONNECT`. `IDDBClient::set_retry_observer` is the
+same hook for an embedder that owns its client (`AwsDDBClient` and the SDK-free
 `WireClient` follow the same threading rule; a custom client states its own);
-`ddbsh::is_throttling_error(code)` is the
-throttling-code test the events use.
+`ddbsh::is_throttling_error(code)` is the throttling-code test the events use.
 
 **Header boundary:** `ddbsh/*.hpp` (including `ddbsh/connection.hpp`) are
 SDK-free (compile with only a C++23 toolchain); `ddbsh/aws/*.hpp` require the
@@ -196,19 +194,18 @@ built as a default-on CTest (`ddbshlib_features_sample`). See
 ### Streaming output and the output formats
 
 `Session::execute(statement, sink)` is the streaming entry point. It calls
-`sink.emit(fragment)` for
-each fragment as the DynamoDB response that completes it arrives, in output
-order, then calls `sink.end_statement()` exactly once, on success and on
-failure, and then returns `Result<void>`. `Session::run(text, sink)` parses
-first, then does the same; when the text does not parse, it returns the parse
-`Error` before anything reaches the sink, so the sink sees no fragment and no
-`end_statement()` call for that text. Fragments emitted before a failure
-stay emitted, and the returned `Error` comes after them. Some fragments carry
-no rows: an empty `SELECT` emits one `SelectOutcome` with no items (it still
-carries the `column_hint`), and `SHOW TABLES` / `SHOW BACKUPS` emit an empty
-`ReportOutcome` to mark a page end that a `LIKE` filter emptied, or an empty
-result. The `Renderer` renders those as nothing, so a sink that counts
-fragments as content should expect them.
+`sink.emit(fragment)` for each fragment as the DynamoDB response that completes
+it arrives, in output order, then calls `sink.end_statement()` exactly once, on
+success and on failure, and then returns `Result<void>`.
+`Session::run(text, sink)` parses first, then does the same; when the text does
+not parse, it returns the parse `Error` before anything reaches the sink, so
+the sink sees no fragment and no `end_statement()` call for that text.
+Fragments emitted before a failure stay emitted, and the returned `Error` comes
+after them. Some fragments carry no rows: an empty `SELECT` emits one
+`SelectOutcome` with no items (it still carries the `column_hint`), and
+`SHOW TABLES` / `SHOW BACKUPS` emit an empty `ReportOutcome` to mark a page end
+that a `LIKE` filter emptied, or an empty result. The `Renderer` renders those
+as nothing, so a sink that counts fragments as content should expect them.
 
 The `ddbsh::render` format API (`ddbsh/format.hpp`, SDK-free) gives the same
 output formats the CLI's `--output` does (see the

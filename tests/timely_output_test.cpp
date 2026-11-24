@@ -23,7 +23,9 @@
 // Plus: end_statement() exactly once per execute, on success and on failure
 // (D-P12-16); partial output on a later failure (D-P12-14); the buffering
 // Session::execute(stmt) keeps each command's single-outcome shape and the
-// streamed bytes equal the buffered bytes (D-P12-15); the CLI's
+// streamed bytes equal the buffered bytes (D-P12-15); Session::run(text, sink)
+// streams a parsed text as execute(statement, sink) does and returns a parse
+// error without touching the sink (S6-R3); the CLI's
 // FileRenderingSink has each fragment's bytes in its file before the next API
 // call (it flushes, not only emits).
 
@@ -878,6 +880,54 @@ TEST(TimelyOutput, EndStatementRunsOncePerExecuteAfterTheLastEmit) {
         ASSERT_FALSE(log.empty()) << text;
         EXPECT_EQ(log.back(), "end") << text;
     }
+}
+
+// ---- Session::run(text, sink) (S6-R3) ---------------------------------------
+
+TEST(TimelyOutput, RunWithSinkStreamsAParsedTextAsExecuteDoes) {
+    // A text that parses behaves exactly as execute(statement, sink): the same
+    // calls and emits, then one end_statement().
+    Log log;
+    RecordingClient client(log);
+    seed_three_tables(client);
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    ASSERT_TRUE(session.run("show tables brief;", sink).has_value());
+
+    const Log expected{"call:ListTables", "emit:a|", "emit:b|",
+                       "call:ListTables", "emit:c|", "end"};
+    EXPECT_EQ(log, expected);
+    EXPECT_EQ(sink.ends, 1);
+    EXPECT_EQ(sink.parts.size(), 3u);
+}
+
+TEST(TimelyOutput, RunWithSinkReturnsTheParseErrorAndTouchesNoSink) {
+    // A text that does not parse returns the parse Error before anything
+    // reaches the sink: no fragment, no end_statement(), no API call.
+    Log log;
+    RecordingClient client(log);
+    seed_three_tables(client);
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    auto result = session.run("select from;", sink);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, Errc::parse_error);
+
+    // The rendered error is the one the CLI prints for the same text (the CLI
+    // parses with parse_batch and renders batch.error, cli/repl.cpp run_batch).
+    ddbsh::ParsedBatch batch = session.parse_batch("select from;");
+    ASSERT_TRUE(batch.statements.empty());
+    ASSERT_TRUE(batch.error.has_value());
+    const ddbsh::render::Renderer renderer;
+    const std::string rendered = renderer.render_error(result.error());
+    EXPECT_EQ(rendered, renderer.render_error(*batch.error));
+    EXPECT_NE(rendered.find("syntax error at"), std::string::npos) << rendered;
+
+    EXPECT_TRUE(sink.parts.empty());
+    EXPECT_EQ(sink.ends, 0);
+    EXPECT_TRUE(log.empty());
 }
 
 // ---- The CLI sink flushes each fragment before the next API call ------------
