@@ -4,11 +4,12 @@
 // show_tables_executor.hpp — execute SHOW TABLES behind IDDBClient.
 //
 // PRIVATE engine header (not installed). SDK-free port of the original
-// command/show_tables.cpp: ListTables (paginated) followed by a DescribeTable +
-// DescribeTimeToLive per listed table, filtered by the optional LIKE regex, and
-// shaped into the pipe-delimited report rows (arch §7). The result is a
-// ReportOutcome (the executor builds the lines; the Renderer joins them —
-// P2a-03 §4.2). The engine never writes to a stream.
+// command/show_tables.cpp: ListTables (one page at a time) followed by a
+// DescribeTable + DescribeTimeToLive per listed table, filtered by the optional
+// LIKE regex, and shaped into the pipe-delimited report rows (arch §7). Each
+// row is emitted to the sink as a ReportOutcome fragment as soon as it is
+// known (P12); the Renderer joins the lines (P2a-03 §4.2). The engine never
+// writes to a stream.
 //
 // D12: never aborts/throws across the boundary — an invalid LIKE regex is
 // returned as an Error, not an uncaught std::regex_error (the original
@@ -19,15 +20,21 @@
 
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/iddbclient.hpp"
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
 
-/// Execute a (non-EXPLAIN) SHOW TABLES. Lists table names, applies the optional
-/// LIKE regex, and for each match emits either just the name (BRIEF, or when a
-/// per-table describe/ttl lookup fails) or the full status row.
-Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client);
+/// Execute a (non-EXPLAIN) SHOW TABLES, streaming. Reads ListTables one page
+/// at a time, applies the optional LIKE regex, and emits one ReportOutcome
+/// fragment per matching table as soon as its row is known: just the name
+/// (BRIEF, or when a per-table describe/ttl lookup fails) or the full status
+/// row (P12, D-P12-11). Each fragment also carries its row by column
+/// (ReportOutcome::table, D-P12-27), and the last name of each ListTables page
+/// marks the page's end; when LIKE drops that name (or the page is empty), an
+/// empty fragment marks it instead, which renders nothing by default.
+Result<void> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client, OutcomeSink& sink);
 
 }  // namespace ddbsh::engine
 

@@ -6,6 +6,7 @@
 #include "repl.hpp"
 
 #include <cstdio>
+#include <string>
 
 namespace ddbsh::cli {
 
@@ -53,26 +54,6 @@ std::string_view strip_quotes(std::string_view s) {
     return s;
 }
 
-// The CLI's FD-writing sink: render each outcome fragment to stdout as the
-// engine emits it, so a multi-row INSERT (or any future streaming write)
-// interleaves its already-written status tokens with a mid-batch error exactly
-// as the original did (AI-4 / D-2c-12). stdout gets the result bytes; stderr
-// gets any diagnostics the outcome carries (a transaction's non-reducible-SELECT
-// message, D-2d-6). Both are flushed so a mid-batch error interleaves correctly.
-struct FdRenderingSink : ddbsh::OutcomeSink {
-    const ddbsh::render::Renderer& renderer;
-    explicit FdRenderingSink(const ddbsh::render::Renderer& r) : renderer(r) {}
-    void emit(const ddbsh::ExecOutcome& fragment) override {
-        std::fputs(renderer.render(fragment).c_str(), stdout);
-        std::fflush(stdout);
-        std::string diag = renderer.render_stderr(fragment);
-        if (!diag.empty()) {
-            std::fputs(diag.c_str(), stderr);
-            std::fflush(stderr);
-        }
-    }
-};
-
 // A failing statement's error (and a trailing parse error) go to stderr,
 // flushed so a mid-batch error interleaves with already-written stdout tokens.
 void report_error_to_stderr(const std::string& rendered) {
@@ -80,7 +61,69 @@ void report_error_to_stderr(const std::string& rendered) {
     std::fflush(stderr);
 }
 
+// Write `text` to `f` and flush, so each piece of output is on the terminal
+// (or pipe) before the engine makes its next API call (P12, D-P12-1).
+//
+// With `stop_at_nul` (the default format) it stops at an embedded NUL byte,
+// like the fputs this replaces (and the original's printf), so the default
+// output keeps its exact bytes. The other formats write every byte: CSV writes
+// an S value raw, and one write holds a whole page, so a cut there would drop
+// the rest of the page without an error (P12 review R-S4-1). In JSON and the
+// table, rows escape the byte; in every non-default format, text parts
+// (status lines, service error text: the Renderer's own bytes) are written
+// whole, NUL included (P12 review N18).
+void write_and_flush(std::FILE* f, std::string_view text, bool stop_at_nul) {
+    if (stop_at_nul) {
+        text = text.substr(0, text.find('\0'));
+    }
+    std::fwrite(text.data(), 1, text.size(), f);
+    std::fflush(f);
+}
+
 }  // namespace
+
+// The writer reads the sink's current format at each write, so a `set output`
+// directive takes effect at once. It captures `this`, which is why the class
+// cannot be copied or moved (see repl.hpp). set_options closes an open result
+// set before it switches, so the closing bytes are written in the old format.
+FileRenderingSink::FileRenderingSink(ddbsh::render::FormatOptions options, std::FILE* out,
+                                     std::FILE* err)
+    : FormattingSink(
+          options, [this, out, err](ddbsh::render::Stream stream, std::string_view text) {
+              write_and_flush(stream == ddbsh::render::Stream::out ? out : err, text,
+                              this->options().format == ddbsh::render::OutputFormat::standard);
+          }) {}
+
+std::string unknown_output_format_message(std::string_view id) {
+    return "unknown output format: " + std::string(id) + " (expected default, json, csv, table)\n";
+}
+
+std::string unknown_json_flavor_message(std::string_view id) {
+    return "unknown JSON flavor: " + std::string(id) + " (expected plain, dynamodb)\n";
+}
+
+std::string format_retry_line(const ddbsh::RetryEvent& event) {
+    std::string line = "ddbsh: ";
+    line += event.operation.empty() ? std::string("request") : event.operation;
+    line += event.throttled ? " throttled" : " failed";
+    if (!event.error_code.empty()) {
+        line += " (" + event.error_code + ")";
+    }
+    line += "; attempt " + std::to_string(event.attempt);
+    if (event.max_attempts > 0) {
+        line += " of " + std::to_string(event.max_attempts);
+    }
+    if (event.delay.has_value()) {
+        line += " in " + std::to_string(event.delay->count()) + " ms";
+    }
+    line += "\n";
+    return line;
+}
+
+void RetryLineWriter::on_retry(const ddbsh::RetryEvent& event) {
+    std::fputs(format_retry_line(event).c_str(), err_);
+    std::fflush(err_);
+}
 
 std::optional<std::string> resolve_ca_bundle(const std::optional<std::string>& flag_value,
                                              const char* env_value,
@@ -149,6 +192,50 @@ bool try_set_terminator_directive(std::string_view trimmed, Terminator& term) {
     return true;
 }
 
+// Recognize `set output <format>` / `set json-flavor <flavor>` (P12,
+// D-P12-26), like `set terminator`: only at the start of a batch, as a
+// standalone line. The same SET-collision note applies (see above).
+bool try_set_output_directive(std::string_view trimmed, ddbsh::render::FormatOptions& options,
+                              std::string& error) {
+    std::size_t p = 0;
+    const auto next_token = [&](std::size_t& pos) -> std::string_view {
+        while (pos < trimmed.size() && (trimmed[pos] == ' ' || trimmed[pos] == '\t')) {
+            ++pos;
+        }
+        std::size_t start = pos;
+        while (pos < trimmed.size() && trimmed[pos] != ' ' && trimmed[pos] != '\t') {
+            ++pos;
+        }
+        return trimmed.substr(start, pos - start);
+    };
+
+    if (!iequals(next_token(p), "set")) {
+        return false;
+    }
+    const std::string_view what = next_token(p);
+    const bool output = iequals(what, "output");
+    if (!output && !iequals(what, "json-flavor")) {
+        return false;
+    }
+
+    const std::string_view value = strip_quotes(trim(trimmed.substr(p)));
+    error.clear();
+    if (output) {
+        if (auto f = ddbsh::render::parse_output_format(value); f.has_value()) {
+            options.format = *f;
+        } else {
+            error = unknown_output_format_message(value);
+        }
+    } else {
+        if (auto f = ddbsh::render::parse_json_flavor(value); f.has_value()) {
+            options.json_flavor = *f;
+        } else {
+            error = unknown_json_flavor_message(value);
+        }
+    }
+    return true;
+}
+
 std::optional<std::string> StreamLineSource::next() {
     std::string line;
     if (!std::getline(in_, line)) {
@@ -201,20 +288,19 @@ BatchStatus run_batch(ddbsh::Session& session, const ddbsh::render::Renderer& re
     return status;
 }
 
-BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
-                           std::string_view text, bool abort_on_error) {
-    FdRenderingSink sink(renderer);
-    return run_batch(session, renderer, text, abort_on_error, sink, report_error_to_stderr);
+int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
+               Terminator& term, bool abort_on_error, ddbsh::render::FormatOptions* format) {
+    FileRenderingSink sink(format != nullptr ? *format : ddbsh::render::FormatOptions{});
+    const int rc =
+        run_source(session, renderer, src, term, abort_on_error, sink, report_error_to_stderr);
+    if (format != nullptr) {
+        *format = sink.options();
+    }
+    return rc;
 }
 
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
-               Terminator& term, bool abort_on_error) {
-    FdRenderingSink sink(renderer);
-    return run_source(session, renderer, src, term, abort_on_error, sink, report_error_to_stderr);
-}
-
-int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
-               Terminator& term, bool abort_on_error, ddbsh::OutcomeSink& sink,
+               Terminator& term, bool abort_on_error, ddbsh::render::FormattingSink& sink,
                const std::function<void(const std::string&)>& report_error) {
     std::string buffer;
     // The exit code tracks the LAST EXECUTED statement across the WHOLE source
@@ -241,9 +327,23 @@ int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
     for (std::optional<std::string> line = src.next(); line.has_value(); line = src.next()) {
         std::string_view trimmed = trim(*line);
 
-        // Batch-start meta-command: change the terminator mid-session.
-        if (buffer.empty() && try_set_terminator_directive(trimmed, term)) {
-            continue;
+        // Batch-start meta-commands: change the terminator, or the output
+        // format, mid-session. An unknown format is reported like a parse
+        // error: on the error channel, without touching the exit code.
+        if (buffer.empty()) {
+            if (try_set_terminator_directive(trimmed, term)) {
+                continue;
+            }
+            ddbsh::render::FormatOptions options = sink.options();
+            std::string error;
+            if (try_set_output_directive(trimmed, options, error)) {
+                if (error.empty()) {
+                    sink.set_options(options);
+                } else {
+                    report_error(error);
+                }
+                continue;
+            }
         }
 
         if (is_terminator_line(trimmed, term)) {

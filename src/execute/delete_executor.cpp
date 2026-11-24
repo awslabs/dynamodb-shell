@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "execute/rate_limiter.hpp"
+#include "execute/stream_fragments.hpp"
 #include "execute/write_common.hpp"
 #include "expressions/symbol_table.hpp"
 #include "planner/get_key_schema.hpp"
@@ -128,8 +129,15 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     WriteReadPlan read = build_write_read(cmd.table, cmd.index, where, qplan, base_pk, base_rk,
                                           cmd.ratelimit.has_value(), read_st);
 
-    ExplainOutcome explain_out;
     BulkWriteOutcome acct{BulkWriteOutcome::Verb::del, 0, 0, 0, std::nullopt};
+    const BulkWriteOutcome::Verb verb = BulkWriteOutcome::Verb::del;
+
+    // Timely output (P12, D-P12-11), as the original delete.cpp printed: under
+    // EXPLAIN via SCAN the Scan block is emitted before the first read call and
+    // each page's DeleteItem blocks right after that page; with RETURN VALUES
+    // each returned item is emitted (a partial BulkWriteOutcome) right after
+    // its delete succeeds, and the accounting line comes last. Output emitted
+    // before a later failure stays emitted (D-P12-14).
 
     // EXPLAIN DELETE via QUERY: emit the Query block ONLY and do not run it
     // (delete.cpp do_query guards the loop behind !explaining()). This is the
@@ -139,9 +147,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
         if (!body.has_value()) {
             return fail(body.error());
         }
-        explain_out.blocks.push_back(
-            ExplainBlock{"Query", std::move(*body), ExplainBlock::Format::pretty});
-        sink.emit(ExecOutcome{std::move(explain_out)});
+        emit_explain_block(sink, "Query", std::move(*body));
         return {};
     }
 
@@ -153,8 +159,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
         if (!body.has_value()) {
             return fail(body.error());
         }
-        explain_out.blocks.push_back(
-            ExplainBlock{"Scan", std::move(*body), ExplainBlock::Format::pretty});
+        emit_explain_block(sink, "Scan", std::move(*body));
     }
 
     std::optional<ValueMap> start_key;
@@ -190,6 +195,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             limiter->consume_reads(page_cc);
         }
 
+        ExplainOutcome page_writes;  // EXPLAIN: this page's DeleteItem blocks
         for (const auto& item : items) {
             DeleteItemIn request = write_template;
             request.key = row_key(item);
@@ -199,7 +205,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
                 if (!body.has_value()) {
                     return fail(body.error());
                 }
-                explain_out.blocks.push_back(
+                page_writes.blocks.push_back(
                     ExplainBlock{"DeleteItem", std::move(*body), ExplainBlock::Format::pretty});
                 continue;
             }
@@ -212,7 +218,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             if (result.has_value()) {
                 ++acct.modified;
                 if (want_rv) {
-                    acct.returned_items.push_back(result->attributes.value_or(ItemRow{}));
+                    emit_returned_item(sink, verb, result->attributes.value_or(ItemRow{}));
                 }
                 if (limiter.has_value()) {
                     limiter->consume_writes(result->consumed_capacity);
@@ -222,6 +228,9 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
             } else {
                 return fail(result.error());
             }
+        }
+        if (!page_writes.blocks.empty()) {
+            sink.emit(ExecOutcome{std::move(page_writes)});
         }
 
         if (!last_key.has_value() || last_key->empty()) {
@@ -235,9 +244,7 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
         }
     }
 
-    if (explain) {
-        sink.emit(ExecOutcome{std::move(explain_out)});
-    } else {
+    if (!explain) {
         sink.emit(ExecOutcome{std::move(acct)});
     }
     return {};

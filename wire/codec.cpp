@@ -45,6 +45,7 @@
 #include <variant>
 #include <vector>
 
+#include "ddbsh/format.hpp"
 #include "ddbsh/table_schema.hpp"
 #include "wire/datetime.hpp"
 
@@ -159,43 +160,12 @@ void sort_members(Json& obj) {
 
 // ---- cJSON-faithful readable writer ----------------------------------------
 
+// cJSON's string escaping is exactly the engine's JSON string escaper
+// (ddbsh::render::append_json_string, format.hpp): `"`, `\`, `\b \f \n \r \t`
+// by name, other control bytes as lowercase `\u00xx`, every other byte as is.
+// One escaper serves both the request bodies and the output formats (P12).
 void write_string(const std::string& s, std::string& out) {
-    out += '"';
-    for (unsigned char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (c < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
-                    out += buf;
-                } else {
-                    out += static_cast<char>(c);
-                }
-                break;
-        }
-    }
-    out += '"';
+    ddbsh::render::append_json_string(out, s);
 }
 
 // `depth` is the nesting depth at which `node` starts, matching cJSON's

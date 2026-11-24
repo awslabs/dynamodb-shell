@@ -45,6 +45,23 @@
 //                the resolved profile's `ca_bundle` config setting > system
 //                trust. Needed to reach an endpoint with a self-signed cert
 //                (e.g. a local ExtendDB server).
+//   --show-retries
+//                write one line to stderr for every retry the AWS SDK makes
+//                (throttling or a transient error), before its backoff (P12,
+//                D-P12-20). Off by default.
+//   --output default|json|csv|table
+//                the output format for rows (P12, D-P12-26): ddbsh's own
+//                output (the default), a JSON array per result set, CSV, or a
+//                text table. Status lines, DESCRIBE, EXPLAIN and errors stay
+//                text. An unknown value prints a message and the usage, and
+//                exits 1. A `set output <format>` line at the start of a batch
+//                changes it mid-session; precedence: a later `set output` >
+//                this flag > a `set output` in ~/.ddbsh_config > default.
+//   --json-flavor plain|dynamodb
+//                how JSON writes values (and CSV/table cells write maps, lists
+//                and sets): plain JSON values (the default) or the DynamoDB
+//                typed encoding ({"N": "1"}). `set json-flavor <flavor>`
+//                changes it, with the same precedence as --output.
 
 #include <csignal>
 #include <cstdio>
@@ -64,6 +81,7 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 
+#include "ddbsh/format.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
 #include "ddbsh/version.hpp"
@@ -74,6 +92,12 @@
 #include "repl.hpp"
 
 namespace {
+
+// The usage line, printed on any argument error.
+constexpr const char* kUsage =
+    "Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] "
+    "[--output default|json|csv|table] [--json-flavor plain|dynamodb] "
+    "[-c \"<cmds>\" | -f <file>]\n";
 
 // The terminal-free driver (Terminator, LineSource, StreamLineSource,
 // run_source) lives in cli/repl.{hpp,cpp} so it can be unit-tested offline;
@@ -163,16 +187,23 @@ int main(int argc, char** argv) {
     [[maybe_unused]] bool debug = false;
     std::optional<std::string> cmdstring;
     std::optional<std::string> inputfile;
-    std::optional<std::string> ca_bundle_flag;  // --ca-bundle <file> (D1)
-    Terminator term;                            // default: the word `go`
+    std::optional<std::string> ca_bundle_flag;               // --ca-bundle <file> (D1)
+    bool show_retries = false;                               // --show-retries (P12, D-P12-20)
+    std::optional<ddbsh::render::OutputFormat> output_flag;  // --output (D-P12-26)
+    std::optional<ddbsh::render::JsonFlavor> flavor_flag;    // --json-flavor
+    Terminator term;                                         // default: the word `go`
 
     // --ca-bundle has no short form (matching the AWS CLI, which exposes only
     // the long flag); give it a val outside the ASCII range so the switch below
-    // can distinguish it.
-    enum { OPT_CA_BUNDLE = 1000 };
+    // can distinguish it. --show-retries likewise.
+    // --output and --json-flavor likewise.
+    enum { OPT_CA_BUNDLE = 1000, OPT_SHOW_RETRIES, OPT_OUTPUT, OPT_JSON_FLAVOR };
     static const struct option long_opts[] = {
         {"terminator", optional_argument, nullptr, 't'},
         {"ca-bundle", required_argument, nullptr, OPT_CA_BUNDLE},
+        {"show-retries", no_argument, nullptr, OPT_SHOW_RETRIES},
+        {"output", required_argument, nullptr, OPT_OUTPUT},
+        {"json-flavor", required_argument, nullptr, OPT_JSON_FLAVOR},
         {nullptr, 0, nullptr, 0},
     };
 
@@ -209,11 +240,31 @@ int main(int argc, char** argv) {
             case OPT_CA_BUNDLE:
                 ca_bundle_flag = optarg;
                 break;
+            case OPT_SHOW_RETRIES:
+                show_retries = true;
+                break;
+            case OPT_OUTPUT:
+                output_flag = ddbsh::render::parse_output_format(optarg);
+                if (!output_flag.has_value()) {
+                    std::fputs(
+                        ("ddbsh: " + ddbsh::cli::unknown_output_format_message(optarg)).c_str(),
+                        stderr);
+                    std::fputs(kUsage, stderr);
+                    return 1;
+                }
+                break;
+            case OPT_JSON_FLAVOR:
+                flavor_flag = ddbsh::render::parse_json_flavor(optarg);
+                if (!flavor_flag.has_value()) {
+                    std::fputs(
+                        ("ddbsh: " + ddbsh::cli::unknown_json_flavor_message(optarg)).c_str(),
+                        stderr);
+                    std::fputs(kUsage, stderr);
+                    return 1;
+                }
+                break;
             default:
-                std::fputs(
-                    "Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] "
-                    "[-c \"<cmds>\" | -f <file>]\n",
-                    stderr);
+                std::fputs(kUsage, stderr);
                 return 1;
         }
     }
@@ -243,6 +294,9 @@ int main(int argc, char** argv) {
     const std::optional<std::string> ca_bundle =
         ddbsh::cli::resolve_ca_bundle(ca_bundle_flag, std::getenv("AWS_CA_BUNDLE"), profile_ca);
 
+    // Declared before the client so it outlives the client's borrowed pointer.
+    ddbsh::cli::RetryLineWriter retry_writer;
+
     std::optional<ddbsh::aws::AwsDDBClient> client_storage;
     if (ca_bundle.has_value()) {
         Aws::Client::ClientConfiguration cfg;
@@ -252,6 +306,11 @@ int main(int argc, char** argv) {
         client_storage.emplace(region, endpoint);
     }
     ddbsh::aws::AwsDDBClient& client = *client_storage;
+    // --show-retries (P12, D-P12-20): one stderr line per SDK retry, before
+    // its backoff. Off by default, so default output is byte-identical.
+    if (show_retries) {
+        client.set_retry_observer(&retry_writer);
+    }
     ddbsh::Session session(ddbsh::SessionConfig{region, endpoint}, client);
     ddbsh::render::Renderer renderer;
 
@@ -259,15 +318,26 @@ int main(int argc, char** argv) {
     // bad config line stops startup (the original __runfile exits(1)). A QUIT in
     // the config ends config processing only; it does not quit the shell (the
     // original resets m_quit at the top of each run()).
+    // The output format (D-P12-26): a `set output` / `set json-flavor` in the
+    // config file applies first, the flags override it, and a directive later
+    // in the session overrides both.
+    ddbsh::render::FormatOptions format;
     if (const std::string cfg = config_path(); !cfg.empty()) {
         std::ifstream in(cfg);
         if (in) {
             Terminator cfg_term;  // config uses ';' statements + EOF (default `go`)
             StreamLineSource src(in);
-            if (run_source(session, renderer, src, cfg_term, /*abort_on_error=*/true) != 0) {
+            if (run_source(session, renderer, src, cfg_term, /*abort_on_error=*/true, &format) !=
+                0) {
                 return 1;
             }
         }
+    }
+    if (output_flag.has_value()) {
+        format.format = *output_flag;
+    }
+    if (flavor_flag.has_value()) {
+        format.json_flavor = *flavor_flag;
     }
 
     // Startup banner (suppressed by -q, which the golden harness passes).
@@ -280,7 +350,7 @@ int main(int argc, char** argv) {
     if (cmdstring.has_value()) {
         std::istringstream in(*cmdstring);
         StreamLineSource src(in);
-        return run_source(session, renderer, src, term, abort_on_error);
+        return run_source(session, renderer, src, term, abort_on_error, &format);
     }
 
     // -f <file>: run a file, then exit.
@@ -291,7 +361,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         StreamLineSource src(in);
-        return run_source(session, renderer, src, term, abort_on_error);
+        return run_source(session, renderer, src, term, abort_on_error, &format);
     }
 
     // Interactive REPL. Prompt = "<region>> " with a "(*)" suffix when an
@@ -308,7 +378,7 @@ int main(int argc, char** argv) {
         read_history(history.c_str());
     }
     StdinLineSource src(prompt_provider);
-    int rv = run_source(session, renderer, src, term, abort_on_error);
+    int rv = run_source(session, renderer, src, term, abort_on_error, &format);
     if (!history.empty()) {
         write_history(history.c_str());
     }

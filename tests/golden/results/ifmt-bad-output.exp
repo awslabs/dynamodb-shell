@@ -1,0 +1,2 @@
+ddbsh: unknown output format: xml (expected default, json, csv, table)
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] [--output default|json|csv|table] [--json-flavor plain|dynamodb] [-c "<cmds>" | -f <file>]

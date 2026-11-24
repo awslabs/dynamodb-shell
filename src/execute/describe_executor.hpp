@@ -27,14 +27,19 @@
 
 #include "ddbsh/exec_outcome.hpp"
 #include "ddbsh/iddbclient.hpp"
+#include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/result.hpp"
 #include "parser/ast.hpp"
 
 namespace ddbsh::engine {
 
-/// Execute a (non-EXPLAIN) DESCRIBE. Returns a ReportOutcome with the report
-/// lines, or an Error if the table cannot be described.
-Result<ExecOutcome> execute_describe(const DescribeCmd& cmd, IDDBClient& client);
+/// Execute a (non-EXPLAIN) DESCRIBE, streaming: up to three ReportOutcome
+/// fragments, each emitted as soon as the response it depends on arrives —
+/// basic info and billing after DescribeTable/DescribeTimeToLive, PITR through
+/// SSE after DescribeContinuousBackups, replica lines after
+/// DescribeTableReplicaAutoScaling (P12, D-P12-11). Returns an Error, with
+/// nothing emitted, if the table cannot be described.
+Result<void> execute_describe(const DescribeCmd& cmd, IDDBClient& client, OutcomeSink& sink);
 
 /// EXPLAIN a DESCRIBE: serialize the four requests the report WOULD issue, in
 /// call order, into an ExplainOutcome — DescribeTable and DescribeTimeToLive in

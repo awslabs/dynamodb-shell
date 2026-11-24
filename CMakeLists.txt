@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.12.2
+        VERSION 0.12.3
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -122,8 +122,10 @@ add_library(ddbsh
             src/session.cpp
             src/statement.cpp
             src/version.cpp
+            src/retry_event.cpp
             src/connection/connection.cpp
             src/render/renderer.cpp
+            src/render/format.cpp
             src/parser/driver.cpp
             src/parser/param_bind.cpp
             src/parser/lex_debug.cpp
@@ -254,7 +256,8 @@ if(DDBSH_BUILD_AWS)
     # where AwsApiGuard is instantiated, which is correct for both a static and
     # a shared SDK. (TODO(portability): revisit if a shared AWS SDK build is
     # adopted and a shared component is wanted.)
-    add_library(ddbsh-aws STATIC aws/aws_ddb_client.cpp aws/database.cpp)
+    add_library(ddbsh-aws STATIC aws/aws_ddb_client.cpp aws/database.cpp
+                                 aws/retry_observer_strategy.cpp)
     add_library(ddbsh::aws ALIAS ddbsh-aws)
     # EXPORT_NAME `aws` so the INSTALLED imported target is `ddbsh::aws` (the
     # NAMESPACE `ddbsh::` prefixes the EXPORT_NAME, not the raw target name) —
@@ -320,6 +323,8 @@ if(DDBSH_BUILD_TESTS)
                    tests/planner_test.cpp
                    tests/select_exec_test.cpp
                    tests/select_stream_test.cpp
+                   tests/timely_output_test.cpp
+                   tests/format_test.cpp
                    tests/write_exec_test.cpp
                    tests/update_delete_exec_test.cpp
                    tests/return_values_ratelimit_test.cpp
@@ -334,6 +339,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/connect_reconnect_test.cpp
                    tests/cli_exit_code_test.cpp
                    tests/cli_ca_bundle_test.cpp
+                   tests/cli_retry_line_test.cpp
                    tests/wire_json_reader_test.cpp
                    tests/wire_parse_roundtrip_test.cpp
                    tests/wire_parse_control_test.cpp
@@ -398,6 +404,21 @@ if(DDBSH_BUILD_TESTS)
             PRIVATE ddbsh::aws ddbsh_warnings GTest::gtest)
         add_test(NAME ddbsh_aws_profile_ca_bundle COMMAND ddbsh-aws-profile-ca-bundle-tests)
         add_dependencies(ddbsh-tests ddbsh-aws-profile-ca-bundle-tests)
+
+        # P12 (D-P12-18, test 6): the AWS SDK retry decorator
+        # (aws/retry_observer_strategy.*) against a fake inner strategy, and
+        # AwsDDBClient wiring it in rebuild(), driven against a refused
+        # loopback port with dummy credentials. Offline: nothing leaves the
+        # host. It includes the component's internal header from aws/ (PRIVATE
+        # to this test) and has its own main() (one AwsApiGuard), so it links
+        # GTest::gtest.
+        add_executable(ddbsh-aws-retry-observer-tests tests/aws_retry_observer_test.cpp)
+        target_include_directories(ddbsh-aws-retry-observer-tests
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests" "${CMAKE_CURRENT_SOURCE_DIR}/aws")
+        target_link_libraries(ddbsh-aws-retry-observer-tests
+            PRIVATE ddbsh::aws ddbsh_warnings GTest::gtest)
+        add_test(NAME ddbsh_aws_retry_observer COMMAND ddbsh-aws-retry-observer-tests)
+        add_dependencies(ddbsh-tests ddbsh-aws-retry-observer-tests)
     endif()
 
     # D19 (P4d): the embedding API's own misuse messages must never appear in a

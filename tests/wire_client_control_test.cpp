@@ -22,6 +22,7 @@
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
 #include "ddbsh/testing/canned_transport.hpp"
+#include "ddbsh/testing/memory_client.hpp"
 #include "ddbsh/value.hpp"
 #include "ddbsh/wire/codec.hpp"
 #include "ddbsh/wire/wire_client.hpp"
@@ -66,6 +67,85 @@ TEST(WireClientControl, ListTablesPagesInternally) {
     EXPECT_EQ(transport.calls()[1].body,
               ddbsh::wire::serialize_list_tables(std::optional<std::string>("b")).body);
     EXPECT_TRUE(transport.drained());
+}
+
+// ---- ListTables one page per call (SHOW TABLES streaming, D-P12-12) --------
+
+TEST(WireClientControl, ListTablesPageIsOneRoundTripWithTheCursor) {
+    CannedTransport transport;
+    transport.push_response(R"({"TableNames":["a","b"],"LastEvaluatedTableName":"b"})");
+    transport.push_response(R"({"TableNames":["c"]})");
+    WireClient client(transport);
+
+    auto first = client.list_tables_page(ddbsh::ListTablesPageIn{});
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->table_names, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(first->last_evaluated_table_name, std::optional<std::string>("b"));
+    ASSERT_EQ(transport.calls().size(), 1u);  // one page; no internal loop
+    EXPECT_EQ(transport.calls()[0].body, "{\n}\n");
+
+    auto second =
+        client.list_tables_page(ddbsh::ListTablesPageIn{first->last_evaluated_table_name});
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(second->table_names, (std::vector<std::string>{"c"}));
+    EXPECT_FALSE(second->last_evaluated_table_name.has_value());
+    ASSERT_EQ(transport.calls().size(), 2u);
+    EXPECT_EQ(transport.calls()[1].body,
+              ddbsh::wire::serialize_list_tables(std::optional<std::string>("b")).body);
+    EXPECT_TRUE(transport.drained());
+}
+
+TEST(WireClientControl, ListTablesPageTreatsAnEmptyCursorAsTheFirstPage) {
+    // ListTablesPageIn: "" means the first page, so no ExclusiveStartTableName
+    // is sent (the same body as a nullopt cursor).
+    CannedTransport transport;
+    transport.push_response(R"({"TableNames":["a"]})");
+    WireClient client(transport);
+
+    auto out = client.list_tables_page(ddbsh::ListTablesPageIn{std::string()});
+    ASSERT_TRUE(out.has_value());
+    EXPECT_EQ(out->table_names, (std::vector<std::string>{"a"}));
+    ASSERT_EQ(transport.calls().size(), 1u);
+    EXPECT_EQ(transport.calls()[0].body, "{\n}\n");
+}
+
+TEST(WireClientControl, ListTablesPageMapsAServiceError) {
+    CannedTransport transport;
+    transport.push_response(R"({"__type":"x#AccessDeniedException","message":"no ListTables"})");
+    WireClient client(transport);
+
+    auto out = client.list_tables_page(ddbsh::ListTablesPageIn{});
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().message, "no ListTables");
+}
+
+// The IDDBClient default (MemoryClient does not override list_tables_page)
+// serves the whole list_tables() result as one last page.
+TEST(WireClientControl, DefaultListTablesPageIsTheWholeListAsOnePage) {
+    ddbsh::testing::MemoryClient client;
+    for (const char* name : {"a", "b", "c"}) {
+        ddbsh::CreateTableIn in;
+        in.table_name = name;
+        in.attribute_definitions = {{"pk", ddbsh::ScalarType::s}};
+        in.key_schema.hash = {"pk"};
+        ASSERT_TRUE(client.create_table(in).has_value());
+    }
+
+    auto first = client.list_tables_page(ddbsh::ListTablesPageIn{});
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->table_names, (std::vector<std::string>{"a", "b", "c"}));
+    EXPECT_FALSE(first->last_evaluated_table_name.has_value());
+
+    // An empty cursor is the first page (ListTablesPageIn).
+    auto again = client.list_tables_page(ddbsh::ListTablesPageIn{std::string()});
+    ASSERT_TRUE(again.has_value());
+    EXPECT_EQ(again->table_names, (std::vector<std::string>{"a", "b", "c"}));
+
+    // A cursor this client never issued: nothing remains.
+    auto rest = client.list_tables_page(ddbsh::ListTablesPageIn{std::string("c")});
+    ASSERT_TRUE(rest.has_value());
+    EXPECT_TRUE(rest->table_names.empty());
+    EXPECT_FALSE(rest->last_evaluated_table_name.has_value());
 }
 
 // ---- ListBackups: one page per call (the executor drives the cursor) -------

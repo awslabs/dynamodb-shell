@@ -1,0 +1,92 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# formats.txt — golden family for the opt-in output formats (P12, D-P12-21..27):
+# `--output json|csv|table`, `--json-flavor plain|dynamodb`, and the
+# `set output` / `set json-flavor` batch directives.
+#
+# Self-contained: it drops (if present), creates and seeds its own table
+# ddbsh_fmt, and drops it at the end, so its position in GOLDEN_FAMILIES does
+# not matter to the other families. It is registered after `show`, with the
+# other self-contained families.
+#
+# The runner's -o <format> and -j <flavor> forward --output / --json-flavor to
+# the shell (golden-runner.sh). Every query reads the one partition pk = 1, so
+# DynamoDB returns the rows in rk order and no golden uses -s (sorting would
+# scramble JSON commas and CSV headers). DynamoDB returns a stored set's
+# members in a stable, sorted order (SS bytewise, NS numerically, BS by bytes;
+# checked by repeated reads when these goldens were recorded), so the set
+# goldens are byte-exact. SHOW TABLES carries a table id and an ARN, which
+# differ per run and per account, so those cases match a regex.
+#
+# Recorded against real DynamoDB (632195519165, us-east-1) and reviewed by eye.
+#
+# WARNING: creates and drops a REAL DynamoDB table (ddbsh_fmt) per run.
+
+add_test(NAME ifmt-setup-drop COMMAND ddbshtest -c "drop table if exists ddbsh_fmt;")
+add_test(NAME ifmt-setup-load COMMAND ddbshtest -e -f ${DATA}/ddbsh-fmt-load.sql)
+add_test(NAME ifmt-setup-sets COMMAND ${GOLDEN_DIR}/ddbsh-put-item ddbsh_fmt
+    "{\"pk\": {\"N\": \"1\"}, \"rk\": {\"N\": \"4\"}, \"bin\": {\"B\": \"aGVsbG8=\"}, \"ss\": {\"SS\": [\"b\", \"a\", \"c\"]}, \"ns\": {\"NS\": [\"3\", \"1\", \"20\"]}, \"bs\": {\"BS\": [\"Ag==\", \"AQ==\"]}}")
+
+# A Query over the whole partition (S, N, BOOL, NULL, L, M, B, SS, NS, BS; rows
+# with different attributes) in every format and flavor.
+add_test(NAME ifmt-json-plain COMMAND ddbshtest -q -o json -T ${RD}/ifmt-json-plain.exp -c "select * from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-json-dynamodb COMMAND ddbshtest -q -o json -j dynamodb -T ${RD}/ifmt-json-dynamodb.exp -c "select * from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-csv-plain COMMAND ddbshtest -q -o csv -T ${RD}/ifmt-csv-plain.exp -c "select * from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-csv-dynamodb COMMAND ddbshtest -q -o csv -j dynamodb -T ${RD}/ifmt-csv-dynamodb.exp -c "select * from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-table COMMAND ddbshtest -q -o table -T ${RD}/ifmt-table.exp -c "select * from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-default COMMAND ddbshtest -q -o default -T ${RD}/ifmt-default.exp -c "select * from ddbsh_fmt where pk = 1")
+
+# A GetItem.
+add_test(NAME ifmt-getitem-json COMMAND ddbshtest -q -o json -T ${RD}/ifmt-getitem-json.exp -c "select * from ddbsh_fmt where pk = 1 and rk = 1")
+add_test(NAME ifmt-getitem-table COMMAND ddbshtest -q -o table -T ${RD}/ifmt-getitem-table.exp -c "select * from ddbsh_fmt where pk = 1 and rk = 1")
+
+# An empty Query: `[]`, a header-only CSV (the key columns), a header-only box.
+add_test(NAME ifmt-empty-json COMMAND ddbshtest -q -o json -T ${RD}/ifmt-empty-json.exp -c "select * from ddbsh_fmt where pk = 99")
+add_test(NAME ifmt-empty-csv COMMAND ddbshtest -q -o csv -T ${RD}/ifmt-empty-csv.exp -c "select * from ddbsh_fmt where pk = 99")
+add_test(NAME ifmt-empty-table COMMAND ddbshtest -q -o table -T ${RD}/ifmt-empty-table.exp -c "select * from ddbsh_fmt where pk = 99")
+
+# An explicit projection fixes the column order, missing attributes included.
+add_test(NAME ifmt-projection-csv COMMAND ddbshtest -q -o csv -T ${RD}/ifmt-projection-csv.exp -c "select rk, a, pk from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-projection-table COMMAND ddbshtest -q -o table -T ${RD}/ifmt-projection-table.exp -c "select rk, a, pk from ddbsh_fmt where pk = 1")
+
+# A read transaction with a miss: the miss is an empty element, in position.
+add_test(NAME ifmt-txn-json COMMAND ddbshtest -q -o json -T ${RD}/ifmt-txn-json.exp -c "begin; select * from ddbsh_fmt where pk = 1 and rk = 1; select * from ddbsh_fmt where pk = 1 and rk = 99; commit;")
+
+# Text between result sets: a result set closes before a status line or an
+# error, and the next SELECT opens a new one. The INSERT of an existing key
+# fails with the conditional-check error.
+add_test(NAME ifmt-text-between-json COMMAND ddbshtest -q -o json -T ${RD}/ifmt-text-between-json.exp -c "select a from ddbsh_fmt where pk = 1 and rk = 1; insert into ddbsh_fmt (pk, rk) values (1, 1); select b from ddbsh_fmt where pk = 1 and rk = 1 return consumed capacity total; explain select * from ddbsh_fmt where pk = 1 and rk = 1;")
+
+# SHOW TABLES: a fixed column order; the id and ARN vary, so match a regex.
+add_test(NAME ifmt-show-tables-csv COMMAND ddbshtest -q -o csv -c "show tables like \"ddbsh_fmt\"")
+set_property(TEST ifmt-show-tables-csv PROPERTY PASS_REGULAR_EXPRESSION
+    "^TableName,TableStatus,BillingMode,TableClass,TableId,TableArn,TimeToLive,GSICount,LSICount,VSICount\nddbsh_fmt,ACTIVE,PAY_PER_REQUEST,STANDARD\\*?,[0-9a-f-]+,arn:aws:dynamodb:[a-z0-9-]+:[0-9]+:table/ddbsh_fmt,DISABLED,0,0,0\n$")
+add_test(NAME ifmt-show-tables-json COMMAND ddbshtest -q -o json -c "show tables like \"ddbsh_fmt\"")
+set_property(TEST ifmt-show-tables-json PROPERTY PASS_REGULAR_EXPRESSION
+    "^\\[\n  {\"TableName\": \"ddbsh_fmt\", \"TableStatus\": \"ACTIVE\", \"BillingMode\": \"PAY_PER_REQUEST\", \"TableClass\": \"STANDARD\\*?\", \"TableId\": \"[0-9a-f-]+\", \"TableArn\": \"arn:aws:dynamodb:[a-z0-9-]+:[0-9]+:table/ddbsh_fmt\", \"TimeToLive\": \"DISABLED\", \"GSICount\": 0, \"LSICount\": 0, \"VSICount\": 0}\n\\]\n$")
+add_test(NAME ifmt-show-tables-brief-table COMMAND ddbshtest -q -o table -T ${RD}/ifmt-show-tables-brief-table.exp -c "show tables brief like \"ddbsh_fmt\"")
+# A LIKE that matches nothing is still an empty result set.
+add_test(NAME ifmt-show-tables-none-json COMMAND ddbshtest -q -o json -T ${RD}/ifmt-show-tables-none-json.exp -c "show tables like \"ddbsh_fmt_no_such_table\"")
+
+# SHOW LIMITS: account-specific numbers, so match the structure.
+add_test(NAME ifmt-show-limits-csv COMMAND ddbshtest -q -o csv -c "show limits")
+set_property(TEST ifmt-show-limits-csv PROPERTY PASS_REGULAR_EXPRESSION
+    "^Region,Limit,RCU,WCU\n[a-z0-9-]+,Account Max,[0-9]+,[0-9]+\n[a-z0-9-]+,Table Max,[0-9]+,[0-9]+\n[a-z0-9-]+,Total Tables,[0-9]+,[0-9]+\n[a-z0-9-]+,Total GSI,[0-9]+,[0-9]+\n[a-z0-9-]+,Total,[0-9]+,[0-9]+\n$")
+
+# The directives: `set output` / `set json-flavor` at the start of a batch; a
+# later directive wins over --output; an unknown value is reported on stderr
+# and changes nothing (the exit code stays 0).
+add_test(NAME ifmt-directive COMMAND ddbshtest -q -T ${RD}/ifmt-directive.exp -c "set output csv\nset json-flavor dynamodb\nselect * from ddbsh_fmt where pk = 1 and rk = 3;")
+add_test(NAME ifmt-directive-over-flag COMMAND ddbshtest -q -o table -T ${RD}/ifmt-directive-over-flag.exp -c "set output json\nselect a from ddbsh_fmt where pk = 1 and rk = 1;")
+add_test(NAME ifmt-directive-bad COMMAND ddbshtest -q -T ${RD}/ifmt-directive-bad.exp -c "set output xml\nset json-flavor typed\nselect a from ddbsh_fmt where pk = 1 and rk = 1;")
+
+# An unknown --output / --json-flavor value: a message and the usage, exit 1.
+add_test(NAME ifmt-bad-output COMMAND ddbshtest -q -o xml -T ${RD}/ifmt-bad-output.exp -c "select * from ddbsh_fmt where pk = 1")
+add_test(NAME ifmt-bad-flavor COMMAND ddbshtest -q -j typed -T ${RD}/ifmt-bad-flavor.exp -c "select * from ddbsh_fmt where pk = 1")
+
+# A single-key UPDATE with RETURN VALUES: the item as a result set, then the
+# accounting line as text. Last, because it changes rk = 1.
+add_test(NAME ifmt-update-rv-json COMMAND ddbshtest -q -o json -T ${RD}/ifmt-update-rv-json.exp -c "update ddbsh_fmt set b = 43 where pk = 1 and rk = 1 return values all new")
+
+add_test(NAME ifmt-teardown COMMAND ddbshtest -c "drop table ddbsh_fmt;")

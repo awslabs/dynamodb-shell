@@ -71,6 +71,7 @@ Result<ExecOutcome> execute_select(const SelectCmd& cmd, IDDBClient& client,
         outcome.items.insert(outcome.items.end(), (*page)->begin(), (*page)->end());
     }
     outcome.consumed_capacity = cursor.consumed_capacity();
+    outcome.column_hint = cursor.column_hint();
 
     return ExecOutcome{std::move(outcome)};
 }
@@ -98,6 +99,8 @@ Result<void> execute_select_streaming(const SelectCmd& cmd, IDDBClient& client,
     // Emit one SelectOutcome fragment per non-empty page; memory is bounded to
     // the current page. The Renderer prints each page's item lines, so the
     // concatenation is byte-identical to one SelectOutcome{all_items, ...}.
+    // Every fragment carries the column hint the output formats use (P12).
+    bool emitted = false;
     for (;;) {
         auto page = cursor.next_page();
         if (!page.has_value()) {
@@ -108,7 +111,18 @@ Result<void> execute_select_streaming(const SelectCmd& cmd, IDDBClient& client,
         }
         SelectOutcome fragment;
         fragment.items = **page;
+        fragment.column_hint = cursor.column_hint();
         sink.emit(ExecOutcome{std::move(fragment)});
+        emitted = true;
+    }
+    // A SELECT that found nothing emits one empty fragment, so a formatted
+    // output still opens (and closes) its result set: `[]` in JSON, the header
+    // in CSV (P12, design §4.4-§4.7). It renders nothing in the default
+    // format, so the default bytes are unchanged.
+    if (!emitted) {
+        SelectOutcome empty;
+        empty.column_hint = cursor.column_hint();
+        sink.emit(ExecOutcome{std::move(empty)});
     }
 
     // After the item pages, emit the totalized capacity as its own fragment —

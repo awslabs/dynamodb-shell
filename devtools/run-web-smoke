@@ -15,12 +15,14 @@
 #   2. the offline web gates (web_offline_gates in devtools/lib-web.sh, the
 #      same set CI runs): glue no-eval check (the page CSP has no
 #      'unsafe-eval'), app-core.test.mjs, sdk-bridge.test.mjs (real SDK, stub
-#      HTTP handler), package.test.mjs, the browser-storage grep gate
+#      HTTP handler), streaming.test.mjs (the built engine, stub transport
+#      hooks), package.test.mjs, the browser-storage grep gate
 #      (D-P9-4), and the check that deploy.sh and docs/HOSTING.md carry the
 #      same seven upload commands (P10);
-#   3. a LIVE UI-path smoke (web/live-smoke.mjs, DdbshSession.run) against real
-#      DynamoDB with STS-minted short-term credentials for the default profile:
-#      creates and drops one ddbsh_web_smoke_<pid> table.
+#   3. a LIVE UI-path smoke (web/live-smoke.mjs, DdbshSession.run and
+#      runStreaming) against real DynamoDB with STS-minted short-term
+#      credentials for the default profile: creates and drops one
+#      ddbsh_web_smoke_<pid> table.
 #
 # Output: discussions/test-websmoke-<HEAD-short>.log.
 #

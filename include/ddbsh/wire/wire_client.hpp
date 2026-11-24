@@ -28,6 +28,7 @@
 #ifndef DDBSH_WIRE_WIRE_CLIENT_HPP
 #define DDBSH_WIRE_WIRE_CLIENT_HPP
 
+#include <atomic>
 #include <chrono>
 #include <random>
 #include <string>
@@ -88,6 +89,7 @@ public:
     Result<ListBackupsOut> list_backups(const ListBackupsIn&) override;
     Result<DeleteTableOut> delete_table(const DeleteTableIn&) override;
     Result<ListTablesOut> list_tables(const ListTablesIn&) override;
+    Result<ListTablesPageOut> list_tables_page(const ListTablesPageIn&) override;
     Result<DescribeTableOut> describe_table(const DescribeTableIn&) override;
     Result<SearchVectorsOut> search_vectors(const SearchVectorsIn&) override;
     Result<TransactGetItemsOut> transact_get_items(const TransactGetItemsIn&) override;
@@ -107,6 +109,14 @@ public:
     // half.
     std::string connection_descriptor() const override;
 
+    // ---- retry notification (P12, D-P12-18) --------------------------------
+    // send_retrying raises one RetryEvent per retry it decides to make, after
+    // computing the backoff and before sleeping it. The waiters' DescribeTable
+    // polls are not retries and raise none. Borrowed pointer; nullptr clears.
+    // Safe to call from another thread while a request is retrying; it does
+    // not wait for an on_retry call already running (retry_event.hpp).
+    void set_retry_observer(RetryObserver* observer) override;
+
 protected:
     /// The backoff sleep, shared by the two table waiters and the retry path
     /// (D-P6c-6; extended for HT-1 retry). Default: emscripten_sleep under
@@ -124,11 +134,16 @@ protected:
     /// run multiple sessions concurrently (shared-steering tenet).
     virtual double jitter_unit();
 
-    /// Retry attempt cap: 1 initial attempt + (cap - 1) retries. Default 11 is
-    /// parity with the AWS SDK DefaultRetryStrategy (maxRetries = 10) the
-    /// SDK-backed CLI used below the IDDBClient seam, so the SDK-free wire path
-    /// gets the same resilience ceiling (HT-1 §4.5). A test subclass lowers it to
-    /// exercise exhaustion quickly.
+    /// Retry attempt cap: 1 initial attempt + (cap - 1) retries. The default 11
+    /// (10 retries) is the wire path's own budget, chosen in HT-1 §4.5 so that
+    /// an embedder of the SDK-free wire path rides out a burst of throttling or
+    /// transient errors before it reports one. With retry_delay's backoff (a
+    /// 50 ms ceiling doubling to a 1000 ms cap, full jitter), the 10 waits sum
+    /// to at most 6.55 s. It is not the AWS SDK's budget: the SDK-backed CLI
+    /// retries with the SDK's own strategy, whose attempt count depends on the
+    /// SDK version and retry mode, and the browser edition sets the cap to 1
+    /// because the JavaScript SDK retries there (web/bindings.cpp). A test
+    /// subclass lowers it to exercise exhaustion quickly.
     unsigned max_retry_attempts_ = 11;
 
 private:
@@ -143,10 +158,11 @@ private:
     /// non-waiter op routes through; the two waiters keep their own poll loop.
     Result<std::string> send_retrying(std::string_view operation, std::string_view body);
 
-    /// Sleep the full-jitter backoff interval for the given 0-based attempt
-    /// (HT-1 §4.5): a uniform draw in [0, min(cap, base * 2^attempt)], base
-    /// 50ms, cap 1000ms. Calls backoff_sleep for the actual wait.
-    void retry_backoff(unsigned attempt);
+    /// The full-jitter backoff interval for the given 0-based attempt (HT-1
+    /// §4.5): a uniform draw in [0, min(cap, base * 2^attempt)], base 50ms, cap
+    /// 1000ms. send_retrying reports it in the RetryEvent, then passes it to
+    /// backoff_sleep, so the reported delay is the slept delay (P12, D-P12-18).
+    std::chrono::milliseconds retry_delay(unsigned attempt);
 
     /// serialize -> send_retrying -> parse for an op whose response maps
     /// straight to its *Out (no composed error, no paging). Defined in
@@ -155,6 +171,18 @@ private:
     Result<Out> round_trip(const WireRequest& req, Result<Out> (*parse)(const std::string&));
 
     Transport& transport_;
+    // Borrowed (set_retry_observer). Atomic, as AwsDDBClient's slot is, so an
+    // embedder may set or clear it from another thread while a request is
+    // retrying; send_retrying loads it once per retry. The copy constructor
+    // copies the current pointer, so WireClient stays copy-constructible as it
+    // was before the slot became atomic (a bare std::atomic member would delete
+    // the copy, a breaking change).
+    struct ObserverSlot {
+        std::atomic<RetryObserver*> ptr{nullptr};
+        ObserverSlot() = default;
+        ObserverSlot(const ObserverSlot& other) : ptr(other.ptr.load()) {}
+    };
+    ObserverSlot retry_observer_;
     std::string region_;
     std::string endpoint_;
     std::mt19937_64 rng_{std::random_device{}()};

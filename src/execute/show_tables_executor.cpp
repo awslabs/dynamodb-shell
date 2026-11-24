@@ -5,8 +5,12 @@
 
 #include "execute/show_tables_executor.hpp"
 
+#include <cstddef>
+#include <optional>
 #include <regex>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace ddbsh::engine {
 
@@ -45,12 +49,38 @@ std::string ttl_column(const TimeToLiveOut& ttl) {
     return out;
 }
 
-/// Build one full status row (the show_tables.cpp printf, without the trailing
-/// newline the Renderer adds):
-///   name | status | billing | class | id | arn | TTL ttl | GSI: n | LSI : m |
-std::string status_row(const std::string& name, const DescribeTableOut& td,
-                       const TimeToLiveOut& ttl) {
-    std::string row = name;
+/// The report's columns for the output formats (P12, D-P12-27). BRIEF shows
+/// only TableName.
+const std::vector<std::string>& full_columns() {
+    static const std::vector<std::string> columns{
+        "TableName", "TableStatus", "BillingMode", "TableClass", "TableId",
+        "TableArn",  "TimeToLive",  "GSICount",    "LSICount",   "VSICount"};
+    return columns;
+}
+
+const std::vector<std::string>& brief_columns() {
+    static const std::vector<std::string> columns{"TableName"};
+    return columns;
+}
+
+/// One SHOW TABLES row in both shapes: the text line (the show_tables.cpp
+/// printf, without the trailing newline the Renderer adds) and the same values
+/// by column. A row whose describe failed carries only TableName.
+struct TableRow {
+    std::string line;
+    ValueMap values;
+};
+
+TableRow name_only(const std::string& name) {
+    return TableRow{name, ValueMap{{"TableName", Value::string_value(name)}}};
+}
+
+/// Build one full status row:
+///   name | status | billing | class | id | arn | TTL ttl | GSI: n | LSI : m | VSI : k |
+TableRow status_row(const std::string& name, const DescribeTableOut& td, const TimeToLiveOut& ttl) {
+    TableRow out;
+    std::string& row = out.line;
+    row = name;
     row += " | " + td.table_status;
     row += " | " + billing_mode_column(td);
     row += " | " + table_class_column(td);
@@ -63,12 +93,59 @@ std::string status_row(const std::string& name, const DescribeTableOut& td,
     // a human-approved divergence; re-records every SHOW TABLES golden).
     row += " | VSI : " + std::to_string(td.vector_indexes.size());
     row += " |";
-    return row;
+    out.values = ValueMap{
+        {"TableName", Value::string_value(name)},
+        {"TableStatus", Value::string_value(td.table_status)},
+        {"BillingMode", Value::string_value(billing_mode_column(td))},
+        {"TableClass", Value::string_value(table_class_column(td))},
+        {"TableId", Value::string_value(td.table_id)},
+        {"TableArn", Value::string_value(td.table_arn)},
+        {"TimeToLive", Value::string_value(ttl_column(ttl))},
+        {"GSICount", Value::number_value(std::to_string(td.global_secondary_indexes.size()))},
+        {"LSICount", Value::number_value(std::to_string(td.local_secondary_indexes.size()))},
+        {"VSICount", Value::number_value(std::to_string(td.vector_indexes.size()))},
+    };
+    return out;
+}
+
+/// One SHOW TABLES row for `name`: just the name for BRIEF, or when either
+/// DescribeTable or DescribeTimeToLive fails (the original's has_dtr() &&
+/// has_ttl() guard in show_tables.cpp); else the full status row.
+TableRow table_row(const ShowTablesCmd& cmd, IDDBClient& client, const std::string& name) {
+    if (cmd.brief) {
+        return name_only(name);
+    }
+    auto described = client.describe_table(DescribeTableIn{name});
+    if (!described.has_value()) {
+        return name_only(name);
+    }
+    auto ttl = client.describe_time_to_live(DescribeTimeToLiveIn{name});
+    if (!ttl.has_value()) {
+        return name_only(name);
+    }
+    return status_row(name, described.value(), ttl.value());
+}
+
+/// One SHOW TABLES fragment: the row's line, and its values as a one-row
+/// table. `group_end` marks the page's last name (the text-table format prints
+/// a box there, D-P12-24). With no row, the fragment is an empty page end: it
+/// renders nothing in the default format.
+ExecOutcome fragment(const ShowTablesCmd& cmd, std::optional<TableRow> row, bool group_end) {
+    ReportOutcome report;
+    ReportTable table;
+    table.columns = cmd.brief ? brief_columns() : full_columns();
+    table.group_end = group_end;
+    if (row.has_value()) {
+        report.lines.push_back(std::move(row->line));
+        table.rows.push_back(std::move(row->values));
+    }
+    report.table = std::move(table);
+    return ExecOutcome{std::move(report)};
 }
 
 }  // namespace
 
-Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client) {
+Result<void> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client, OutcomeSink& sink) {
     // Build the LIKE matcher up front. An invalid pattern is reported as an
     // Error rather than throwing across the boundary (D12; the original
     // constructed std::regex(m_regexp) unguarded).
@@ -81,40 +158,38 @@ Result<ExecOutcome> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& cl
         }
     }
 
-    auto listed = client.list_tables(ListTablesIn{});
-    if (!listed.has_value()) {
-        return fail(listed.error());
-    }
-
-    ReportOutcome report;
-    for (const auto& name : listed.value().table_names) {
-        if (matcher.has_value() && !std::regex_match(name, *matcher)) {
-            continue;
+    // Read ListTables one page at a time and emit each row as soon as its
+    // describe calls return, before the next row's calls and before the next
+    // page is requested (P12, D-P12-11/-12) — the original show_tables.cpp
+    // printed each row inside its page loop the same way. A ListTables failure
+    // on a later page leaves the rows already emitted in place and returns the
+    // Error after them (D-P12-14).
+    ListTablesPageIn page_in;
+    do {
+        auto page = client.list_tables_page(page_in);
+        if (!page.has_value()) {
+            return fail(page.error());
         }
-
-        if (cmd.brief) {
-            report.lines.push_back(name);
-            continue;
+        // The output formats need to know where a page ends (the text table
+        // prints one box per page, D-P12-24). The last name's fragment marks
+        // it; when that name is filtered out by LIKE, or the page is empty, an
+        // empty fragment marks it instead (it renders nothing by default).
+        const auto& names = page->table_names;
+        bool page_end_emitted = false;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (matcher.has_value() && !std::regex_match(names[i], *matcher)) {
+                continue;
+            }
+            const bool last = i + 1 == names.size();
+            sink.emit(fragment(cmd, table_row(cmd, client, names[i]), last));
+            page_end_emitted = last;
         }
-
-        // A non-brief row needs BOTH DescribeTable and DescribeTimeToLive to
-        // succeed; if either fails the original prints just the table name
-        // (has_dtr() && has_ttl() guard in show_tables.cpp).
-        auto described = client.describe_table(DescribeTableIn{name});
-        if (!described.has_value()) {
-            report.lines.push_back(name);
-            continue;
+        if (!page_end_emitted) {
+            sink.emit(fragment(cmd, std::nullopt, true));
         }
-        auto ttl = client.describe_time_to_live(DescribeTimeToLiveIn{name});
-        if (!ttl.has_value()) {
-            report.lines.push_back(name);
-            continue;
-        }
-
-        report.lines.push_back(status_row(name, described.value(), ttl.value()));
-    }
-
-    return ExecOutcome{std::move(report)};
+        page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
+    } while (page_in.exclusive_start_table_name.has_value());
+    return {};
 }
 
 }  // namespace ddbsh::engine

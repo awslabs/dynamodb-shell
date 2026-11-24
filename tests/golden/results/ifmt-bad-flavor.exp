@@ -1,0 +1,2 @@
+ddbsh: unknown JSON flavor: typed (expected plain, dynamodb)
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] [--output default|json|csv|table] [--json-flavor plain|dynamodb] [-c "<cmds>" | -f <file>]

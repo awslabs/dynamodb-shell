@@ -16,6 +16,8 @@ the full command surface, grouped by family:
   `UPDATE`, `UPSERT`, `DELETE`, `EXPLAIN`.
 - **[DML — special topics](special-topics.md)** — the `WHERE` clause, rate
   limiting, return values, on-demand throughput, warm throughput.
+- **[Output formats](output-formats.md)** — `--output json|csv|table`, the
+  JSON flavors, `set output`, and what each format writes.
 
 The rest of this page summarizes the supported command set, the isql-mode input
 model, syntax-error diagnostics, and the CLI flags/config/environment.
@@ -267,7 +269,7 @@ create table foo ( a number ) primary key ( a hash ) gsi ( g on (a, b) hash, (c)
 ## CLI flags, config, and environment
 
 ```
-Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [-c "<cmds>" | -f <file>]
+Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] [--output default|json|csv|table] [--json-flavor plain|dynamodb] [-c "<cmds>" | -f <file>]
 ```
 
 - `-c "<cmds>"` — run a batch string, then exit (mutually exclusive with `-f`).
@@ -291,6 +293,35 @@ Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [-c "<cmds>" | -f <f
   `aws configure set/get ca_bundle --profile` commands, and fail-closed TLS) is
   documented in
   [configuration 2 — native ddbsh against a local ExtendDB server](../configurations/02-native-extenddb.md).
+- `--show-retries` — write one line to stderr for every retry the AWS SDK makes
+  when DynamoDB throttles a request or a request fails with a transient error,
+  before the SDK waits out its backoff. Off by default; stdout is unchanged
+  either way. A line reads
+  `ddbsh: Scan throttled (ProvisionedThroughputExceededException); attempt 2 of 3 in 150 ms`.
+  "throttled" becomes "failed" for an error that is not a throttle; the error
+  code, the `of N` budget and the `in N ms` delay are left out when the SDK
+  does not supply them. Nothing is printed for an error the SDK will not retry.
+- `--output default|json|csv|table` — the format for rows: the items of a
+  `SELECT`, a read transaction and `RETURN VALUES`, and the `SHOW TABLES`,
+  `SHOW BACKUPS` and `SHOW LIMITS` reports. `default` is ddbsh's own output.
+  `json` writes one JSON array per result set, `csv` writes RFC 4180 fields
+  with LF line ends, and `table` draws a `+`/`-`/`|` box per DynamoDB page.
+  Status lines, `DESCRIBE`, `EXPLAIN`, `HELP` and errors stay text in every
+  format, so a run of several statements is a sequence of result sets with
+  text between them. An unknown value prints a message and the usage, and
+  exits 1. [Output formats](output-formats.md) shows each format, the column
+  order and the edge cases.
+- `--json-flavor plain|dynamodb` — how `json` writes values, and how `csv` and
+  `table` cells write maps, lists and sets: plain JSON values (`{"pk": 1}`, the
+  default) or the DynamoDB typed encoding (`{"pk": {"N": "1"}}`).
+
+A line `set output <format>` or `set json-flavor <flavor>` at the start of a
+batch (like `set terminator`) changes the format for the statements that
+follow; an unknown value writes
+`unknown output format: <x> (expected default, json, csv, table)` (or the
+JSON-flavor equivalent) to stderr and changes nothing. Precedence: a later
+`set output` in the session, then `--output`, then a `set output` in the
+config file, then `default`.
 
 At startup the CLI loads a config file (`DDBSH_CONFIG_FILE`, else
 `~/.ddbsh_config`) if present and reads/writes interactive history at

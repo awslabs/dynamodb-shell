@@ -24,7 +24,20 @@
 //   - versionLabel:           the header's "version <v>" text, read from the
 //                             engine the page loaded (P10, D-P10-14).
 //   - busyText / createBusyClock: the header's "running… <N>s" indicator and
-//                             its start/finish announcements (P10, D-P10-16).
+//                             its start/finish announcements (P10, D-P10-16),
+//                             plus its throttled / retrying states
+//                             (setRetrying; P12, D-P12-19).
+//   - promptEntry / createTranscriptAppender / guardedEventSink /
+//     streamSubmission:       the streaming transcript (P12, D-P12-17): the
+//                             prompt echo first, then each engine text event
+//                             appended as it arrives.
+//   - createTableModel:       the HTML result table's column growth (P12,
+//                             D-P12-25): rows events -> DOM-free plans.
+//   - OUTPUT_CHOICES / JSON_FLAVOR_CHOICES / jsonFlavorApplies /
+//     outputOptions:          the Output and JSON dropdowns -> runStreaming
+//                             options (P12, D-P12-26).
+//   - THROTTLING_ERROR_CODES / isThrottlingError: which DynamoDB errors count
+//                             as throttling (P12, D-P12-18).
 //
 // No engine logic crosses into JS (tenet 3): the faithful shell text is produced
 // by the engine's Renderer and arrives verbatim in RunResult.segments; this
@@ -81,12 +94,9 @@ export function buildTranscriptEntries(prompt, input, runResult) {
     const entries = [];
     const result = runResult || {};
 
-    if (typeof input === "string" && input.length > 0) {
-        const echoed = input
-            .split("\n")
-            .map((line) => `${prompt}${line}`)
-            .join("\n");
-        entries.push({ text: echoed, kind: "prompt" });
+    const echo = promptEntry(prompt, input);
+    if (echo !== null) {
+        entries.push(echo);
     }
 
     const segments = segmentList(result.segments);
@@ -138,7 +148,320 @@ function segmentList(segments) {
     return null;
 }
 
+/**
+ * The prompt echo for one submission: every line of `input` prefixed with
+ * `prompt`, so a multi-line statement reads as it would in the CLI. Null for
+ * an empty input (nothing to echo).
+ *
+ * @param {string} prompt  the prompt string from buildPrompt.
+ * @param {string} input   the raw submission text (may be multi-line).
+ * @returns {{text: string, kind: "prompt"} | null}
+ */
+export function promptEntry(prompt, input) {
+    if (typeof input !== "string" || input.length === 0) {
+        return null;
+    }
+    const echoed = input
+        .split("\n")
+        .map((line) => `${prompt}${line}`)
+        .join("\n");
+    return { text: echoed, kind: "prompt" };
+}
+
+// ---- streaming transcript (P12, D-P12-17) -----------------------------------
+
+/**
+ * Create the appender that writes one submission's transcript as its output
+ * arrives (P12, D-P12-17). It is DOM-free: the caller supplies operations on
+ * its own block type (a `<pre>` or `<table>` in the page, a plain object in
+ * the tests):
+ *
+ *   - createBlock(kind): make and attach a new, empty block for "prompt",
+ *     "stdout" or "stderr", and return it;
+ *   - appendText(block, text): add `text` at the end of `block` (the page
+ *     appends a Text node; it never sets innerHTML, D-P6e-6, and never uses
+ *     `textContent +=`, which copies the whole block on every event);
+ *   - isAttached(block): false once the block has left the transcript (the
+ *     Clear button empties the pane while a submission runs);
+ *   - createTable() and applyTablePlan(table, plan): only for the `html`
+ *     output (P12, D-P12-25). createTable makes and attaches an empty result
+ *     table and returns it; applyTablePlan applies one createTableModel plan
+ *     to it. Without them, rows events are ignored.
+ *
+ * write(kind, text) adds text to the current block when it has the same kind
+ * and is still attached, and otherwise starts a new block. So adjacent text of
+ * one stream shares a block, as buildTranscriptEntries coalesces it, and a
+ * change of stream starts a new one. Empty text writes nothing. prompt()
+ * always starts a new block.
+ *
+ * A `rows` event adds to the current result table, or starts one (when none
+ * is open, or Clear removed it); an `end` event closes it, so the next result
+ * set starts a new table and the next text a new block.
+ *
+ * @param {{createBlock: (kind: string) => unknown,
+ *          appendText: (block: unknown, text: string) => void,
+ *          isAttached: (block: unknown) => boolean,
+ *          createTable?: () => unknown,
+ *          applyTablePlan?: (table: unknown, plan: object) => void}} io
+ */
+export function createTranscriptAppender({ createBlock, appendText, isAttached, createTable, applyTablePlan }) {
+    let current = null; // {kind, block, model?} of the block the next same-kind output joins.
+
+    function write(kind, text) {
+        if (typeof text !== "string" || text.length === 0) {
+            return;
+        }
+        if (current === null || current.kind !== kind || !isAttached(current.block)) {
+            current = { kind, block: createBlock(kind) };
+        }
+        appendText(current.block, text);
+    }
+
+    function rows(ev) {
+        if (typeof createTable !== "function" || typeof applyTablePlan !== "function") {
+            return;
+        }
+        if (current === null || current.kind !== "table" || !isAttached(current.block)) {
+            current = { kind: "table", block: createTable(), model: createTableModel() };
+        }
+        applyTablePlan(current.block, current.model.apply(ev));
+    }
+
+    return {
+        /** Append `text` as `kind` ("stdout" or "stderr"). */
+        write,
+
+        /** Start the submission with its prompt echo (see promptEntry). */
+        prompt(promptText, input) {
+            const echo = promptEntry(promptText, input);
+            if (echo !== null) {
+                current = null; // the echo always opens its own block.
+                write(echo.kind, echo.text);
+            }
+        },
+
+        /**
+         * Append one runStreaming event: `text` to a text block, `rows` to the
+         * current result table, `end` closes that table. Any other type is
+         * ignored.
+         */
+        event(ev) {
+            if (!ev) {
+                return;
+            }
+            if (ev.type === "text") {
+                write(ev.stream === "stderr" ? "stderr" : "stdout", ev.text);
+            } else if (ev.type === "rows") {
+                rows(ev);
+            } else if (ev.type === "end" && current !== null && current.kind === "table") {
+                current = null;
+            }
+        },
+    };
+}
+
+// ---- result tables (P12, D-P12-25) -------------------------------------------
+
+/**
+ * The column-growth model of one HTML result table (design §4.7). It turns
+ * each `rows` event from runStreaming's `html` output into a plan of DOM
+ * changes, which the page applies with createElement and textContent only:
+ *
+ *   {addHeaders: string[],   // a <th> to append for each, in order
+ *    padRows: number,        // how many rows already in the table get...
+ *    padCells: number,       // ...this many empty cells appended (the new columns)
+ *    rows: [[{text, className}]]}  // rows to append, one cell per column
+ *
+ * Columns only grow (the engine's ColumnTracker never reorders or drops
+ * one), so a new column is a header at the end and an empty cell at the end
+ * of every earlier row. The model trusts the event's full `columns` list over
+ * `newColumnsFrom`: the headers it adds are the ones the table does not have
+ * yet. A cell's className is "num" for a number (right-aligned), "missing"
+ * for an attribute the row does not have, and "" otherwise.
+ */
+export function createTableModel() {
+    let columnCount = 0;
+    let rowCount = 0;
+    return {
+        /** The plan for one rows event. */
+        apply(ev) {
+            const columns = Array.isArray(ev && ev.columns) ? ev.columns : [];
+            const addHeaders = columns.slice(columnCount).map(String);
+            // Rows already in the table (earlier events) lack the new columns.
+            const padRows = addHeaders.length > 0 ? rowCount : 0;
+            const plan = { addHeaders, padRows, padCells: padRows > 0 ? addHeaders.length : 0, rows: [] };
+            columnCount += addHeaders.length;
+            for (const row of Array.isArray(ev && ev.rows) ? ev.rows : []) {
+                const cells = [];
+                for (let i = 0; i < columnCount; i += 1) {
+                    const c = Array.isArray(row) ? row[i] : undefined;
+                    if (!c || c.m) {
+                        cells.push({ text: "", className: "missing" });
+                    } else {
+                        cells.push({ text: String(c.t), className: c.n ? "num" : "" });
+                    }
+                }
+                plan.rows.push(cells);
+            }
+            rowCount += plan.rows.length;
+            return plan;
+        },
+        /** Columns and rows the table has after the plans so far. */
+        get size() {
+            return { columns: columnCount, rows: rowCount };
+        },
+    };
+}
+
+// ---- output selection (P12, D-P12-26) ----------------------------------------
+
+/** The Output dropdown's choices: [value, label], in order. */
+export const OUTPUT_CHOICES = Object.freeze([
+    ["default", "Default"],
+    ["json", "JSON"],
+    ["csv", "CSV"],
+    ["table", "Table (text)"],
+    ["html", "Table (HTML)"],
+]);
+
+/** The JSON dropdown's choices: [value, label], in order. */
+export const JSON_FLAVOR_CHOICES = Object.freeze([
+    ["plain", "Plain"],
+    ["dynamodb", "DynamoDB"],
+]);
+
+/**
+ * Whether the JSON dropdown applies to an output: every format but Default
+ * uses the flavor (JSON for its values; CSV and the tables for nested maps,
+ * lists and sets in a cell).
+ */
+export function jsonFlavorApplies(output) {
+    return output !== "default";
+}
+
+/**
+ * The runStreaming options for the two dropdowns' values, read at submit
+ * (not persisted). An unknown value falls back to the default, so a stale or
+ * tampered <select> never sends the engine an id it rejects. Default sends
+ * no flavor.
+ *
+ * @returns {{output: string, jsonFlavor?: string}}
+ */
+export function outputOptions(output, jsonFlavor) {
+    const out = OUTPUT_CHOICES.some(([v]) => v === output) ? output : "default";
+    if (!jsonFlavorApplies(out)) {
+        return { output: out };
+    }
+    const flavor = JSON_FLAVOR_CHOICES.some(([v]) => v === jsonFlavor) ? jsonFlavor : "plain";
+    return { output: out, jsonFlavor: flavor };
+}
+
+/**
+ * Wrap a runStreaming event callback so it can never throw (P12, D-P12-17).
+ * The callback runs while the engine is on the stack: a JavaScript exception
+ * thrown into the WebAssembly frames unwinds them without running any C++
+ * cleanup, and one thrown after an Asyncify resume leaves the run's promise
+ * unsettled. The guard catches every exception, keeps the first, and never
+ * rethrows; later events are still delivered. The caller reports `error`
+ * after the run ends.
+ *
+ * @param {(event: object) => void} fn  the callback to protect.
+ * @returns {{emit: (event: object) => void, readonly error: unknown}}
+ *          `emit` is what to pass to runStreaming; `error` is the first
+ *          exception (null when there was none).
+ */
+export function guardedEventSink(fn) {
+    let first = null;
+    let failed = false;
+    return {
+        emit(event) {
+            try {
+                fn(event);
+            } catch (e) {
+                if (!failed) {
+                    failed = true;
+                    first = e;
+                }
+            }
+        },
+        get error() {
+            return failed ? first : null;
+        },
+    };
+}
+
+// The message text of an unexpected exception (an Error or anything thrown).
+function errorMessage(e) {
+    return e && e.message ? e.message : String(e);
+}
+
+/**
+ * Run one submission through the engine's streaming entry point and write its
+ * transcript as the output arrives (P12, D-P12-17):
+ *   1. the prompt echo, before the engine runs;
+ *   2. each `text` event, appended through `appender` while the next request
+ *      is in flight;
+ *   3. an `internal error: …` block after the run when the event callback
+ *      threw (guardedEventSink) or runStreaming itself failed.
+ * The event callback touches only `appender` (the DOM in the page), never the
+ * module or the session, which are busy on the stack (D-P6e-2).
+ *
+ * @param {{session: {runStreaming: Function}, prompt: string, text: string,
+ *          appender: ReturnType<typeof createTranscriptAppender>,
+ *          options?: object}} args
+ * @returns {Promise<{ok: boolean, status: number} | null>} the run's status,
+ *          or null when runStreaming threw.
+ */
+export async function streamSubmission({ session, prompt, text, appender, options = {} }) {
+    appender.prompt(prompt, text);
+    const sink = guardedEventSink((ev) => appender.event(ev));
+    let result;
+    try {
+        result = session.runStreaming(text, options, sink.emit);
+        if (result && typeof result.then === "function") {
+            result = await result; // Asyncify surfaces a suspending call as a Promise.
+        }
+    } catch (e) {
+        appender.write("stderr", `internal error: ${errorMessage(e)}\n`);
+        return null;
+    }
+    if (sink.error !== null) {
+        appender.write("stderr", `internal error: ${errorMessage(sink.error)}\n`);
+    }
+    return result ? { ok: result.ok, status: result.status } : null;
+}
+
+// ---- throttling (P12, D-P12-18) ----------------------------------------------
+
+/**
+ * The DynamoDB error codes the browser edition treats as throttling. The same
+ * six codes as the engine's ddbsh::is_throttling_error (src/retry_event.cpp):
+ * the DynamoDB-reachable codes the AWS SDK for C++ classifies as throttling.
+ * Each copy is pinned by its own test; change both together.
+ */
+export const THROTTLING_ERROR_CODES = Object.freeze([
+    "ThrottlingException",
+    "ProvisionedThroughputExceededException",
+    "RequestLimitExceeded",
+    "TooManyRequestsException",
+    "LimitExceededException",
+    "TransactionInProgressException",
+]);
+
+/**
+ * True when `code` names a DynamoDB throttling error. Exact and
+ * case-sensitive; a `com.amazonaws.dynamodb.v20120810#` prefix must already
+ * be removed (as ddbsh::is_throttling_error).
+ *
+ * @param {string} code
+ * @returns {boolean}
+ */
+export function isThrottlingError(code) {
+    return typeof code === "string" && THROTTLING_ERROR_CODES.includes(code);
+}
+
 // ---- short-term credentials (P9, D-P9-3 / D-P9-4) --------------------------
+
 
 const LONG_TERM_KEY = /^AKIA/;
 const SHORT_TERM_KEY = /^ASIA[A-Z0-9]{12,124}$/;
@@ -615,13 +938,35 @@ export function elapsedSeconds(startMs, nowMs) {
 
 /**
  * The busy indicator's visible text while a submission runs (D-P10-16):
- * "running… 0s", "running… 1s", …
+ * "running… 0s", "running… 1s", … While the transport is retrying (P12,
+ * D-P12-19) a suffix names why: "running… 12s · throttled, retrying" or
+ * "running… 12s · retrying". The state is in the text, not only the color
+ * (WCAG 1.4.1).
  *
  * @param {number} seconds  whole seconds elapsed.
+ * @param {"running"|"throttled"|"retrying"} [state]
  * @returns {string}
  */
-export function busyText(seconds) {
-    return `running… ${seconds}s`;
+export function busyText(seconds, state = "running") {
+    const base = `running… ${seconds}s`;
+    if (state === "throttled") {
+        return `${base} · throttled, retrying`;
+    }
+    if (state === "retrying") {
+        return `${base} · retrying`;
+    }
+    return base;
+}
+
+/**
+ * What a screen reader hears when the transport starts retrying (P12,
+ * D-P12-19). Announced at most once per submission.
+ *
+ * @param {"throttled"|"retrying"} state
+ * @returns {string}
+ */
+export function busyRetryAnnouncement(state) {
+    return state === "throttled" ? "DynamoDB is throttling; retrying" : "retrying";
 }
 
 /**
@@ -637,16 +982,28 @@ export function busyFinishedText(seconds) {
 }
 
 /**
- * Create the clock behind the header's busy indicator (D-P10-16). It is
- * DOM-free: the caller supplies the clock, the frame scheduler and two output
- * callbacks, so the start/stop behavior is unit-testable with a fake clock.
+ * Create the clock behind the header's busy indicator (D-P10-16; retry states
+ * P12, D-P12-19). It is DOM-free: the caller supplies the clock, the frame
+ * scheduler and two output callbacks, so the behavior is unit-testable with a
+ * fake clock.
  *
  *   - start(): shows "running… 0s", announces "command started", then checks
  *     the elapsed time on every animation frame and re-renders when the whole
  *     seconds change. A second start() while running changes nothing.
+ *   - setRetrying(kind): the transport is retrying a request. "throttled"
+ *     (DynamoDB throttled it) or "retrying" (any other retryable error) puts
+ *     the indicator in that state; null (the request settled) returns it to
+ *     "running". Re-renders at once when the state changes. The first retry
+ *     state of a submission is announced (busyRetryAnnouncement); later ones
+ *     are not, so a long throttled scan is announced once. Ignored while idle.
  *   - stop(): cancels the pending frame, hides the indicator (render(null))
  *     and announces how long the submission took. stop() while idle changes
- *     nothing.
+ *     nothing. The next start() begins in "running" with the retry
+ *     announcement re-armed.
+ *
+ * The four states (D-P12-19): idle (hidden), running, throttled, retrying.
+ * render(text, state) receives the state as well as the text, so the page can
+ * set a color and, for "throttled", a pulse; the text names the state too.
  *
  * Why animation frames rather than a one-second timer: in headless Chromium
  * 159 a setTimeout due at a whole second sometimes fired about a second late
@@ -660,17 +1017,25 @@ export function busyFinishedText(seconds) {
  * @param {{now: () => number,
  *          requestFrame: (fn: () => void) => unknown,
  *          cancelFrame: (handle: unknown) => void,
- *          render: (text: string | null) => void,
+ *          render: (text: string | null,
+ *                   state: "running"|"throttled"|"retrying"|null) => void,
  *          announce: (text: string) => void}} io
  *        `now` returns milliseconds from a monotonic clock (performance.now
  *        in the page); `requestFrame`/`cancelFrame` are
- *        requestAnimationFrame/cancelAnimationFrame; `render(null)` hides the
- *        indicator.
+ *        requestAnimationFrame/cancelAnimationFrame; `render(null, null)`
+ *        hides the indicator.
  */
 export function createBusyClock({ now, requestFrame, cancelFrame, render, announce }) {
     let startMs = null; // null while idle.
     let shownSeconds = -1; // the seconds on screen; -1 while idle.
+    let state = null; // "running" | "throttled" | "retrying"; null while idle.
+    let retryAnnounced = false; // the submission's one retry announcement was made.
     let frame = null;
+
+    function show(seconds) {
+        shownSeconds = seconds;
+        render(busyText(seconds, state), state);
+    }
 
     function onFrame() {
         frame = null;
@@ -679,8 +1044,7 @@ export function createBusyClock({ now, requestFrame, cancelFrame, render, announ
         }
         const seconds = elapsedSeconds(startMs, now());
         if (seconds !== shownSeconds) {
-            shownSeconds = seconds;
-            render(busyText(seconds));
+            show(seconds);
         }
         frame = requestFrame(onFrame);
     }
@@ -691,16 +1055,46 @@ export function createBusyClock({ now, requestFrame, cancelFrame, render, announ
             return startMs !== null;
         },
 
+        /** The current state: null (idle), "running", "throttled" or "retrying". */
+        get state() {
+            return state;
+        },
+
         /** Show the indicator and start counting; false if already running. */
         start() {
             if (startMs !== null) {
                 return false;
             }
             startMs = now();
-            shownSeconds = 0;
-            render(busyText(0));
+            state = "running";
+            retryAnnounced = false;
+            show(0);
             announce("command started");
             frame = requestFrame(onFrame);
+            return true;
+        },
+
+        /**
+         * Enter the "throttled" or "retrying" state, or return to "running"
+         * (null). Returns false while idle, or for an unknown kind.
+         */
+        setRetrying(kind) {
+            if (startMs === null) {
+                return false;
+            }
+            const next = kind === null || kind === undefined ? "running" : kind;
+            if (next !== "running" && next !== "throttled" && next !== "retrying") {
+                return false;
+            }
+            if (next === state) {
+                return true;
+            }
+            state = next;
+            show(elapsedSeconds(startMs, now()));
+            if (state !== "running" && !retryAnnounced) {
+                retryAnnounced = true;
+                announce(busyRetryAnnouncement(state));
+            }
             return true;
         },
 
@@ -716,7 +1110,8 @@ export function createBusyClock({ now, requestFrame, cancelFrame, render, announ
             const seconds = elapsedSeconds(startMs, now());
             startMs = null;
             shownSeconds = -1;
-            render(null);
+            state = null;
+            render(null, null);
             announce(busyFinishedText(seconds));
             return true;
         },

@@ -105,6 +105,25 @@ error, never silently executed.
 retry strategy, max connections, proxy); ddbsh overlays region/endpoint and its
 own user-agent. A separate `waiter_timeout` bounds the CREATE/DROP waiters.
 
+**Watching retries.** When DynamoDB throttles a request, or a request fails with
+a transient error, the AWS SDK backs off and sends it again; the engine never
+sees those retries. To watch them, register a `ddbsh::RetryObserver`
+(`ddbsh/retry_event.hpp`) with `db->connection().set_retry_observer(&observer)`.
+Its `on_retry(const ddbsh::RetryEvent&)` is called on the requesting thread
+once per retry the SDK has decided to make, before it sleeps. The event carries
+the operation (`"Scan"`), the attempt about to be made (2 for the first retry),
+the SDK's attempt budget, the error code, whether it is a throttle, and the
+delay about to be slept. No event is raised for an error the SDK will not retry
+or for the last attempt. The pointer is borrowed: keep the observer alive until
+you pass `nullptr` or close the connection, and until no `on_retry` call is
+still running. You may clear the observer from another thread while a request
+is retrying (the registration is atomic), but clearing does not wait for an
+`on_retry` call already running on the requesting thread. The registration
+survives `reconnect()` and `CONNECT`. `IDDBClient::set_retry_observer` is the
+same hook for an embedder that owns its client (`AwsDDBClient` and the SDK-free
+`WireClient` follow the same threading rule; a custom client states its own);
+`ddbsh::is_throttling_error(code)` is the throttling-code test the events use.
+
 **Header boundary:** `ddbsh/*.hpp` (including `ddbsh/connection.hpp`) are
 SDK-free (compile with only a C++23 toolchain); `ddbsh/aws/*.hpp` require the
 AWS SDK for C++. Link `ddbsh::ddbsh` for the engine alone, `ddbsh::aws` for the
@@ -156,6 +175,116 @@ built as a default-on CTest (`ddbshlib_features_sample`). See
 > remains public for embedders who need the raw fragment stream or who inject
 > their own backend. Most applications want the `Connection`/`Database` surface
 > above.
+>
+> `Session::execute(stmt, sink)` hands each fragment to `OutcomeSink::emit` as
+> soon as the DynamoDB response that completes it arrives: one per `SELECT`
+> page, per written `INSERT` row, per `SHOW TABLES` row, per `SHOW BACKUPS`
+> page, per `DESCRIBE` or `SHOW LIMITS` response group, per returned item of a
+> bulk `UPDATE`/`DELETE … RETURN VALUES`, and per request group of a bulk
+> `EXPLAIN UPDATE`/`EXPLAIN DELETE` (each page's read request, then that page's
+> write requests). Fragments emitted before a later failure stay emitted; the
+> returned `Error` follows them. After the last fragment, on success or
+> failure, the session calls `OutcomeSink::end_statement()` once (the default
+> does nothing); if the sink's own `emit` throws, the exception propagates and
+> `end_statement()` is not called. A custom
+> `IDDBClient` can override `list_tables_page` so `SHOW TABLES` streams page by
+> page; the default reads the whole list with `list_tables` first. The
+> buffering `Session::execute(stmt)` still returns one outcome per command.
+
+### Streaming output and the output formats
+
+`Session::execute(statement, sink)` is the streaming entry point. It calls
+`sink.emit(fragment)` for each fragment as the DynamoDB response that completes
+it arrives, in output order, then calls `sink.end_statement()` exactly once, on
+success and on failure, and then returns `Result<void>`.
+`Session::run(text, sink)` parses first, then does the same; when the text does
+not parse, it returns the parse `Error` before anything reaches the sink, so
+the sink sees no fragment and no `end_statement()` call for that text.
+Fragments emitted before a failure stay emitted, and the returned `Error` comes
+after them. Some fragments carry no rows: an empty `SELECT` emits one
+`SelectOutcome` with no items (it still carries the `column_hint`), and
+`SHOW TABLES` / `SHOW BACKUPS` emit an empty `ReportOutcome` to mark a page end
+that a `LIKE` filter emptied, or an empty result. The `Renderer` renders those
+as nothing, so a sink that counts fragments as content should expect them.
+
+The `ddbsh::render` format API (`ddbsh/format.hpp`, SDK-free) gives the same
+output formats the CLI's `--output` does (see the
+[output formats reference](reference/output-formats.md)):
+
+- `FormattingSink(FormatOptions, Writer)` is an `OutcomeSink` that formats each
+  fragment as it arrives and passes the bytes to your writer, tagged
+  `Stream::out` or `Stream::err`. `FormatOptions` holds an `OutputFormat`
+  (`standard`, `json`, `csv`, `table`) and a `JsonFlavor` (`plain`,
+  `dynamodb`). `standard` writes exactly what the `Renderer` writes.
+  `set_options()` changes the format between statements.
+- `ResultSetSink` is the base class that owns the one-open-result-set rule:
+  rows open a result set (or continue the open one), text closes it first, and
+  `end_statement()` closes it. Derive from it when you lay out rows yourself
+  (the browser's HTML table does), and implement `on_open`, `on_rows`,
+  `on_close` and `on_text`.
+- `decompose(outcome)` splits one outcome into `TextPart`s (bytes that stay
+  text in every format) and `RowsPart`s (rows plus the columns known before
+  them).
+- `ColumnTracker` keeps one result set's column list: it only appends, and
+  `add()` returns the index of the first column it added.
+- `format_cell(value, flavor)` is the text of one CSV or table cell, and
+  `append_json_value(out, value, flavor)` writes one value as JSON.
+- `render_formatted(outcome, options)` formats one buffered outcome as a whole.
+
+This program writes the rows of a `SELECT` as JSON over the in-memory client:
+
+```cpp
+#include <cstdio>
+#include <string_view>
+
+#include "ddbsh/format.hpp"
+#include "ddbsh/renderer.hpp"
+#include "ddbsh/session.hpp"
+#include "ddbsh/testing/memory_client.hpp"
+
+int main() {
+    ddbsh::testing::MemoryClient client;
+    ddbsh::Session session(ddbsh::SessionConfig{"local", ""}, client);
+
+    // Every piece of output goes to the writer as soon as it is formatted.
+    ddbsh::render::FormattingSink sink(
+        {ddbsh::render::OutputFormat::json, ddbsh::render::JsonFlavor::plain},
+        [](ddbsh::render::Stream stream, std::string_view text) {
+            std::FILE* f = stream == ddbsh::render::Stream::out ? stdout : stderr;
+            std::fwrite(text.data(), 1, text.size(), f);
+        });
+
+    const ddbsh::render::Renderer renderer;  // for the error text
+    for (std::string_view text : {
+             "create table t ( id string ) primary key ( id hash );",
+             "insert into t ( id, v ) values ( \"a\", 1 ), ( \"b\", 2 );",
+             "select * from t;",
+         }) {
+        // run() parses, executes, emits each fragment to the sink, and calls
+        // sink.end_statement() before it returns, so the JSON array is closed
+        // before any execution error is printed. A parse error returns before
+        // the sink sees anything, so there is no array to close.
+        if (auto done = session.run(text, sink); !done) {
+            std::fputs(renderer.render_error(done.error()).c_str(), stderr);
+        }
+    }
+}
+```
+
+It prints:
+
+```
+CREATE
+INSERT
+INSERT
+[
+  {"id": "a", "v": 1},
+  {"id": "b", "v": 2}
+]
+```
+
+A `FormattingSink` is not thread-safe: use one per session and one statement
+at a time.
 
 #### Getting the AWS SDK for C++
 

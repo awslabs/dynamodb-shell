@@ -3,13 +3,15 @@
 //
 // live-smoke.mjs — the browser edition's live UI-path smoke (P9 §4.5).
 //
-// Drives DdbshSession.run (the path the page's editor uses, run_batch) through
-// the same bridge, vendored SDK and credential validation as the page, against
-// REAL DynamoDB: create a `ddbsh_web_smoke_<pid>` table and wait for ACTIVE,
-// insert, a Query-selecting SELECT, UPDATE, a write transaction, EXPLAIN, SHOW
-// CONNECTION, a rejected CONNECT, and DROP (always, in `finally`). The full
-// golden corpus is devtools/run-web-golden's job; this proves the UI entry point
-// and its ordered segments.
+// Drives DdbshSession.run and runStreaming (the page's editor path, P12; both
+// run_batch) through the same bridge, vendored SDK and credential validation as
+// the page, against REAL DynamoDB: create a `ddbsh_web_smoke_<pid>` table and
+// wait for ACTIVE, insert, a Query-selecting SELECT (also through
+// runStreaming, and in the html and json outputs), UPDATE, a write
+// transaction, EXPLAIN, SHOW CONNECTION, a rejected CONNECT, and DROP
+// (always, in `finally`). The full golden corpus is
+// devtools/run-web-golden's job; this proves the UI entry points and their
+// ordered output.
 //
 // Env: DDBSH_WEB_CREDS_FILE (minted by devtools/run-web-smoke; the `default`
 // entry is used), AWS_REGION (default us-east-1). Needs Node >= 20.
@@ -68,6 +70,55 @@ try {
 
     r = await run(`select * from ${table} where pk = 1;`);
     check(r.ok && r.stdout === "{pk: 1, rk: 1, v: a}\n{pk: 1, rk: 2, v: b}\n", "Query-selecting SELECT", show(r));
+
+    {
+        // The page's path (P12, D-P12-17): the same text as run(), as events.
+        const evs = [];
+        let s = session.runStreaming(`select * from ${table} where pk = 1; select * from no_such_table_${process.pid};`,
+            {}, (ev) => evs.push(ev));
+        if (s && typeof s.then === "function") {
+            s = await s;
+        }
+        const streams = evs.map((e) => e.stream).join(",");
+        const out = evs.filter((e) => e.stream === "stdout").map((e) => e.text).join("");
+        check(s.status === 1 && streams === "stdout,stderr" &&
+            out === "{pk: 1, rk: 1, v: a}\n{pk: 1, rk: 2, v: b}\n" && evs[1].text.includes("no_such_table"),
+            "runStreaming delivers the rows, then the error, as events", JSON.stringify({ s, evs }));
+    }
+
+    {
+        // Output formats through the page's path (P12 S5, D-P12-25).
+        const streamOf = async (text, options) => {
+            const evs = [];
+            let s = session.runStreaming(text, options, (ev) => evs.push(ev));
+            if (s && typeof s.then === "function") {
+                s = await s;
+            }
+            return { s, evs };
+        };
+        const scriptOf = async (text, options) => {
+            let s = session.runScript(text, false, options);
+            if (s && typeof s.then === "function") {
+                s = await s;
+            }
+            return s;
+        };
+        const q = `select * from ${table} where pk = 1;`;
+        const html = await streamOf(q, { output: "html" });
+        check(html.s.status === 0 && html.evs.map((e) => e.type).join(",") === "rows,end" &&
+            JSON.stringify(html.evs[0].columns) === JSON.stringify(["pk", "rk", "v"]) &&
+            JSON.stringify(html.evs[0].rows.map((r) => r.map((c) => c.t))) ===
+                JSON.stringify([["1", "1", "a"], ["1", "2", "b"]]) &&
+            html.evs[0].rows[0][0].n === true && html.evs[0].rows[0][2].n === false,
+        "runStreaming html: one rows event (key columns first, numbers flagged), then end",
+        JSON.stringify(html));
+        const json = await streamOf(q, { output: "json", jsonFlavor: "dynamodb" });
+        const script = await scriptOf(q, { output: "json", jsonFlavor: "dynamodb" });
+        const streamed = json.evs.map((e) => e.text).join("");
+        check(json.s.status === 0 && json.evs.every((e) => e.type === "text" && e.stream === "stdout") &&
+            streamed === script.stdout && streamed.startsWith('[\n  {"pk": {"N": "1"}'),
+        "runStreaming json events equal runScript's bytes", JSON.stringify({ streamed, script: script.stdout }));
+    }
 
     r = await run(`explain select * from ${table} where pk = 1;`);
     check(r.ok && r.stdout.startsWith("Query({") && r.stdout.includes(`"TableName":   "${table}"`),

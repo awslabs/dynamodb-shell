@@ -1,0 +1,21 @@
+[
+  {"a": "hello"}
+]
+The conditional request failed
+[
+  {"b": 42}
+]
+SELECT (ddbsh_fmt, 0.5, 0, 0)
+GetItem({
+   "TableName":   "ddbsh_fmt",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "rk":   {
+         "N":   "1"
+      }
+   },
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE"
+})

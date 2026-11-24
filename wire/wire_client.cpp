@@ -96,11 +96,31 @@ Result<std::string> WireClient::send_retrying(std::string_view operation, std::s
             // string the one-shot path would have (§4.1, fidelity).
             return resp;
         }
-        retry_backoff(attempt);  // sleep, then re-send
+        // The retry is decided: compute the backoff, tell the observer (P12,
+        // D-P12-18) with the delay about to be slept, then sleep and re-send.
+        const std::chrono::milliseconds delay = retry_delay(attempt);
+        // One load: a clear on another thread between a check and the call
+        // must not turn into a null call.
+        if (RetryObserver* const observer = retry_observer_.ptr.load(); observer != nullptr) {
+            RetryEvent event;
+            event.operation = std::string(operation);
+            event.attempt = static_cast<int>(attempt) + 2;  // the send about to happen
+            event.max_attempts = static_cast<int>(max_retry_attempts_);
+            event.error_code = *name;
+            event.throttled = is_throttling_error(*name);
+            event.delay = delay;
+            try {
+                observer->on_retry(event);
+            } catch (...) {
+                // A notification only (retry_event.hpp): an observer's
+                // exception must not abandon a retry already decided on.
+            }
+        }
+        backoff_sleep(delay);
     }
 }
 
-void WireClient::retry_backoff(unsigned attempt) {
+std::chrono::milliseconds WireClient::retry_delay(unsigned attempt) {
     // Full jitter over an exponentially growing, capped ceiling (§4.5): base
     // 50ms, doubling per attempt, capped at 1000ms; actual sleep is a uniform
     // draw in [0, ceiling]. Full jitter de-synchronizes a burst (e.g. the
@@ -115,7 +135,11 @@ void WireClient::retry_backoff(unsigned attempt) {
         ceiling = std::min(scaled, kCapMs);
     }
     const auto sleep_ms = static_cast<long long>(jitter_unit() * static_cast<double>(ceiling));
-    backoff_sleep(std::chrono::milliseconds{sleep_ms});
+    return std::chrono::milliseconds{sleep_ms};
+}
+
+void WireClient::set_retry_observer(RetryObserver* observer) {
+    retry_observer_.ptr.store(observer);
 }
 
 template <class Out>
@@ -289,26 +313,43 @@ Result<DeleteTableOut> WireClient::delete_table(const DeleteTableIn& in) {
 
 Result<ListTablesOut> WireClient::list_tables(const ListTablesIn&) {
     // Page internally on LastEvaluatedTableName so the caller gets the complete
-    // list, exactly as the AWS adapter's list_tables loop (ListTablesIn carries
-    // no cursor field, so the cursor is threaded through serialize_list_tables).
+    // list, exactly as the AWS adapter's list_tables loop does, one
+    // list_tables_page request at a time.
     ListTablesOut out;
-    std::optional<std::string> cursor;  // nullopt => first page
+    ListTablesPageIn page_in;  // no cursor => first page
     do {
-        const WireRequest req = serialize_list_tables(cursor);
-        auto body = send_retrying(req.operation, req.body);
-        if (!body) {
-            return fail(body.error());
-        }
-        auto page = parse_list_tables(*body);
+        auto page = list_tables_page(page_in);
         if (!page) {
             return fail(page.error());
         }
         for (auto& name : page->table_names) {
             out.table_names.push_back(std::move(name));
         }
-        cursor = page->last_evaluated_table_name;
-    } while (cursor.has_value());
+        page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
+    } while (page_in.exclusive_start_table_name.has_value());
     return out;
+}
+
+Result<ListTablesPageOut> WireClient::list_tables_page(const ListTablesPageIn& in) {
+    // One ListTables round trip (P12, D-P12-12); the cursor is threaded through
+    // serialize_list_tables, so the wire body is the one list_tables sends. An
+    // empty cursor means the first page (see ListTablesPageIn), as in
+    // AwsDDBClient, so it is not sent as an ExclusiveStartTableName.
+    std::optional<std::string> cursor = in.exclusive_start_table_name;
+    if (cursor.has_value() && cursor->empty()) {
+        cursor.reset();
+    }
+    const WireRequest req = serialize_list_tables(cursor);
+    auto body = send_retrying(req.operation, req.body);
+    if (!body) {
+        return fail(body.error());
+    }
+    auto page = parse_list_tables(*body);
+    if (!page) {
+        return fail(page.error());
+    }
+    return ListTablesPageOut{std::move(page->table_names),
+                             std::move(page->last_evaluated_table_name)};
 }
 
 Result<DescribeTableOut> WireClient::describe_table(const DescribeTableIn& in) {

@@ -16,6 +16,8 @@
 #include "ddbsh/aws/aws_ddb_client.hpp"
 #include "ddbsh/version.hpp"
 
+#include "retry_observer_strategy.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -570,7 +572,8 @@ Aws::DynamoDB::Model::TransactWriteItemsRequest build_transact_write_items(
 
 }  // namespace
 
-AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint) {
+AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoint)
+    : retry_slot_(std::make_shared<detail::RetryObserverSlot>()) {
     rebuild(region, endpoint);
 }
 
@@ -578,11 +581,18 @@ AwsDDBClient::AwsDDBClient(const std::string& region, const std::string& endpoin
                            const Aws::Client::ClientConfiguration& base_config,
                            std::optional<std::chrono::milliseconds> waiter_timeout,
                            const std::string& profile)
-    : base_config_(base_config), waiter_timeout_(waiter_timeout), profile_(profile) {
+    : base_config_(base_config),
+      waiter_timeout_(waiter_timeout),
+      profile_(profile),
+      retry_slot_(std::make_shared<detail::RetryObserverSlot>()) {
     rebuild(region, endpoint);
 }
 
 AwsDDBClient::~AwsDDBClient() = default;
+
+void AwsDDBClient::set_retry_observer(ddbsh::RetryObserver* observer) {
+    retry_slot_->observer.store(observer, std::memory_order_release);
+}
 
 void AwsDDBClient::rebuild(const std::string& region, const std::string& endpoint) {
     // Start from the caller's base configuration when supplied (R-P4d-3:
@@ -590,6 +600,22 @@ void AwsDDBClient::rebuild(const std::string& region, const std::string& endpoin
     // exactly as before.
     Aws::Client::ClientConfiguration cfg =
         base_config_.value_or(Aws::Client::ClientConfiguration{});
+    // Wrap the retry strategy the SDK would have used in the observing
+    // decorator (P12, D-P12-18): the caller's retryStrategy when set, else the
+    // one the DynamoDB client builds from its own factory. That factory is
+    // DynamoDB-specific (DynamoDBClientConfiguration::LoadDynamoDBSpecificConfig
+    // replaces the core default), so it is read from a DynamoDBClientConfiguration
+    // built off the same cfg, exactly as the DynamoDBClient constructor builds
+    // one. Every decision is delegated, so retry behavior is unchanged; the
+    // decorator only reports. base_config_ itself is untouched, so each rebuild
+    // wraps the caller's strategy once, never a previous decorator.
+    std::shared_ptr<Aws::Client::RetryStrategy> inner = cfg.retryStrategy;
+    if (!inner) {
+        Aws::DynamoDB::DynamoDBClientConfiguration ddb_cfg(cfg);
+        inner = ddb_cfg.configFactories.retryStrategyCreateFn();
+    }
+    cfg.retryStrategy =
+        std::make_shared<detail::ObservingRetryStrategy>(std::move(inner), retry_slot_);
     // Overlay region/endpoint (non-empty wins), then ALWAYS the ddbsh
     // user-agent last (D25), so the service sees "ddbsh - version X.Y[.Z]"
     // regardless of the caller's config.
@@ -625,6 +651,7 @@ Result<void> AwsDDBClient::connect(const std::string& region, const std::string&
 Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
     auto request = build_get_item(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->GetItem(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -642,6 +669,7 @@ Result<GetItemOut> AwsDDBClient::get_item(const GetItemIn& in) {
 Result<QueryOut> AwsDDBClient::query(const QueryIn& in) {
     auto request = build_query(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->Query(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -662,6 +690,7 @@ Result<QueryOut> AwsDDBClient::query(const QueryIn& in) {
 Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
     auto request = build_scan(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->Scan(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -682,6 +711,7 @@ Result<ScanOut> AwsDDBClient::scan(const ScanIn& in) {
 Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn& in) {
     auto request = build_put_item(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->PutItem(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -699,6 +729,7 @@ Result<PutItemOut> AwsDDBClient::put_item(const PutItemIn& in) {
 Result<UpdateItemOut> AwsDDBClient::update_item(const UpdateItemIn& in) {
     auto request = build_update_item(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->UpdateItem(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -716,6 +747,7 @@ Result<UpdateItemOut> AwsDDBClient::update_item(const UpdateItemIn& in) {
 Result<DeleteItemOut> AwsDDBClient::delete_item(const DeleteItemIn& in) {
     auto request = build_delete_item(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DeleteItem(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -748,6 +780,7 @@ Error transact_failed_error(const Aws::Client::AWSError<Aws::DynamoDB::DynamoDBE
 
 Result<TransactGetItemsOut> AwsDDBClient::transact_get_items(const TransactGetItemsIn& in) {
     auto request = build_transact_get_items(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->TransactGetItems(request);
     if (!outcome.IsSuccess()) {
         return fail(transact_failed_error(outcome.GetError()));
@@ -766,6 +799,7 @@ Result<TransactGetItemsOut> AwsDDBClient::transact_get_items(const TransactGetIt
 
 Result<TransactWriteItemsOut> AwsDDBClient::transact_write_items(const TransactWriteItemsIn& in) {
     auto request = build_transact_write_items(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->TransactWriteItems(request);
     if (!outcome.IsSuccess()) {
         return fail(transact_failed_error(outcome.GetError()));
@@ -1400,6 +1434,7 @@ Aws::DynamoDB::Model::ListBackupsRequest build_list_backups(const ListBackupsIn&
 Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
     auto request = build_create_table(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->CreateTable(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1413,6 +1448,7 @@ Result<CreateTableOut> AwsDDBClient::create_table(const CreateTableIn& in) {
 Result<SearchVectorsOut> AwsDDBClient::search_vectors(const SearchVectorsIn& in) {
     auto request = build_search_vectors(in);
 
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->SearchVectors(request);
     if (!outcome.IsSuccess()) {
         return fail(from_sdk_error(outcome.GetError()));
@@ -1437,6 +1473,7 @@ Result<SearchVectorsOut> AwsDDBClient::search_vectors(const SearchVectorsIn& in)
 
 Result<UpdateTableOut> AwsDDBClient::update_table(const UpdateTableIn& in) {
     auto request = build_update_table(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->UpdateTable(request);
     if (!outcome.IsSuccess()) {
         // Compose the byte-exact message the original logged on an UpdateTable
@@ -1456,6 +1493,7 @@ Result<UpdateTableOut> AwsDDBClient::update_table(const UpdateTableIn& in) {
 
 Result<UpdateTimeToLiveOut> AwsDDBClient::update_time_to_live(const UpdateTimeToLiveIn& in) {
     auto request = build_update_time_to_live(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->UpdateTimeToLive(request);
     if (!outcome.IsSuccess()) {
         // Compose the byte-exact message the original logged on an
@@ -1476,6 +1514,7 @@ Result<UpdateTimeToLiveOut> AwsDDBClient::update_time_to_live(const UpdateTimeTo
 Result<UpdateContinuousBackupsOut> AwsDDBClient::update_continuous_backups(
     const UpdateContinuousBackupsIn& in) {
     auto request = build_update_continuous_backups(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->UpdateContinuousBackups(request);
     if (!outcome.IsSuccess()) {
         // Compose the byte-exact message the original logged on an
@@ -1498,6 +1537,7 @@ Result<UpdateContinuousBackupsOut> AwsDDBClient::update_continuous_backups(
 
 Result<CreateBackupOut> AwsDDBClient::create_backup(const CreateBackupIn& in) {
     auto request = build_create_backup(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->CreateBackup(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1510,6 +1550,7 @@ Result<CreateBackupOut> AwsDDBClient::create_backup(const CreateBackupIn& in) {
 
 Result<DeleteBackupOut> AwsDDBClient::delete_backup(const DeleteBackupIn& in) {
     auto request = build_delete_backup(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DeleteBackup(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1522,6 +1563,7 @@ Result<DeleteBackupOut> AwsDDBClient::delete_backup(const DeleteBackupIn& in) {
 
 Result<DescribeBackupOut> AwsDDBClient::describe_backup(const DescribeBackupIn& in) {
     auto request = build_describe_backup(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DescribeBackup(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1572,6 +1614,7 @@ Result<DescribeBackupOut> AwsDDBClient::describe_backup(const DescribeBackupIn& 
 Result<RestoreFromBackupOut> AwsDDBClient::restore_table_from_backup(
     const RestoreFromBackupIn& in) {
     auto request = build_restore_from_backup(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->RestoreTableFromBackup(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1590,6 +1633,7 @@ Result<RestoreToPitrOut> AwsDDBClient::restore_table_to_point_in_time(const Rest
         // as an Error (D-2f-4); the library never aborts on user input (D12).
         return fail(Errc::invalid_argument, "Invalid restore timestamp: " + in.restore_datetime);
     }
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->RestoreTableToPointInTime(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1602,6 +1646,7 @@ Result<RestoreToPitrOut> AwsDDBClient::restore_table_to_point_in_time(const Rest
 
 Result<DescribeLimitsOut> AwsDDBClient::describe_limits(const DescribeLimitsIn& in) {
     auto request = build_describe_limits(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DescribeLimits(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1620,6 +1665,7 @@ Result<DescribeLimitsOut> AwsDDBClient::describe_limits(const DescribeLimitsIn& 
 
 Result<ListBackupsOut> AwsDDBClient::list_backups(const ListBackupsIn& in) {
     auto request = build_list_backups(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->ListBackups(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1647,6 +1693,7 @@ Result<ListBackupsOut> AwsDDBClient::list_backups(const ListBackupsIn& in) {
 
 Result<DeleteTableOut> AwsDDBClient::delete_table(const DeleteTableIn& in) {
     auto request = build_delete_table(in);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DeleteTable(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1661,25 +1708,44 @@ Result<ListTablesOut> AwsDDBClient::list_tables(const ListTablesIn&) {
     // Follow LastEvaluatedTableName so the caller gets the complete list even
     // when the account has more tables than one page returns.
     ListTablesOut out;
-    Aws::String start_table;
+    ListTablesPageIn page_in;
     do {
-        Aws::DynamoDB::Model::ListTablesRequest request;
-        if (!start_table.empty()) {
-            request.SetExclusiveStartTableName(start_table);
+        auto page = list_tables_page(page_in);
+        if (!page.has_value()) {
+            return fail(page.error());
         }
-        auto outcome = client_->ListTables(request);
-        if (!outcome.IsSuccess()) {
-            const auto& err = outcome.GetError();
-            return fail(Error{Errc::service_error, err.GetMessage().c_str(),
-                              std::string(err.GetExceptionName().c_str()),
-                              std::string(err.GetRequestId().c_str())});
+        for (auto& name : page->table_names) {
+            out.table_names.push_back(std::move(name));
         }
-        const auto& result = outcome.GetResult();
-        for (const auto& name : result.GetTableNames()) {
-            out.table_names.emplace_back(name.c_str());
-        }
-        start_table = result.GetLastEvaluatedTableName();
-    } while (!start_table.empty());
+        page_in.exclusive_start_table_name = std::move(page->last_evaluated_table_name);
+    } while (page_in.exclusive_start_table_name.has_value());
+    return out;
+}
+
+Result<ListTablesPageOut> AwsDDBClient::list_tables_page(const ListTablesPageIn& in) {
+    // One ListTables request (P12, D-P12-12). No Limit: the service default
+    // page (100 names) is what the original show_tables.cpp asked for. An
+    // empty cursor means the first page (see ListTablesPageIn).
+    Aws::DynamoDB::Model::ListTablesRequest request;
+    if (in.exclusive_start_table_name.has_value() && !in.exclusive_start_table_name->empty()) {
+        request.SetExclusiveStartTableName(in.exclusive_start_table_name->c_str());
+    }
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
+    auto outcome = client_->ListTables(request);
+    if (!outcome.IsSuccess()) {
+        const auto& err = outcome.GetError();
+        return fail(Error{Errc::service_error, err.GetMessage().c_str(),
+                          std::string(err.GetExceptionName().c_str()),
+                          std::string(err.GetRequestId().c_str())});
+    }
+    const auto& result = outcome.GetResult();
+    ListTablesPageOut out;
+    for (const auto& name : result.GetTableNames()) {
+        out.table_names.emplace_back(name.c_str());
+    }
+    if (!result.GetLastEvaluatedTableName().empty()) {
+        out.last_evaluated_table_name = std::string(result.GetLastEvaluatedTableName().c_str());
+    }
     return out;
 }
 
@@ -1813,6 +1879,7 @@ VectorIndexSchema load_vector_index_detail(const Aws::DynamoDB::Model::VectorInd
 Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in) {
     Aws::DynamoDB::Model::DescribeTableRequest request;
     request.SetTableName(in.table_name);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DescribeTable(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1904,6 +1971,7 @@ Result<DescribeTableOut> AwsDDBClient::describe_table(const DescribeTableIn& in)
 Result<TimeToLiveOut> AwsDDBClient::describe_time_to_live(const DescribeTimeToLiveIn& in) {
     Aws::DynamoDB::Model::DescribeTimeToLiveRequest request;
     request.SetTableName(in.table_name);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DescribeTimeToLive(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1924,6 +1992,7 @@ Result<ContinuousBackupsOut> AwsDDBClient::describe_continuous_backups(
     const DescribeContinuousBackupsIn& in) {
     Aws::DynamoDB::Model::DescribeContinuousBackupsRequest request;
     request.SetTableName(in.table_name);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DescribeContinuousBackups(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1954,6 +2023,7 @@ Result<TableReplicaAutoScalingOut> AwsDDBClient::describe_table_replica_auto_sca
     const DescribeTableReplicaAutoScalingIn& in) {
     Aws::DynamoDB::Model::DescribeTableReplicaAutoScalingRequest request;
     request.SetTableName(in.table_name);
+    const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
     auto outcome = client_->DescribeTableReplicaAutoScaling(request);
     if (!outcome.IsSuccess()) {
         const auto& err = outcome.GetError();
@@ -1985,6 +2055,7 @@ Result<void> AwsDDBClient::wait_for_table_gone(const std::string& table_name) {
     while (true) {
         Aws::DynamoDB::Model::DescribeTableRequest request;
         request.SetTableName(table_name);
+        const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
         auto outcome = client_->DescribeTable(request);
         if (!outcome.IsSuccess()) {
             const auto& err = outcome.GetError();
@@ -2026,6 +2097,7 @@ Result<void> AwsDDBClient::wait_for_table_active(const std::string& table_name) 
     while (true) {
         Aws::DynamoDB::Model::DescribeTableRequest request;
         request.SetTableName(table_name);
+        const detail::RetryOperationScope retry_scope(request.GetServiceRequestName());
         auto outcome = client_->DescribeTable(request);
         if (outcome.IsSuccess()) {
             const Status status = outcome.GetResult().GetTable().GetTableStatus();

@@ -1,0 +1,3 @@
+unknown output format: xml (expected default, json, csv, table)
+unknown JSON flavor: typed (expected plain, dynamodb)
+{a: hello}

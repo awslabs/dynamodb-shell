@@ -56,10 +56,12 @@ function stub(script) {
     const handler = {
         async handle(request) {
             calls.push({
+                sentAt: Date.now(),
                 hostname: request.hostname,
                 target: request.headers["x-amz-target"],
                 auth: request.headers["authorization"] || "",
                 token: request.headers["x-amz-security-token"] || "",
+                userAgent: request.headers["x-amz-user-agent"] || request.headers["user-agent"] || "",
                 body: request.body,
             });
             const next = script.length > 1 ? script.shift() : script[0];
@@ -146,9 +148,262 @@ console.log("send: retry");
     const ok = '{"Table":{"TableName":"t"}}';
     const { bridge, calls } = bridgeWith([{ status: 400, body: thr }, { status: 400, body: thr },
         { status: 200, body: ok }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push({ ...e, at: calls.length }));
     bridge.setCredentials(CREDS);
     eq(await bridge.send("DescribeTable", '{"TableName":"t"}'), ok, "final body after throttling retries");
     eq(calls.length, 3, "three attempts (two throttled, one success)");
+    eq(events.map((e) => e.type), ["retry", "retry", "settled"], "two retry events, then settled");
+    eq(events.slice(0, 2).map((e) => [e.operation, e.attempt, e.maxAttempts, e.errorCode, e.throttled]),
+        [["DescribeTable", 2, 11, "ThrottlingException", true],
+            ["DescribeTable", 3, 11, "ThrottlingException", true]],
+        "retry events: operation, attempt about to be made, budget, error code, throttled");
+    eq(events.map((e) => e.at), [1, 2, 3], "each retry event is raised before its attempt is sent");
+    check(events.slice(0, 2).every((e) => Number.isInteger(e.delayMs) && e.delayMs >= 0),
+        "retry events carry the backoff delay in ms");
+}
+
+// Run fn with Math.random pinned, so the SDK's jittered backoff
+// (floor(random * min(base * 2^retryCount, 20000)); in SDK 3.1174.0 the base is
+// 1000 ms when throttled, else the DynamoDB client's defaultBaseDelay, 25 ms)
+// is known.
+async function withRandom(value, fn) {
+    const saved = Math.random;
+    Math.random = () => value;
+    try {
+        return await fn();
+    } finally {
+        Math.random = saved;
+    }
+}
+// The browser's fetch failure, which the SDK classifies as transient (a
+// network error with no HTTP response).
+const fetchFailure = () => new TypeError("Failed to fetch");
+// How far an event may lag the failed attempt, in ms (timer and event-loop
+// slack; generous for slow CI runners: the regression it catches measured
+// 901 ms, P12 review N12).
+const TOLERANCE_MS = 300;
+// How far a timer may fire before its delay, in ms. A lower bound ("attempt 2
+// goes out the backoff after the event") uses this, not TOLERANCE_MS, so it
+// stays meaningful for short delays such as the 22 ms 500 backoff (N12).
+const EARLY_MS = 5;
+
+// ---- retry events (P12, D-P12-18) -------------------------------------------
+console.log("send: retry events");
+await withRandom(0.9, async () => {
+    // A 400 throttle, then a 200: one retry event, raised before the SDK
+    // sleeps the 900 ms throttled backoff (0.9 x 1000), then settled.
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ProvisionedThroughputExceededException","message":"x"}';
+    const { bridge, calls } = bridgeWith([{ status: 400, body: thr }, { status: 200, body: '{"Items":[]}' }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push({ ...e, at: calls.length, raisedAt: Date.now() }));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("Scan", '{"TableName":"t"}'), '{"Items":[]}', "Scan succeeds after one throttle");
+    eq(events.map((e) => e.type), ["retry", "settled"], "one retry event, then settled");
+    eq([events[0].operation, events[0].attempt, events[0].errorCode, events[0].throttled, events[0].at],
+        ["Scan", 2, "ProvisionedThroughputExceededException", true, 1],
+        "the retry event names Scan, attempt 2, the throttling code, before attempt 2");
+    eq(events[0].delayMs, 900, "the event carries the throttled backoff the SDK sleeps (0.9 x 1000 ms)");
+    const lag = events[0].raisedAt - calls[0].sentAt;
+    check(lag <= TOLERANCE_MS, `the event is raised promptly after the throttled response (${lag} ms)`);
+    const wait = calls[1].sentAt - events[0].raisedAt;
+    check(wait >= events[0].delayMs - EARLY_MS,
+        `attempt 2 goes out the backoff after the event, so the event precedes the sleep (${wait} ms)`);
+});
+await withRandom(0.9, async () => {
+    // A 500: the DynamoDB client's non-throttling base delay, 25 ms, gives 22 ms.
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#InternalServerError","message":"oops"}';
+    const { bridge, calls } = bridgeWith([{ status: 500, body: err }, { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push({ ...e, raisedAt: Date.now() }));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after a 500 (pinned backoff)");
+    eq([events[0].type, events[0].delayMs], ["retry", 22], "a 500 retry carries the base backoff (0.9 x 25 ms)");
+    check(calls[1].sentAt - events[0].raisedAt >= events[0].delayMs - EARLY_MS,
+        "attempt 2 after a 500 goes out the backoff after the event");
+});
+await withRandom(0.9, async () => {
+    // Two throttles: the second backoff doubles (0.9 x 2000 = 1800 ms).
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    const { bridge } = bridgeWith([{ status: 400, body: thr }, { status: 400, body: thr },
+        { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after two throttles (pinned backoff)");
+    eq(events.filter((e) => e.type === "retry").map((e) => [e.attempt, e.delayMs]), [[2, 900], [3, 1800]],
+        "each retry carries its own backoff: 900 ms, then 1800 ms");
+});
+await withRandom(0.9, async () => {
+    // No HTTP response, then a 200: a retry event with errorCode "" (R-S3-2).
+    const { bridge, calls } = bridgeWith([fetchFailure(), { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after a network failure");
+    eq(calls.length, 2, "the network failure was retried");
+    eq(events.map((e) => [e.type, e.operation, e.attempt, e.errorCode, e.throttled]),
+        [["retry", "ListTables", 2, "", false], ["settled", undefined, undefined, undefined, undefined]],
+        "a retry after no HTTP response has errorCode \"\" and is not throttled");
+});
+await withRandom(0.9, async () => {
+    // A throttle, then no HTTP response, then a 200: the second event's code is
+    // "", so the first attempt's body does not leak into it (the per-attempt
+    // reset in addRawBodyMiddleware; R-S3-2).
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    const { bridge } = bridgeWith([{ status: 400, body: thr }, fetchFailure(),
+        { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after a throttle and a network failure");
+    eq(events.filter((e) => e.type === "retry").map((e) => [e.attempt, e.errorCode, e.throttled]),
+        [[2, "ThrottlingException", true], [3, "", false]],
+        "the retry after the network failure does not report the earlier throttle");
+});
+{
+    // Fallback: a strategy with no retryBackoffStrategy to hook. Two shapes.
+    // (a) It sleeps inside refreshRetryTokenForRetry and records the delay in
+    //     $retryLog (as SDK 3.1174.0 does): the event follows the sleep and
+    //     carries the recorded delay.
+    // (b) It returns the delay in getRetryDelay() and lets the middleware sleep
+    //     it (older smithy): the event precedes the sleep with that delay.
+    const token = (count, delay, logged) => ({
+        getRetryCount: () => count,
+        getRetryDelay: () => delay,
+        getRetryCost: () => 1,
+        isLongPoll: () => false,
+        ...(logged === undefined ? {} : { $retryLog: { acquisitionDelay: logged } }),
+    });
+    const strategy = (sleepsItself) => ({
+        mode: "standard",
+        async acquireInitialRetryToken() {
+            return token(0, 0);
+        },
+        async refreshRetryTokenForRetry(t) {
+            if (sleepsItself) {
+                await new Promise((r) => setTimeout(r, 120));
+                return token(t.getRetryCount() + 1, 0, 120);
+            }
+            return token(t.getRetryCount() + 1, 130);
+        },
+        recordSuccess() {},
+    });
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    for (const [sleepsItself, label] of [[true, "sleeps itself"], [false, "middleware sleeps"]]) {
+        const s = stub([{ status: 400, body: thr }, { status: 200, body: "{}" }]);
+        const fb = createSdkBridge({ sdk, allowedHosts: ALLOWED_HOSTS, regions: REGIONS, sdkVersion: SDK_VERSION,
+            clientConfig: { requestHandler: s.handler, retryStrategy: strategy(sleepsItself) } });
+        const events = [];
+        fb.onRetryEvent((e) => events.push({ ...e, raisedAt: Date.now() }));
+        fb.setCredentials(CREDS);
+        eq(await fb.send("ListTables", "{}"), "{}", `fallback (${label}): the send succeeds`);
+        eq(events.map((e) => [e.type, e.attempt, e.errorCode, e.throttled]),
+            [["retry", 2, "ThrottlingException", true], ["settled", undefined, undefined, undefined]],
+            `fallback (${label}): one retry event, then settled`);
+        if (sleepsItself) {
+            eq(events[0].delayMs, 120, "fallback (sleeps itself): the delay is $retryLog.acquisitionDelay");
+            check(events[0].raisedAt - s.calls[0].sentAt >= 120 - EARLY_MS,
+                "fallback (sleeps itself): the event follows the strategy's sleep");
+        } else {
+            eq(events[0].delayMs, 130, "fallback (middleware sleeps): the delay is getRetryDelay()");
+            check(s.calls[1].sentAt - events[0].raisedAt >= 130 - EARLY_MS,
+                "fallback (middleware sleeps): the middleware sleeps the delay after the event");
+        }
+    }
+}
+{
+    // A non-retryable error: no retry event, only settled.
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#ResourceNotFoundException","message":"nope"}';
+    const { bridge, calls } = bridgeWith([{ status: 400, body: err }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e.type));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("DescribeTable", '{"TableName":"nope"}'), err, "non-retryable error body returned");
+    eq(calls.length, 1, "one attempt");
+    eq(events, ["settled"], "no retry event for a non-retryable error");
+}
+{
+    // A retryable server error that is not throttling: throttled is false.
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#InternalServerError","message":"oops"}';
+    const { bridge } = bridgeWith([{ status: 500, body: err }, { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after a 500");
+    eq(events.map((e) => [e.type, e.errorCode, e.throttled]),
+        [["retry", "InternalServerError", false], ["settled", undefined, undefined]],
+        "a 500 retry is reported as retrying, not throttled");
+}
+{
+    // A code outside isThrottlingError's list that the SDK itself classifies
+    // as throttling still counts (errorType THROTTLING), as the C++ decorator
+    // honors ShouldThrottle().
+    const err = '{"__type":"com.amazonaws.dynamodb.v20120810#RequestThrottled","message":"x"}';
+    const { bridge } = bridgeWith([{ status: 400, body: err }, { status: 200, body: "{}" }]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "success after an SDK-classified throttle");
+    eq([events[0].type, events[0].errorCode, events[0].throttled], ["retry", "RequestThrottled", true],
+        "the SDK's own throttling classification sets throttled");
+}
+{
+    // The budget runs out: no event for the last attempt, after which the SDK
+    // gives up. maxAttempts 2 keeps the test short.
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    const s = stub([{ status: 400, body: thr }]);
+    const short = createSdkBridge({ sdk, allowedHosts: ALLOWED_HOSTS, regions: REGIONS,
+        sdkVersion: SDK_VERSION, clientConfig: { requestHandler: s.handler, maxAttempts: 2 } });
+    const events = [];
+    short.onRetryEvent((e) => events.push([e.type, e.attempt, e.maxAttempts]));
+    short.setCredentials(CREDS);
+    eq(await short.send("Query", "{}"), thr, "the last throttling body is returned when the budget runs out");
+    eq(s.calls.length, 2, "two attempts (maxAttempts 2)");
+    eq(events, [["retry", 2, 2], ["settled", undefined, undefined]],
+        "one retry event for attempt 2 of 2; none after the last attempt");
+}
+{
+    // A listener that throws breaks neither the send nor the retry.
+    const thr = '{"__type":"com.amazonaws.dynamodb.v20120810#ThrottlingException","message":"x"}';
+    const { bridge, calls } = bridgeWith([{ status: 400, body: thr }, { status: 200, body: "{}" }]);
+    const seen = [];
+    bridge.onRetryEvent(() => {
+        throw new Error("listener bug");
+    });
+    bridge.onRetryEvent((e) => seen.push(e.type));
+    bridge.setCredentials(CREDS);
+    eq(await bridge.send("ListTables", "{}"), "{}", "send succeeds although a listener throws");
+    eq(calls.length, 2, "the retry still happened");
+    eq(seen, ["retry", "settled"], "later listeners still receive every event");
+}
+{
+    // No HTTP response: a refusal before the SDK runs raises nothing; a
+    // transport failure settles.
+    const { bridge } = bridgeWith([new Error("network down")]);
+    const events = [];
+    bridge.onRetryEvent((e) => events.push(e.type));
+    await rejects(bridge.send("ListTables", "{}"), /no credentials/, "refused without credentials");
+    eq(events, [], "no event for a send refused before the SDK runs");
+    bridge.setCredentials(CREDS);
+    await rejects(bridge.send("ListTables", "{}"), /network down/, "transport failure rejects");
+    eq(events[events.length - 1], "settled", "a rejected send settles");
+}
+{
+    // The wrapped strategy keeps the SDK's retry mode: the user agent, which
+    // reports it (feature E = standard retries), is the same as a plain
+    // client's with the bridge's configuration.
+    const { bridge, calls } = bridgeWith([{ status: 200, body: "{}" }]);
+    bridge.setCredentials(CREDS);
+    await bridge.send("ListTables", "{}");
+    const s = stub([{ status: 200, body: "{}" }]);
+    const plain = new sdk.DynamoDBClient({ region: "us-east-1", credentials: CREDS,
+        accountIdEndpointMode: "disabled", maxAttempts: 11, retryMode: "standard",
+        requestHandler: s.handler });
+    await plain.send(new sdk.ListTablesCommand({}));
+    check(calls[0].userAgent !== "" && calls[0].userAgent === s.calls[0].userAgent,
+        `the user agent is unchanged by the wrapper (${calls[0].userAgent})`);
+    check(/ m\/[^ ]*\bE\b/.test(calls[0].userAgent), "the user agent still reports standard retries (m/…E…)");
 }
 
 // ---- transport failure -------------------------------------------------------

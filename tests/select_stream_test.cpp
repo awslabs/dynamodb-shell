@@ -136,7 +136,7 @@ TEST(SelectStream, EmptyMiddlePageIsDrainedNotEmitted) {
     EXPECT_EQ(render_all(sink.parts), "{a: 1}\n{a: 2}\n");
 }
 
-TEST(SelectStream, EmptyResultEmitsNoFragments) {
+TEST(SelectStream, EmptyResultEmitsOneEmptyFragment) {
     ddbsh::test::FakeDDBClient client;
     client.set_table(table_a("t"));
     client.set_pages({{}});  // one empty page, no cursor
@@ -148,8 +148,14 @@ TEST(SelectStream, EmptyResultEmitsNoFragments) {
     RecordingSink sink;
     ASSERT_TRUE(session.execute(*stmt, sink).has_value());
 
+    // One empty fragment carrying the column hint, so a formatted output opens
+    // an (empty) result set (P12); it renders nothing in the default format.
     EXPECT_EQ(client.read_calls(), 1);
-    EXPECT_TRUE(sink.parts.empty());
+    ASSERT_EQ(sink.parts.size(), 1u);
+    const auto* select = std::get_if<ddbsh::SelectOutcome>(&sink.parts.front());
+    ASSERT_NE(select, nullptr);
+    EXPECT_TRUE(select->items.empty());
+    EXPECT_EQ(select->column_hint, (std::vector<std::string>{"a"}));
     EXPECT_EQ(render_all(sink.parts), "");
 }
 

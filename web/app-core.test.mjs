@@ -15,7 +15,14 @@
 // cross-tab history removal (historyRemovedElsewhere), the credentials
 // controls shipping disabled in index.html, and the header's engine version
 // (versionLabel, D-P10-14), busy indicator (createBusyClock, D-P10-16) and
-// Help link (D-P10-17).
+// Help link (D-P10-17); and the P12 additions: the streaming transcript
+// (promptEntry, createTranscriptAppender, guardedEventSink; D-P12-17), the
+// throttling-code list (isThrottlingError, D-P12-18) and the busy indicator's
+// throttled / retrying states (setRetrying, D-P12-19), the HTML result
+// table's column growth (createTableModel and the appender's rows/end
+// handling, D-P12-25), and the output dropdowns (outputOptions, D-P12-26).
+// streamSubmission and the engine's rows events are tested against the built
+// engine in streaming.test.mjs.
 
 import { readFileSync } from "node:fs";
 
@@ -24,8 +31,19 @@ import {
     buildPrompt,
     buildTranscriptEntries,
     busyFinishedText,
+    busyRetryAnnouncement,
     busyText,
     createBusyClock,
+    createTableModel,
+    createTranscriptAppender,
+    guardedEventSink,
+    JSON_FLAVOR_CHOICES,
+    jsonFlavorApplies,
+    OUTPUT_CHOICES,
+    outputOptions,
+    isThrottlingError,
+    promptEntry,
+    THROTTLING_ERROR_CODES,
     credentialEnvironmentProblem,
     credentialStatus,
     elapsedSeconds,
@@ -577,6 +595,187 @@ eq(busyFinishedText(5), "command finished after 5 seconds", "finished: 5 seconds
     clock.stop();
 }
 
+// ---- busy indicator: throttled / retrying (P12, D-P12-19) -------------------
+console.log("busy indicator: retry states");
+eq(busyText(12, "running"), "running… 12s", "running state text");
+eq(busyText(12, "throttled"), "running… 12s · throttled, retrying", "throttled state text");
+eq(busyText(12, "retrying"), "running… 12s · retrying", "retrying state text");
+eq(busyRetryAnnouncement("throttled"), "DynamoDB is throttling; retrying", "throttled announcement");
+eq(busyRetryAnnouncement("retrying"), "retrying", "retrying announcement");
+{
+    let nowMs = 1000;
+    const renders = [];
+    const announcements = [];
+    let pending = null;
+    const clock = createBusyClock({
+        now: () => nowMs,
+        requestFrame: (fn) => {
+            pending = fn;
+            return 1;
+        },
+        cancelFrame: () => {
+            pending = null;
+        },
+        render: (text, state) => renders.push([text, state]),
+        announce: (text) => announcements.push(text),
+    });
+    const frame = () => {
+        const fn = pending;
+        pending = null;
+        if (fn) {
+            fn();
+        }
+    };
+    check(clock.setRetrying("throttled") === false, "setRetrying while idle is ignored");
+    eq([renders, announcements, clock.state], [[], [], null], "  … nothing rendered or announced; state idle");
+
+    clock.start();
+    eq(clock.state, "running", "start enters running");
+    eq(renders, [["running… 0s", "running"]], "running renders its text and state");
+    nowMs = 3500;
+    check(clock.setRetrying("throttled") === true, "a throttled retry enters throttled");
+    eq(clock.state, "throttled", "  state throttled");
+    eq(renders[renders.length - 1], ["running… 2s · throttled, retrying", "throttled"],
+        "  re-renders at once with the elapsed seconds and the state");
+    eq(announcements, ["command started", "DynamoDB is throttling; retrying"], "  announced once");
+    const count = renders.length;
+    clock.setRetrying("throttled");
+    eq(renders.length, count, "the same state again renders nothing");
+    nowMs = 4100;
+    frame();
+    eq(renders[renders.length - 1], ["running… 3s · throttled, retrying", "throttled"],
+        "the seconds keep counting in the throttled state");
+    check(clock.setRetrying(null) === true, "settled returns to running");
+    eq(renders[renders.length - 1], ["running… 3s", "running"], "  running text and state");
+    clock.setRetrying("throttled");
+    clock.setRetrying(null);
+    clock.setRetrying("retrying");
+    eq(renders[renders.length - 1], ["running… 3s · retrying", "retrying"], "a non-throttle retry: retrying");
+    eq(announcements, ["command started", "DynamoDB is throttling; retrying"],
+        "one retry announcement per submission, however many retries");
+    check(clock.setRetrying("bogus") === false, "an unknown kind is refused");
+    eq(clock.state, "retrying", "  and changes nothing");
+    clock.stop();
+    eq([renders[renders.length - 1], clock.state], [[null, null], null], "stop hides the indicator from any state");
+    check(clock.setRetrying(null) === false, "settled after stop is ignored");
+
+    // The next submission starts in running, with the announcement re-armed.
+    renders.length = 0;
+    announcements.length = 0;
+    clock.start();
+    eq(renders, [["running… 0s", "running"]], "the next submission starts in running");
+    clock.setRetrying("retrying");
+    clock.setRetrying("throttled");
+    eq(announcements, ["command started", "retrying"],
+        "the next submission announces its first retry state (once)");
+    clock.stop();
+}
+{
+    // The pulse is off under prefers-reduced-motion; the state colors stay.
+    const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    check(/\.busy\.busy-throttled\s*\{[^}]*animation:\s*ddbsh-pulse/.test(css),
+        "styles.css: the throttled state pulses");
+    check(/\.busy\.busy-throttled,\s*\.busy\.busy-retrying\s*\{[^}]*color:/.test(css),
+        "styles.css: the throttled and retrying states have their own color");
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/g) || [];
+    check(reduced.some((block) => /\.busy\.busy-throttled\s*\{\s*animation:\s*none;/.test(block)),
+        "styles.css: no pulse under prefers-reduced-motion: reduce");
+}
+
+// ---- streaming transcript (P12, D-P12-17) ------------------------------------
+console.log("streaming transcript");
+eq(promptEntry("p> ", "a;\nb;"), { text: "p> a;\np> b;", kind: "prompt" }, "promptEntry prefixes every line");
+eq(promptEntry("p> ", ""), null, "promptEntry: nothing for an empty input");
+{
+    const blocks = [];
+    const appender = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, parts: [], attached: true };
+            blocks.push(b);
+            return b;
+        },
+        appendText: (b, t) => b.parts.push(t),
+        isAttached: (b) => b.attached,
+    });
+    const view = () => blocks.map((b) => [b.kind, b.parts]);
+    appender.prompt("p> ", "show tables;");
+    appender.event({ type: "text", stream: "stdout", text: "t1\n" });
+    appender.event({ type: "text", stream: "stdout", text: "t2\n" });
+    eq(view(), [["prompt", ["p> show tables;"]], ["stdout", ["t1\n", "t2\n"]]],
+        "the prompt opens a block; adjacent stdout events share one block, one part each");
+    appender.event({ type: "text", stream: "stderr", text: "oops\n" });
+    appender.event({ type: "text", stream: "stdout", text: "t3\n" });
+    eq(view().slice(2), [["stderr", ["oops\n"]], ["stdout", ["t3\n"]]], "a change of stream starts a new block");
+    appender.event({ type: "text", stream: "stdout", text: "" });
+    appender.event({ type: "rows", rows: [] });
+    appender.event(null);
+    eq(blocks.length, 4, "empty text, a non-text event and null add nothing");
+    blocks[3].attached = false; // the user pressed Clear mid-run.
+    appender.write("stdout", "t4\n");
+    eq(view().slice(4), [["stdout", ["t4\n"]]], "after Clear the next text starts a new block");
+    appender.prompt("p> ", "next;");
+    appender.write("prompt", "unused");
+    eq(blocks[5].kind, "prompt", "prompt() always opens its own block");
+    // The result matches buildTranscriptEntries' model for the same segments.
+    const blocks2 = [];
+    const a2 = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, text: "" };
+            blocks2.push(b);
+            return b;
+        },
+        appendText: (b, t) => {
+            b.text += t;
+        },
+        isAttached: () => true,
+    });
+    const segments = [{ stream: "stdout", text: "A\n" }, { stream: "stdout", text: "B\n" },
+        { stream: "stderr", text: "E\n" }, { stream: "stdout", text: "C\n" }];
+    a2.prompt("p> ", "x;\ny;");
+    for (const seg of segments) {
+        a2.event({ type: "text", ...seg });
+    }
+    eq(blocks2.map((b) => ({ text: b.text, kind: b.kind })),
+        buildTranscriptEntries("p> ", "x;\ny;", { segments }),
+        "the appender builds the same blocks as buildTranscriptEntries");
+}
+{
+    const seen = [];
+    const g = guardedEventSink((ev) => {
+        if (ev === 2 || ev === 3) {
+            throw new Error(`bad ${ev}`);
+        }
+        seen.push(ev);
+    });
+    eq(g.error, null, "guardedEventSink: no error before any failure");
+    for (const ev of [1, 2, 3, 4]) {
+        g.emit(ev); // never throws
+    }
+    eq(seen, [1, 4], "events after a failure are still delivered");
+    eq(g.error.message, "bad 2", "the first exception is kept");
+    const g2 = guardedEventSink(() => {
+        throw undefined; // eslint-disable-line no-throw-literal
+    });
+    g2.emit({});
+    check(g2.error === undefined, "a thrown undefined is kept as thrown (not mistaken for none)");
+    eq(guardedEventSink(() => {}).error, null, "a callback that never throws leaves error null");
+}
+
+// ---- throttling codes (P12, D-P12-18) -----------------------------------------
+console.log("throttling codes");
+// The same six codes as ddbsh::is_throttling_error (src/retry_event.cpp);
+// tests/wire_client_retry_test.cpp pins the C++ copy. Change both together.
+eq([...THROTTLING_ERROR_CODES], ["ThrottlingException", "ProvisionedThroughputExceededException",
+    "RequestLimitExceeded", "TooManyRequestsException", "LimitExceededException",
+    "TransactionInProgressException"], "the throttling list");
+check(Object.isFrozen(THROTTLING_ERROR_CODES), "the list is frozen");
+check(THROTTLING_ERROR_CODES.every(isThrottlingError), "every listed code is throttling");
+for (const code of ["ResourceNotFoundException", "InternalServerError", "ConditionalCheckFailedException",
+    "", "throttlingexception", "com.amazonaws.dynamodb.v20120810#ThrottlingException", "THROTTLING"]) {
+    check(!isThrottlingError(code), `not throttling: ${JSON.stringify(code)}`);
+}
+check(!isThrottlingError(undefined) && !isThrottlingError(null), "a missing code is not throttling");
+
 // ---- header: index.html markup (P10, D-P10-14 / D-P10-16 / D-P10-17) -------
 console.log("header markup");
 {
@@ -607,6 +806,126 @@ console.log("header markup");
     const busy = openingTag("busy");
     check(busy !== "" && attr(busy, "aria-live") === null && attr(busy, "role") === null,
         "#busy (the ticking text) is not a live region");
+}
+
+// ---- HTML result tables (P12, D-P12-25) ---------------------------------------
+console.log("createTableModel");
+{
+    const cell = (t, n = false, m = false) => ({ t, n, m });
+    const model = createTableModel();
+    const p1 = model.apply({ type: "rows", columns: ["pk", "a"], newColumnsFrom: 0,
+        rows: [[cell("1", true), cell("x\ny")]], groupEnd: true });
+    eq(p1, { addHeaders: ["pk", "a"], padRows: 0, padCells: 0,
+        rows: [[{ text: "1", className: "num" }, { text: "x\ny", className: "" }]] },
+        "the first event: every header, its rows; numbers get the num class, text is kept as is");
+    const p2 = model.apply({ type: "rows", columns: ["pk", "a"], newColumnsFrom: 2,
+        rows: [[cell("2", true), cell("", false, true)]], groupEnd: true });
+    eq(p2, { addHeaders: [], padRows: 0, padCells: 0,
+        rows: [[{ text: "2", className: "num" }, { text: "", className: "missing" }]] },
+        "no new column: no header, no padding; a missing attribute is an empty missing cell");
+    const p3 = model.apply({ type: "rows", columns: ["pk", "a", "b", "c"], newColumnsFrom: 2,
+        rows: [[cell("3", true), cell("y"), cell("{\"k\": 3}"), cell("", false, true)]], groupEnd: true });
+    eq([p3.addHeaders, p3.padRows, p3.padCells], [["b", "c"], 2, 2],
+        "two new columns: two headers, and two empty cells for each of the two earlier rows");
+    eq(p3.rows[0].map((c) => c.className), ["num", "", "", "missing"], "the new row has a cell per column");
+    eq(model.size, { columns: 4, rows: 3 }, "the model counts the table's columns and rows");
+    const p4 = model.apply({ type: "rows", columns: ["pk", "a", "b", "c"], newColumnsFrom: 4, rows: [] });
+    eq(p4, { addHeaders: [], padRows: 0, padCells: 0, rows: [] }, "an event with nothing new plans nothing");
+    // A short row (fewer cells than columns) is padded with missing cells.
+    const p5 = model.apply({ type: "rows", columns: ["pk", "a", "b", "c"], rows: [[cell("9", true)]] });
+    eq(p5.rows[0].map((c) => c.className), ["num", "missing", "missing", "missing"],
+        "a row shorter than the columns is completed with missing cells");
+    // The empty-result header: columns, no rows.
+    const empty = createTableModel().apply({ type: "rows", columns: ["pk"], newColumnsFrom: 0, rows: [] });
+    eq(empty, { addHeaders: ["pk"], padRows: 0, padCells: 0, rows: [] }, "an empty result: the header only");
+    // New columns before any row: headers only, nothing to pad.
+    const m2 = createTableModel();
+    m2.apply({ columns: ["pk"], rows: [] });
+    eq(m2.apply({ columns: ["pk", "x"], rows: [] }), { addHeaders: ["x"], padRows: 0, padCells: 0, rows: [] },
+        "a new column with no row yet pads nothing");
+}
+
+console.log("transcript appender: rows and end");
+{
+    const blocks = [];
+    const plans = [];
+    const appender = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, parts: [], attached: true };
+            blocks.push(b);
+            return b;
+        },
+        appendText: (b, t) => b.parts.push(t),
+        isAttached: (b) => b.attached,
+        createTable: () => {
+            const b = { kind: "table", plans: [], attached: true };
+            blocks.push(b);
+            return b;
+        },
+        applyTablePlan: (b, plan) => {
+            b.plans.push(plan);
+            plans.push(plan);
+        },
+    });
+    const rows = (columns, n) => ({ type: "rows", columns, newColumnsFrom: 0,
+        rows: Array.from({ length: n }, () => columns.map(() => ({ t: "v", n: false, m: false }))), groupEnd: true });
+    appender.prompt("p> ", "select …;");
+    appender.event(rows(["a"], 1));
+    appender.event(rows(["a", "b"], 1));
+    appender.event({ type: "end" });
+    appender.event({ type: "text", stream: "stdout", text: "SELECT (t, 1, 0, 0)\n" });
+    appender.event(rows(["x"], 2));
+    eq(blocks.map((b) => b.kind), ["prompt", "table", "stdout", "table"],
+        "rows events share a table until end; text after it is a new block; the next set a new table");
+    eq(blocks[1].plans.map((p) => [p.addHeaders, p.padRows, p.padCells]), [[["a"], 0, 0], [["b"], 1, 1]],
+        "the table's model pads the earlier row when page 2 adds a column");
+    eq(blocks[3].plans[0].addHeaders, ["x"], "the second table has its own model");
+    blocks[3].attached = false; // Clear while the set is open
+    appender.event(rows(["x"], 1));
+    eq(blocks.map((b) => b.kind), ["prompt", "table", "stdout", "table", "table"],
+        "a rows event after Clear starts a new table");
+    eq(blocks[4].plans[0].addHeaders, ["x"], "  … with its headers again");
+    // Without the table operations, rows events are ignored (a text-only consumer).
+    const textOnly = [];
+    const a2 = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, parts: [] };
+            textOnly.push(b);
+            return b;
+        },
+        appendText: (b, t) => b.parts.push(t),
+        isAttached: () => true,
+    });
+    a2.event(rows(["a"], 1));
+    a2.event({ type: "end" });
+    a2.event({ type: "text", stream: "stdout", text: "x\n" });
+    eq(textOnly.map((b) => b.kind), ["stdout"], "a text-only appender ignores rows and end");
+}
+
+// ---- output dropdowns (P12, D-P12-26) ----------------------------------------
+console.log("output dropdowns");
+{
+    eq(OUTPUT_CHOICES.map(([v]) => v), ["default", "json", "csv", "table", "html"], "the Output values, in order");
+    eq(OUTPUT_CHOICES.map(([, l]) => l), ["Default", "JSON", "CSV", "Table (text)", "Table (HTML)"],
+        "the Output labels");
+    eq(JSON_FLAVOR_CHOICES, [["plain", "Plain"], ["dynamodb", "DynamoDB"]], "the JSON choices");
+    eq(OUTPUT_CHOICES.map(([v]) => jsonFlavorApplies(v)), [false, true, true, true, true],
+        "JSON is disabled for Default only");
+    eq(outputOptions("default", "dynamodb"), { output: "default" }, "Default sends no flavor");
+    eq(outputOptions("json", "dynamodb"), { output: "json", jsonFlavor: "dynamodb" }, "JSON + DynamoDB");
+    eq(outputOptions("html", "plain"), { output: "html", jsonFlavor: "plain" }, "Table (HTML) + Plain");
+    eq(outputOptions("csv", "bogus"), { output: "csv", jsonFlavor: "plain" }, "an unknown flavor falls back to plain");
+    eq(outputOptions("xml", "dynamodb"), { output: "default" }, "an unknown output falls back to Default");
+    eq(outputOptions(undefined, undefined), { output: "default" }, "no values: Default");
+
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    for (const id of ["output-select", "flavor-select"]) {
+        check(new RegExp(`<select id="${id}"[^>]*></select>`).test(html), `#${id} is an empty <select> (app.js fills it)`);
+        check(new RegExp(`<label[^>]*\\bfor="${id}"[^>]*>`).test(html), `#${id} has a <label for>`);
+    }
+    check(html.indexOf('id="run-btn"') < html.indexOf('id="output-select"') &&
+        html.indexOf('id="output-select"') < html.indexOf('id="flavor-select"'),
+        "the dropdowns follow the Run button, Output first");
 }
 
 // ---- summary ---------------------------------------------------------------
