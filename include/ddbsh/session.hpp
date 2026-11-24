@@ -142,7 +142,10 @@ public:
     /// Convenience: parse then execute (buffering).
     Result<ExecOutcome> run(std::string_view text);
 
-    /// Convenience: parse then execute (streaming to `sink`).
+    /// Convenience: parse then execute (streaming to `sink`). When `text` does
+    /// not parse, this returns the parse Error before anything reaches `sink`:
+    /// no fragment is emitted and sink.end_statement() is not called. Once the
+    /// text parses, it behaves exactly as execute(statement, sink).
     Result<void> run(std::string_view text, OutcomeSink& sink);
 
     /// Report the session's current connection state for an embedder's prompt

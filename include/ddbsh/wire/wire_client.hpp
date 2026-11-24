@@ -28,6 +28,7 @@
 #ifndef DDBSH_WIRE_WIRE_CLIENT_HPP
 #define DDBSH_WIRE_WIRE_CLIENT_HPP
 
+#include <atomic>
 #include <chrono>
 #include <random>
 #include <string>
@@ -112,6 +113,8 @@ public:
     // send_retrying raises one RetryEvent per retry it decides to make, after
     // computing the backoff and before sleeping it. The waiters' DescribeTable
     // polls are not retries and raise none. Borrowed pointer; nullptr clears.
+    // Safe to call from another thread while a request is retrying; it does
+    // not wait for an on_retry call already running (retry_event.hpp).
     void set_retry_observer(RetryObserver* observer) override;
 
 protected:
@@ -168,7 +171,10 @@ private:
     Result<Out> round_trip(const WireRequest& req, Result<Out> (*parse)(const std::string&));
 
     Transport& transport_;
-    RetryObserver* retry_observer_ = nullptr;  // borrowed (set_retry_observer)
+    // Borrowed (set_retry_observer). Atomic, as AwsDDBClient's slot is, so an
+    // embedder may set or clear it from another thread while a request is
+    // retrying; send_retrying loads it once per retry.
+    std::atomic<RetryObserver*> retry_observer_{nullptr};
     std::string region_;
     std::string endpoint_;
     std::mt19937_64 rng_{std::random_device{}()};

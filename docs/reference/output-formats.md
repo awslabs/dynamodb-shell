@@ -150,7 +150,8 @@ film,3,"{""crew"": [""A"", ""B""], ""score"": 8.3}",,"Up, Up and Away",2009
 A format applies only to rows:
 
 - the items of a `SELECT` (including vector search, which adds a last column
-  named `score`, or `_score` when an item already has a `score` attribute);
+  named `score`, or `_score`, `__score`, … when an item already has an
+  attribute of that name);
 - the items of a read transaction;
 - the items that `RETURN VALUES` returns from `INSERT`, `REPLACE`, `UPDATE`,
   `UPSERT` and `DELETE`;
@@ -174,7 +175,8 @@ The report columns are:
 
 A report cell holds the same string `default` shows (for example
 `PAY_PER_REQUEST*`), and the counts and capacity numbers are numbers. A
-`SHOW TABLES` row whose `DescribeTable` failed has only `TableName`.
+`SHOW TABLES` row whose `DescribeTable` or `DescribeTimeToLive` failed has
+only `TableName`.
 
 ```
 $ ddbsh -q --output table -c 'show tables brief like "ddbsh_doc_fmt";'

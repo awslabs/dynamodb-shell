@@ -99,7 +99,9 @@ Result<std::string> WireClient::send_retrying(std::string_view operation, std::s
         // The retry is decided: compute the backoff, tell the observer (P12,
         // D-P12-18) with the delay about to be slept, then sleep and re-send.
         const std::chrono::milliseconds delay = retry_delay(attempt);
-        if (retry_observer_ != nullptr) {
+        // One load: a clear on another thread between a check and the call
+        // must not turn into a null call.
+        if (RetryObserver* const observer = retry_observer_.load(); observer != nullptr) {
             RetryEvent event;
             event.operation = std::string(operation);
             event.attempt = static_cast<int>(attempt) + 2;  // the send about to happen
@@ -108,7 +110,7 @@ Result<std::string> WireClient::send_retrying(std::string_view operation, std::s
             event.throttled = is_throttling_error(*name);
             event.delay = delay;
             try {
-                retry_observer_->on_retry(event);
+                observer->on_retry(event);
             } catch (...) {
                 // A notification only (retry_event.hpp): an observer's
                 // exception must not abandon a retry already decided on.
@@ -137,7 +139,7 @@ std::chrono::milliseconds WireClient::retry_delay(unsigned attempt) {
 }
 
 void WireClient::set_retry_observer(RetryObserver* observer) {
-    retry_observer_ = observer;
+    retry_observer_.store(observer);
 }
 
 template <class Out>

@@ -61,8 +61,10 @@ struct RetryEvent {
 /// should not throw: the transport catches and discards anything it throws, so
 /// the retry it has decided on still happens. Keep the observer alive until it
 /// is cleared (set_retry_observer(nullptr)) and no call to on_retry is still
-/// running: clearing the observer does not wait for an on_retry call already
-/// running on another thread.
+/// running. AwsDDBClient and WireClient hold the registration atomically, so
+/// either may be set or cleared from another thread while a request is
+/// retrying; clearing does not wait for an on_retry call already running on
+/// the requesting thread. A custom IDDBClient states its own rule.
 class RetryObserver {
 public:
     virtual ~RetryObserver() = default;

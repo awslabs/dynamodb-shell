@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -335,6 +336,44 @@ TEST(WireClientRetryEvent, ClearingAndSwappingTheObserver) {
     EXPECT_EQ(first.events.size(), 1u);
     EXPECT_EQ(second.events.size(), 1u);
     EXPECT_EQ(client.sleeps_ms.size(), 3u);  // the retries happened regardless
+}
+
+// A WireClient whose first backoff sleep clears the observer from another
+// thread (joined before the sleep returns), as an embedder's UI thread might
+// while a request on the engine thread is retrying (S6-R2). The slot is atomic
+// and send_retrying loads it once per retry, so the clear is seen by the next
+// retry and raises no event there.
+class ClearDuringBackoffClient : public TestWireClient {
+public:
+    using TestWireClient::TestWireClient;
+
+protected:
+    void backoff_sleep(std::chrono::milliseconds interval) override {
+        TestWireClient::backoff_sleep(interval);
+        if (!cleared_) {
+            cleared_ = true;
+            std::thread other([this] { set_retry_observer(nullptr); });
+            other.join();
+        }
+    }
+
+private:
+    bool cleared_ = false;
+};
+
+TEST(WireClientRetryEvent, ClearingFromAnotherThreadMidRequestStopsLaterEvents) {
+    CannedTransport transport;
+    transport.push_response(kThrottleBody);
+    transport.push_response(kThrottleBody);
+    transport.push_response(kDescribeOkBody);
+    ClearDuringBackoffClient client(transport);
+    RecordingObserver observer;
+    client.set_retry_observer(&observer);
+
+    ASSERT_TRUE(client.describe_table(describe_t()).has_value());
+    EXPECT_EQ(observer.events.size(), 1u);   // the retry before the clear only
+    EXPECT_EQ(client.sleeps_ms.size(), 2u);  // both retries still happened
+    EXPECT_EQ(transport.calls().size(), 3u);
 }
 
 TEST(WireClientRetryEvent, ThrowingObserverDoesNotStopTheRetry) {

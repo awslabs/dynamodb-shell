@@ -384,7 +384,10 @@ public:
     /// builds. The pointer is borrowed: keep the observer alive until it is
     /// cleared or the Connection is closed. `nullptr` clears it. The
     /// registration survives reconnect(). A closed Connection returns an
-    /// Errc::invalid_argument error.
+    /// Errc::invalid_argument error. This is the one Connection call that may
+    /// run on another thread while a statement is executing (never alongside
+    /// close()), when the client holds its registration atomically, as
+    /// AwsDDBClient and WireClient do (retry_event.hpp).
     Result<void> set_retry_observer(RetryObserver* observer);
 
     /// Deterministic teardown before scope exit. Makes the handle invalid;
