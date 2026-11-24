@@ -101,7 +101,7 @@ Result<std::string> WireClient::send_retrying(std::string_view operation, std::s
         const std::chrono::milliseconds delay = retry_delay(attempt);
         // One load: a clear on another thread between a check and the call
         // must not turn into a null call.
-        if (RetryObserver* const observer = retry_observer_.load(); observer != nullptr) {
+        if (RetryObserver* const observer = retry_observer_.ptr.load(); observer != nullptr) {
             RetryEvent event;
             event.operation = std::string(operation);
             event.attempt = static_cast<int>(attempt) + 2;  // the send about to happen
@@ -139,7 +139,7 @@ std::chrono::milliseconds WireClient::retry_delay(unsigned attempt) {
 }
 
 void WireClient::set_retry_observer(RetryObserver* observer) {
-    retry_observer_.store(observer);
+    retry_observer_.ptr.store(observer);
 }
 
 template <class Out>

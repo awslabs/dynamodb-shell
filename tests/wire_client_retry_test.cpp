@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -374,6 +375,24 @@ TEST(WireClientRetryEvent, ClearingFromAnotherThreadMidRequestStopsLaterEvents) 
     EXPECT_EQ(observer.events.size(), 1u);   // the retry before the clear only
     EXPECT_EQ(client.sleeps_ms.size(), 2u);  // both retries still happened
     EXPECT_EQ(transport.calls().size(), 3u);
+}
+
+// Making the slot atomic must not change WireClient's copy semantics (D-P12-10:
+// no breaking API change): it stays copy-constructible, and a copy carries the
+// registration, as it did when the slot was a plain pointer.
+static_assert(std::is_copy_constructible_v<WireClient>);
+
+TEST(WireClientRetryEvent, ACopiedClientKeepsTheObserver) {
+    CannedTransport transport;
+    transport.push_response(kThrottleBody);
+    transport.push_response(kDescribeOkBody);
+    TestWireClient original(transport);
+    RecordingObserver observer;
+    original.set_retry_observer(&observer);
+    TestWireClient copy(original);
+
+    ASSERT_TRUE(copy.describe_table(describe_t()).has_value());
+    EXPECT_EQ(observer.events.size(), 1u);
 }
 
 TEST(WireClientRetryEvent, ThrowingObserverDoesNotStopTheRetry) {

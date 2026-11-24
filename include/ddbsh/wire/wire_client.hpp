@@ -173,8 +173,16 @@ private:
     Transport& transport_;
     // Borrowed (set_retry_observer). Atomic, as AwsDDBClient's slot is, so an
     // embedder may set or clear it from another thread while a request is
-    // retrying; send_retrying loads it once per retry.
-    std::atomic<RetryObserver*> retry_observer_{nullptr};
+    // retrying; send_retrying loads it once per retry. The copy constructor
+    // copies the current pointer, so WireClient stays copy-constructible as it
+    // was before the slot became atomic (a bare std::atomic member would delete
+    // the copy, a breaking change).
+    struct ObserverSlot {
+        std::atomic<RetryObserver*> ptr{nullptr};
+        ObserverSlot() = default;
+        ObserverSlot(const ObserverSlot& other) : ptr(other.ptr.load()) {}
+    };
+    ObserverSlot retry_observer_;
     std::string region_;
     std::string endpoint_;
     std::mt19937_64 rng_{std::random_device{}()};
