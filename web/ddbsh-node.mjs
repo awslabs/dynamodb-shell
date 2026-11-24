@@ -18,6 +18,10 @@
 //   -e          abort on the first error    (neither: read all of stdin)
 //   -q, -d, -s  accepted; this shim never prints a banner, -d is a no-op in
 //               the native CLI too, and the runner does the -s sort itself.
+//   --output <format>, --json-flavor <flavor> (also --opt=value)
+//               the output format, as in the native CLI (P12, D-P12-26);
+//               passed to runScript. An unknown value prints the native CLI's
+//               message and usage and exits 1.
 // Output goes to stdout/stderr in the engine's emission order; the exit code is
 // the CLI's (last executed statement).
 //
@@ -39,7 +43,28 @@ import { parseCredentials } from "./app-core.mjs";
 import { createSdkBridge, installHooks } from "./sdk-bridge.mjs";
 import createDdbsh from "./ddbsh.js";
 
-const USAGE = 'Usage: ddbsh-node.mjs [-q] [-e] [-d] [-s] [-c "<cmds>" | -f <file>]\n';
+// Byte-identical to the native CLI's usage line (cli/main.cpp kUsage), so a
+// golden that pins a usage error (ifmt-bad-output) matches in both editions.
+// The shim itself supports only the options listed in the header comment.
+const USAGE = 'Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] '
+    + '[--output default|json|csv|table] [--json-flavor plain|dynamodb] '
+    + '[-c "<cmds>" | -f <file>]\n';
+
+// The format ids and the unknown-value messages of the native CLI
+// (ddbsh::render::parse_output_format / parse_json_flavor and
+// cli/repl.cpp unknown_*_message). The engine validates them again in
+// runScript; checking here keeps the native order (reject before any work).
+const OUTPUT_FORMATS = ["default", "json", "csv", "table"];
+const JSON_FLAVORS = ["plain", "dynamodb"];
+function checkId(kind, value, known) {
+    if (known.includes(value.toLowerCase())) {
+        return;
+    }
+    const message = kind === "output"
+        ? `unknown output format: ${value} (expected default, json, csv, table)\n`
+        : `unknown JSON flavor: ${value} (expected plain, dynamodb)\n`;
+    die(`ddbsh: ${message}${USAGE}`);
+}
 
 // Write all of `text` to `fd` (writeSync may write a pipe partially).
 function writeAll(fd, text) {
@@ -65,11 +90,36 @@ function die(message, code = 1) {
 let cmdstring = null;
 let inputfile = null;
 let abortOnError = false;
+const formatOptions = {};
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (!a.startsWith("-") || a === "-") {
         die(USAGE);
+    }
+    if (a.startsWith("--")) {
+        // getopt_long style: --name value, or --name=value.
+        const eq = a.indexOf("=");
+        const name = eq < 0 ? a.slice(2) : a.slice(2, eq);
+        if (name !== "output" && name !== "json-flavor") {
+            die(USAGE);
+        }
+        let value = eq < 0 ? undefined : a.slice(eq + 1);
+        if (value === undefined) {
+            i += 1;
+            if (i >= argv.length) {
+                die(USAGE);
+            }
+            value = argv[i];
+        }
+        if (name === "output") {
+            checkId("output", value, OUTPUT_FORMATS);
+            formatOptions.output = value;
+        } else {
+            checkId("json-flavor", value, JSON_FLAVORS);
+            formatOptions.jsonFlavor = value;
+        }
+        continue;
     }
     for (let j = 1; j < a.length; j += 1) {
         const ch = a[j];
@@ -156,7 +206,7 @@ if (!set.ok) {
 const Module = await createDdbsh();
 installHooks(Module, bridge);
 const session = new Module.DdbshSession(region);
-let result = session.runScript(text, abortOnError);
+let result = session.runScript(text, abortOnError, formatOptions);
 if (result && typeof result.then === "function") {
     result = await result; // Asyncify surfaces a suspending call as a Promise.
 }

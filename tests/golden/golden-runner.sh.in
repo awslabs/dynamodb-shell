@@ -6,7 +6,7 @@
 #
 # This is REPLACEABLE TEST-RUNNER TOOLING, not compiled C++ and not part of the
 # engine or the CLI. It reproduces the original `ddbshtest` harness CLI surface
-# (-c / -f / -T / -R / -s / -q / -e / -d) by driving the SHIPPING `ddbsh`
+# (-c / -f / -T / -R / -s / -q / -e / -d, plus -o / -j) by driving the SHIPPING `ddbsh`
 # binary as a subprocess with legitimate production flags, then doing the
 # capture -> (optional LC_ALL=C sort) -> diff against the golden `.exp` itself.
 # This lets the original golden family files (tests/*.txt) and golden results
@@ -29,6 +29,11 @@
 #   * -q is ALWAYS passed to the shell (the original test binary defaults to
 #     quiet; the goldens contain no startup banner).
 #   * -e is forwarded when the test requests abort-on-error.
+#   * -o <format> forwards `--output <format>` and -j <flavor> forwards
+#     `--json-flavor <flavor>` (P12, the formats family). The original harness
+#     had no format option; these exist only for the reimplementation's opt-in
+#     output formats, and no value is checked here (the shell rejects an
+#     unknown one, which the formats family itself tests).
 #   * -s sorts the captured output with `LC_ALL=C sort` (data-plane results come
 #     back in DynamoDB hash order; EXPLAIN output is deterministic and unsorted).
 #   * -T <golden>: diff captured output against the golden; exit 0 on match,
@@ -50,12 +55,18 @@ have_cmd=0
 have_file=0
 sort_output=0
 abort_on_error=0
+output_format=""
+json_flavor=""
+have_output=0
+have_flavor=0
 # -q and -d are accepted for CLI-surface parity. -q is always forwarded (see
 # below); -d (debug) is a no-op in the current engine, so it is swallowed here.
 
-while getopts "c:f:T:R:sqed" opt; do
+while getopts "c:f:T:R:sqedo:j:" opt; do
     case "$opt" in
         c) cmd="$OPTARG"; have_cmd=1 ;;
+        o) output_format="$OPTARG"; have_output=1 ;;
+        j) json_flavor="$OPTARG"; have_flavor=1 ;;
         f) file="$OPTARG"; have_file=1 ;;
         T) golden="$OPTARG" ;;
         R) record="$OPTARG" ;;
@@ -91,6 +102,8 @@ fi
 # -e is forwarded only when the test asked for abort-on-error.
 shell_args=(-q)
 [ "$abort_on_error" -eq 1 ] && shell_args+=(-e)
+[ "$have_output" -eq 1 ] && shell_args+=(--output "$output_format")
+[ "$have_flavor" -eq 1 ] && shell_args+=(--json-flavor "$json_flavor")
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT

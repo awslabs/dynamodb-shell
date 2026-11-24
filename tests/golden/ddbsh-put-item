@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ddbsh-put-item -- write seed items the ddbsh grammar cannot express.
+#
+# ddbsh's value literals cover S, N, BOOL, NULL, L and M. Binary (B) and the
+# set types (SS, NS, BS) have no literal, so the formats family (P12) seeds the
+# item that carries them with the AWS CLI. Each argument after the table name
+# is one item in DynamoDB JSON, e.g.
+#   ddbsh-put-item ddbsh_fmt '{"pk": {"N": "1"}, "rk": {"N": "4"}, "b": {"B": "aGk="}}'
+#
+# It uses the AWS CLI against real DynamoDB with the same standard ~/.aws
+# credential/region resolution as ddbsh-wait and devtools/run-tests (no
+# endpoint override). It exits non-zero on the first failed write.
+#
+# TODO(portability): POSIX bash + AWS CLI, like ddbsh-wait.
+
+set -uo pipefail
+
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+
+die() {
+    echo "ddbsh-put-item: $*" >&2
+    exit 1
+}
+
+[ $# -ge 2 ] || die "usage: ddbsh-put-item <table> <item-json>..."
+command -v aws >/dev/null 2>&1 || die "AWS CLI not found on PATH"
+
+TABLE="$1"
+shift
+for item in "$@"; do
+    aws dynamodb put-item --table-name "$TABLE" --region "$REGION" --item "$item" \
+        || die "put-item into $TABLE failed: $item"
+done
+echo "ddbsh-put-item: wrote $# item(s) to $TABLE"

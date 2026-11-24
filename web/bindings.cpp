@@ -21,10 +21,14 @@
 //                                   piece of output goes to onEvent as soon as
 //                                   the engine emits it, so the page can paint
 //                                   it while the next request is in flight.
-//   runScript(text, abortOnError)   the CLI `-c` / `-f` path: run_source over
+//   runScript(text, abortOnError, options)
+//                                   the CLI `-c` / `-f` path: run_source over
 //                                   the text, exactly as the CLI drives it
-//                                   (terminator lines, stop-on-quit, -e). The
-//                                   golden gate (web/ddbsh-node.mjs) uses it.
+//                                   (terminator lines, `set output`,
+//                                   stop-on-quit, -e). `options` is
+//                                   {output, jsonFlavor}, the CLI's --output
+//                                   and --json-flavor (P12). The golden gate
+//                                   (web/ddbsh-node.mjs) uses it.
 // run and runScript return RunResult.segments: the rendered stdout/stderr text
 // in emission order, so a consumer that merges the streams (the golden
 // runner's 2>&1) sees the same interleaving as the CLI. runStreaming delivers
@@ -49,6 +53,7 @@
 
 #include "ddbsh/config.hpp"
 #include "ddbsh/exec_outcome.hpp"
+#include "ddbsh/format.hpp"
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/session.hpp"
@@ -117,21 +122,60 @@ private:
     std::string pending_notice_;
 };
 
-// Buffers each emitted fragment into a RunResult — the string counterpart to
-// the CLI's FD-writing sink (same render / render_stderr split). A rejected
-// CONNECT's notice follows that statement's CONNECT token.
-struct BufferingSink : ddbsh::OutcomeSink {
-    const ddbsh::render::Renderer& renderer;
-    WebWireClient& client;
-    RunResult& result;
-    BufferingSink(const ddbsh::render::Renderer& r, WebWireClient& c, RunResult& res)
-        : renderer(r), client(c), result(res) {}
+// Buffers each emitted fragment into a RunResult: a FormattingSink (the same
+// one the CLI's sink is) whose writer appends to the result's segments, so the
+// bytes and their stdout/stderr order are the CLI's in every output format. A
+// rejected CONNECT's notice follows that statement's output.
+class BufferingSink : public ddbsh::render::FormattingSink {
+public:
+    BufferingSink(ddbsh::render::FormatOptions options, WebWireClient& client, RunResult& result)
+        : FormattingSink(options,
+                         [&result](ddbsh::render::Stream stream, std::string_view text) {
+                             result.append(
+                                 stream == ddbsh::render::Stream::out ? "stdout" : "stderr",
+                                 std::string(text));
+                         }),
+          client_(client),
+          result_(result) {}
+
     void emit(const ddbsh::ExecOutcome& fragment) override {
-        result.append("stdout", renderer.render(fragment));
-        result.append("stderr", renderer.render_stderr(fragment));
-        result.append("stderr", client.take_notice());
+        FormattingSink::emit(fragment);
+        result_.append("stderr", client_.take_notice());
     }
+
+private:
+    WebWireClient& client_;
+    RunResult& result_;
 };
+
+// Read runScript's `options` ({output, jsonFlavor}, P12 D-P12-26) into
+// `format`. Absent (or undefined/null) fields keep the default. Returns the
+// CLI's message for an unknown value, or "" when every value is known.
+std::string read_format_options(const emscripten::val& options,
+                                ddbsh::render::FormatOptions& format) {
+    if (options.isUndefined() || options.isNull()) {
+        return {};
+    }
+    const emscripten::val output = options["output"];
+    if (!output.isUndefined() && !output.isNull()) {
+        const std::string id = output.as<std::string>();
+        auto f = ddbsh::render::parse_output_format(id);
+        if (!f.has_value()) {
+            return ddbsh::cli::unknown_output_format_message(id);
+        }
+        format.format = *f;
+    }
+    const emscripten::val flavor = options["jsonFlavor"];
+    if (!flavor.isUndefined() && !flavor.isNull()) {
+        const std::string id = flavor.as<std::string>();
+        auto f = ddbsh::render::parse_json_flavor(id);
+        if (!f.has_value()) {
+            return ddbsh::cli::unknown_json_flavor_message(id);
+        }
+        format.json_flavor = *f;
+    }
+    return {};
+}
 
 // Delivers each emitted fragment to a JavaScript callback as it is emitted
 // (P12, D-P12-17): one {type: "text", stream: "stdout"|"stderr", text} event
@@ -180,7 +224,7 @@ public:
     // multi-batch abort policy to honor.
     RunResult run(const std::string& text) {
         RunResult result;
-        BufferingSink sink(renderer_, client_, result);
+        BufferingSink sink({}, client_, result);
         ddbsh::cli::BatchStatus st = ddbsh::cli::run_batch(
             session_, renderer_, text, /*abort_on_error=*/false, sink,
             [&](const std::string& rendered) { result.append("stderr", rendered); });
@@ -219,9 +263,20 @@ public:
     }
 
     // The CLI `-c` / `-f` path (run_source): status is the CLI's exit code.
-    RunResult run_script(const std::string& text, bool abort_on_error) {
+    // `options` ({output, jsonFlavor}) is the CLI's --output / --json-flavor
+    // (P12, D-P12-26); `set output` lines in the text change it as in the CLI.
+    // An unknown value runs nothing and returns status 1 with the message in
+    // stderr.
+    RunResult run_script(const std::string& text, bool abort_on_error, emscripten::val options) {
         RunResult result;
-        BufferingSink sink(renderer_, client_, result);
+        ddbsh::render::FormatOptions format;
+        if (std::string error = read_format_options(options, format); !error.empty()) {
+            result.append("stderr", error);
+            result.ok = false;
+            result.status = 1;
+            return result;
+        }
+        BufferingSink sink(format, client_, result);
         std::istringstream in(text);
         ddbsh::cli::StreamLineSource src(in);
         ddbsh::cli::Terminator term;  // the CLI default (`go`); the shim passes no -t

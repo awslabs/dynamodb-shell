@@ -16,7 +16,7 @@
 #   families/   — one manifest .txt per command family (basic, create-drop,
 #                 select, insert-replace, update, delete, transactions, pitr,
 #                 symbol-table, return-values, composite-gsi, vector,
-#                 cross-account, explain, show, help, global-tables,
+#                 cross-account, explain, show, help, formats, global-tables,
 #                 test-cleanup, test-cleanup-last). The original add_test
 #                 lines are reused verbatim; `ddbshtest` is an IMPORTED target
 #                 that resolves to the harness (see below).
@@ -29,6 +29,9 @@
 #   ddbsh-wait  — the region-aware poll-until-state helper used by the control-
 #                 plane settling steps (create-drop throughput, pitr, global-
 #                 tables). Referenced as ${GOLDEN_DIR}/ddbsh-wait.
+#   ddbsh-put-item — writes seed items with the AWS CLI for the types the
+#                 ddbsh grammar has no literal for (binary and sets; the
+#                 formats family). Referenced as ${GOLDEN_DIR}/ddbsh-put-item.
 #
 # The golden `.exp` files, `.sql` seeds, and ddbsh-wait are the fidelity
 # regression contract (D-2i-6: the golden contract is kept, never deleted; the
@@ -102,8 +105,8 @@ set(DATA "${GOLDEN_DIR}/data")
 #   * test-cleanup drops the data-family tables, so it comes AFTER them
 #     (D-2h-1 §7).
 #   * cross-account uses its own account's tables and is unaffected by cleanup.
-#   * explain / show / help are self-contained (each creates+drops its own
-#     tables or needs none), so their position is independent.
+#   * explain / show / help / formats are self-contained (each creates+drops
+#     its own tables or needs none), so their position is independent.
 #   * global-tables is self-contained (its own `gttest` table in
 #     us-east-2/us-west-1) and is registered after every other command family,
 #     contiguous (setup -> check -> completion), gated by region-aware
@@ -129,6 +132,7 @@ set(GOLDEN_FAMILIES
     help
     explain
     show
+    formats
     global-tables
     test-cleanup-last)
 

@@ -1,0 +1,4 @@
+{a: hello, b: 42, c: TRUE, d: NULL, pk: 1, rk: 1}
+{a: "say ""hi"", ok", e: 12345678901234567890.123456789, f: "C:\dir", pk: 1, rk: 2}
+{l: [1, two, [3], {}], m: {x:1, y:{z:deep}}, pk: 1, rk: 3, u: "héllo wörld"}
+{bin: Unknown Type, bs: Unknown Type, ns: Unknown Type, pk: 1, rk: 4, ss: Unknown Type}

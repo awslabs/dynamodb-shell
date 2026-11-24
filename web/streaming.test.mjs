@@ -126,7 +126,7 @@ async function buffered(method, text, responderFactory) {
     events = [];
     const session = new Module.DdbshSession("us-east-1");
     const result = method === "runScript"
-        ? await settle(session.runScript(text, false))
+        ? await settle(session.runScript(text, false, {}))
         : await settle(session.run(text));
     const segments = [];
     for (const seg of result.segments) {

@@ -1,0 +1,4 @@
+[
+  {"a": "hello", "b": 43, "c": true, "d": null, "pk": 1, "rk": 1}
+]
+UPDATE (0 read, 1 modified, 0 ccf)
