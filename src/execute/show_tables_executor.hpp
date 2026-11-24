@@ -30,7 +30,10 @@ namespace ddbsh::engine {
 /// at a time, applies the optional LIKE regex, and emits one ReportOutcome
 /// fragment per matching table as soon as its row is known: just the name
 /// (BRIEF, or when a per-table describe/ttl lookup fails) or the full status
-/// row (P12, D-P12-11). Emits nothing when no table matches.
+/// row (P12, D-P12-11). Each fragment also carries its row by column
+/// (ReportOutcome::table, D-P12-27), and the last name of each ListTables page
+/// marks the page's end; when LIKE drops that name (or the page is empty), an
+/// empty fragment marks it instead, which renders nothing by default.
 Result<void> execute_show_tables(const ShowTablesCmd& cmd, IDDBClient& client, OutcomeSink& sink);
 
 }  // namespace ddbsh::engine

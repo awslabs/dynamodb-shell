@@ -47,8 +47,9 @@ namespace {
 /// (D-P12-15). Returns nullopt for every other command, whose fragments keep
 /// the generic 0 / 1 / MultiOutcome shape.
 ///   * SHOW TABLES / SHOW BACKUPS / SHOW LIMITS / DESCRIBE: every
-///     ReportOutcome's lines, in order, in one ReportOutcome (empty when the
-///     command emitted nothing, e.g. SHOW TABLES over no tables).
+///     ReportOutcome's lines, in order, in one ReportOutcome (no lines when
+///     the command found nothing, e.g. SHOW TABLES over no tables), and every
+///     fragment's table rows in one table with the first fragment's columns.
 ///   * bulk UPDATE / UPSERT / DELETE under EXPLAIN: every ExplainOutcome's
 ///     blocks, in order, in one ExplainOutcome.
 ///   * bulk UPDATE / UPSERT / DELETE with RETURN VALUES: the partial

@@ -458,6 +458,77 @@ TEST(Table, ShowTablesOverTwoPagesThroughASession) {
     EXPECT_EQ(c.out, box_a + box_c);
 }
 
+// ---- reports ------------------------------------------------------------------
+
+TEST(Buffered, ShowTablesFoldsTheTableRowsOfEveryPage) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table_names({"a", "b", "c"});
+    client.set_list_tables_page_size(2);
+    ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, client);
+    auto buffered = session.run("show tables brief;");
+    ASSERT_TRUE(buffered.has_value());
+    const auto* report = std::get_if<ReportOutcome>(&*buffered);
+    ASSERT_NE(report, nullptr);
+    EXPECT_EQ(report->lines, (std::vector<std::string>{"a", "b", "c"}));
+    ASSERT_TRUE(report->table.has_value());
+    EXPECT_EQ(report->table->columns, (std::vector<std::string>{"TableName"}));
+    EXPECT_EQ(report->table->rows.size(), 3u);
+    EXPECT_EQ(ddbsh::render::render_formatted(*buffered, fmt(OutputFormat::csv)),
+              "TableName\na\nb\nc\n");
+}
+
+TEST(Reports, ShowBackupsWithNoBackupIsAnEmptyResultSet) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_backup_pages({{}});
+    ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, client);
+    Capture c(fmt(OutputFormat::csv));
+    auto stmt = session.parse("show backups;");
+    ASSERT_TRUE(stmt.has_value());
+    ASSERT_TRUE(session.execute(*stmt, c.sink).has_value());
+    EXPECT_EQ(c.out,
+              "TableName,BackupName,BackupStatus,BackupArn,CreationDateTime,ExpiryDateTime\n");
+}
+
+TEST(Reports, ShowBackupsRowsByColumn) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_backup_pages({{ddbsh::BackupSummaryRow{
+        "t", "b1", "AVAILABLE", "arn:b1", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"}}});
+    ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, client);
+    Capture c(fmt(OutputFormat::json));
+    auto stmt = session.parse("show backups;");
+    ASSERT_TRUE(stmt.has_value());
+    ASSERT_TRUE(session.execute(*stmt, c.sink).has_value());
+    EXPECT_EQ(c.out,
+              "[\n  {\"TableName\": \"t\", \"BackupName\": \"b1\", \"BackupStatus\": "
+              "\"AVAILABLE\", \"BackupArn\": \"arn:b1\", \"CreationDateTime\": "
+              "\"2026-01-01T00:00:00Z\", \"ExpiryDateTime\": \"2026-02-01T00:00:00Z\"}\n]\n");
+}
+
+TEST(Reports, ShowLimitsIsOneBoxOfFiveRows) {
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::DescribeLimitsOut limits;
+    limits.account_max_rcu = 80000;
+    limits.account_max_wcu = 80000;
+    limits.table_max_rcu = 40000;
+    limits.table_max_wcu = 40000;
+    client.set_describe_limits(limits);
+    ddbsh::Session session(ddbsh::SessionConfig{"us-east-1", ""}, client);
+    Capture c(fmt(OutputFormat::table));
+    auto stmt = session.parse("show limits;");
+    ASSERT_TRUE(stmt.has_value());
+    ASSERT_TRUE(session.execute(*stmt, c.sink).has_value());
+    EXPECT_EQ(c.out,
+              "+-----------+--------------+-------+-------+\n"
+              "| Region    | Limit        | RCU   | WCU   |\n"
+              "+-----------+--------------+-------+-------+\n"
+              "| us-east-1 | Account Max  | 80000 | 80000 |\n"
+              "| us-east-1 | Table Max    | 40000 | 40000 |\n"
+              "| us-east-1 | Total Tables |     0 |     0 |\n"
+              "| us-east-1 | Total GSI    |     0 |     0 |\n"
+              "| us-east-1 | Total        |     0 |     0 |\n"
+              "+-----------+--------------+-------+-------+\n");
+}
+
 // ---- empty results ------------------------------------------------------------
 
 TEST(Empty, EveryFormatShowsAnEmptyResultSet) {
