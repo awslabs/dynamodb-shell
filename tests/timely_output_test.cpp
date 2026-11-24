@@ -269,9 +269,11 @@ TEST(TimelyOutput, ShowTablesLikeSkipsUnmatchedNamesAcrossPages) {
     LogSink sink(log);
 
     // The LIKE drops page 1's last name; the brief form makes no describe call.
+    // Page 1's end is still marked, by an empty fragment that renders nothing
+    // ("emit:") but ends the text table's box (P12, D-P12-24).
     ASSERT_TRUE(stream(session, "show tables brief like \"[ac]\";", sink).has_value());
 
-    const Log expected{"call:ListTables", "emit:a|", "call:ListTables", "emit:c|", "end"};
+    const Log expected{"call:ListTables", "emit:a|", "emit:", "call:ListTables", "emit:c|", "end"};
     EXPECT_EQ(log, expected);
 }
 
@@ -297,14 +299,16 @@ TEST(TimelyOutput, ShowTablesFailureOnALaterPageKeepsTheEarlierRows) {
     EXPECT_EQ(buffered.error().message, "throttled out");
 }
 
-TEST(TimelyOutput, ShowTablesOverNoTablesEmitsNothing) {
+TEST(TimelyOutput, ShowTablesOverNoTablesEmitsOneEmptyPageEnd) {
     Log log;
     RecordingClient client(log);
     ddbsh::Session session = make_session(client);
     LogSink sink(log);
 
+    // One empty fragment marks the empty page's end: nothing in the default
+    // format, an empty result set in the others (P12).
     ASSERT_TRUE(stream(session, "show tables;", sink).has_value());
-    EXPECT_EQ(log, (Log{"call:ListTables", "end"}));
+    EXPECT_EQ(log, (Log{"call:ListTables", "emit:", "end"}));
 
     // Buffered: still the one (empty) ReportOutcome, as before P12.
     auto buffered = session.run("show tables;");
@@ -889,8 +893,7 @@ TEST(TimelyOutput, CliSinkHasEachRowInItsFileBeforeTheNextDescribe) {
         sizes.emplace_back(op, std::ftell(out));
     };
 
-    ddbsh::render::Renderer renderer;
-    ddbsh::cli::FileRenderingSink sink(renderer, out, err);
+    ddbsh::cli::FileRenderingSink sink({}, out, err);
     auto stmt = session.parse("show tables;");
     ASSERT_TRUE(stmt.has_value());
     ASSERT_TRUE(session.execute(*stmt, sink).has_value());
@@ -910,6 +913,51 @@ TEST(TimelyOutput, CliSinkHasEachRowInItsFileBeforeTheNextDescribe) {
 
     std::fseek(out, 0, SEEK_END);
     EXPECT_EQ(std::ftell(out), 3 * row);
+    std::fclose(out);
+    std::fclose(err);
+}
+
+// The same through a formatted output (P12 S4): in JSON each row's element is
+// in the file before the next table's calls, and the closing bracket goes out
+// at the end of the statement.
+TEST(TimelyOutput, CliSinkInJsonHasEachElementInItsFileBeforeTheNextDescribe) {
+    Log log;
+    RecordingClient client(log);
+    seed_three_tables(client);
+    ddbsh::Session session = make_session(client);
+
+    std::FILE* out = std::tmpfile();
+    std::FILE* err = std::tmpfile();
+    ASSERT_NE(out, nullptr);
+    ASSERT_NE(err, nullptr);
+    std::vector<std::pair<std::string, long>> sizes;
+    client.on_call = [&](const std::string& op) {
+        std::fseek(out, 0, SEEK_END);
+        sizes.emplace_back(op, std::ftell(out));
+    };
+
+    ddbsh::cli::FileRenderingSink sink(
+        ddbsh::render::FormatOptions{ddbsh::render::OutputFormat::json,
+                                     ddbsh::render::JsonFlavor::plain},
+        out, err);
+    auto stmt = session.parse("show tables brief;");
+    ASSERT_TRUE(stmt.has_value());
+    ASSERT_TRUE(session.execute(*stmt, sink).has_value());
+
+    // Brief rows make no describe calls, so sample at the ListTables calls:
+    // page 1's two elements are on file before page 2 is requested.
+    const std::string first = "[\n  {\"TableName\": \"a\"},\n  {\"TableName\": \"b\"}";
+    const std::vector<std::pair<std::string, long>> expected{
+        {"ListTables", 0},
+        {"ListTables", static_cast<long>(first.size())},
+    };
+    EXPECT_EQ(sizes, expected);
+
+    std::fseek(out, 0, SEEK_END);
+    std::string text(static_cast<std::size_t>(std::ftell(out)), '\0');
+    std::rewind(out);
+    ASSERT_EQ(std::fread(text.data(), 1, text.size(), out), text.size());
+    EXPECT_EQ(text, first + ",\n  {\"TableName\": \"c\"}\n]\n");
     std::fclose(out);
     std::fclose(err);
 }

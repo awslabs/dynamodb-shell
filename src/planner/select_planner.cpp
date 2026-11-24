@@ -5,6 +5,7 @@
 
 #include "planner/select_planner.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -45,6 +46,36 @@ std::string serialize_projection(const std::vector<std::string>& projection, Sym
         }
     }
     return out;
+}
+
+/// The columns the output formats show first (P12, design §4.3). For
+/// `SELECT *`: the base table's keys, then the index's keys not already
+/// listed. For an explicit projection: the top-level attribute of each path
+/// (`a.b` and `a[0]` both give `a`), in the user's order, without duplicates.
+std::vector<std::string> column_hint_of(const std::vector<std::string>& projection,
+                                        const ResolvedKeySchema& keys) {
+    std::vector<std::string> hint;
+    const auto add = [&hint](std::string name) {
+        if (!name.empty() && std::find(hint.begin(), hint.end(), name) == hint.end()) {
+            hint.push_back(std::move(name));
+        }
+    };
+    if (projection.empty()) {
+        for (const auto& k : keys.table_keys) {
+            add(k);
+        }
+        for (const auto& k : keys.pk) {
+            add(k);
+        }
+        for (const auto& k : keys.rk) {
+            add(k);
+        }
+        return hint;
+    }
+    for (const auto& path : projection) {
+        add(path.substr(0, path.find_first_of(".[")));
+    }
+    return hint;
 }
 
 /// token -> name map (ordered) flattened to the seam's ordered vector form.
@@ -186,6 +217,7 @@ Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
     // governs the token numbering and must match the original exactly.
     SymbolTable st(alias_prefix);
     SelectPlan plan;
+    plan.column_hint = column_hint_of(cmd.projection, *resolved);
 
     if (can_getitem) {
         plan.api = SelectApi::get_item;

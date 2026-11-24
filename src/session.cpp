@@ -69,6 +69,15 @@ std::optional<ExecOutcome> fold_streamed(const Statement& statement,
             for (auto& part : parts) {
                 if (auto* r = std::get_if<ReportOutcome>(&part)) {
                     std::move(r->lines.begin(), r->lines.end(), std::back_inserter(report.lines));
+                    // The rows by column (P12) fold the same way: one table,
+                    // the first fragment's columns, every fragment's rows.
+                    if (r->table.has_value()) {
+                        if (!report.table.has_value()) {
+                            report.table = ReportTable{r->table->columns, {}, true};
+                        }
+                        std::move(r->table->rows.begin(), r->table->rows.end(),
+                                  std::back_inserter(report.table->rows));
+                    }
                 }
             }
             return ExecOutcome{std::move(report)};

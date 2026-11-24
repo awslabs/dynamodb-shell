@@ -28,6 +28,10 @@ namespace ddbsh::engine {
 struct ResolvedKeySchema {
     std::vector<std::string> pk;
     std::vector<std::string> rk;
+    /// The BASE TABLE's key attributes, hash then range, read from the same
+    /// DescribeTable response (equal to pk + rk when no index is named). The
+    /// output formats show them first (P12, SelectOutcome::column_hint).
+    std::vector<std::string> table_keys{};
 };
 
 /// Resolve the key schema for `table` (when `index` is empty) or for the named

@@ -129,13 +129,13 @@ TEST(CliExitCode, FailInFirstBatchSucceedInSecondExitsZero) {
 // delivers result fragments and errors in emission order and returns the same
 // exit code.
 
-struct RecordingSink : ddbsh::OutcomeSink {
-    const ddbsh::render::Renderer& renderer;
-    std::string& log;
-    RecordingSink(const ddbsh::render::Renderer& r, std::string& l) : renderer(r), log(l) {}
-    void emit(const ddbsh::ExecOutcome& fragment) override {
-        log += "O:" + renderer.render(fragment);
-    }
+// A FormattingSink in the default format whose writer logs each piece of
+// result output as "O:<text>" (the stderr stream is not expected here).
+struct RecordingSink : ddbsh::render::FormattingSink {
+    explicit RecordingSink(std::string& log)
+        : FormattingSink({}, [&log](ddbsh::render::Stream stream, std::string_view text) {
+              log += (stream == ddbsh::render::Stream::out ? "O:" : "D:") + std::string(text);
+          }) {}
 };
 
 int run_to_sink(const std::string& source, bool abort_on_error, std::string& log) {
@@ -145,7 +145,7 @@ int run_to_sink(const std::string& source, bool abort_on_error, std::string& log
     std::istringstream in(source);
     StreamLineSource src(in);
     Terminator term;
-    RecordingSink sink(renderer, log);
+    RecordingSink sink(log);
     return run_source(session, renderer, src, term, abort_on_error, sink,
                       [&log](const std::string& rendered) { log += "E:" + rendered; });
 }

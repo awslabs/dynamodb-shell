@@ -71,6 +71,10 @@ public:
     /// final figure once next_page() has returned nullptr.
     std::optional<ConsumedCapacity> consumed_capacity() const;
 
+    /// The columns the output formats show first (P12,
+    /// SelectOutcome::column_hint), from the plan.
+    const std::vector<std::string>& column_hint() const noexcept { return column_hint_; }
+
 private:
     friend Result<SelectRowCursor> open_select_cursor(const SelectCmd&, IDDBClient&,
                                                       const std::string&, RateLimiter::Clock,
@@ -85,7 +89,8 @@ private:
     ScanIn scan_{};
     std::optional<RateLimiter> limiter_{};
     ConsumedCapacityTotalizer totalizer_{};
-    bool report_capacity_ = false;  ///< user asked for RETURN CONSUMED CAPACITY
+    bool report_capacity_ = false;            ///< user asked for RETURN CONSUMED CAPACITY
+    std::vector<std::string> column_hint_{};  ///< SelectOutcome::column_hint
 
     std::vector<ItemRow> page_{};  ///< the most recently yielded page
     bool more_ = true;             ///< a further request may yield rows

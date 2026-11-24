@@ -7,6 +7,7 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ddbsh::engine {
 
@@ -289,25 +290,50 @@ Result<void> execute_show_backups(const ShowBackupsCmd& cmd, IDDBClient& client,
     // page is requested (P12, D-P12-11), as the original show_backups.cpp
     // printed each page's summaries inside its loop. A failure on a later page
     // leaves the earlier pages emitted (D-P12-14).
+    // Each fragment also carries its rows by column for the output formats
+    // (P12, D-P12-27); one fragment is one page, so each ends a group. When no
+    // page has a backup, one empty fragment still goes out, so a formatted
+    // output shows an empty result set (it renders nothing by default).
+    static const std::vector<std::string> columns{"TableName",        "BackupName",
+                                                  "BackupStatus",     "BackupArn",
+                                                  "CreationDateTime", "ExpiryDateTime"};
+    bool emitted = false;
     for (;;) {
         auto page = client.list_backups(request);
         if (!page.has_value()) {
             return fail(page.error());
         }
         ReportOutcome report;
+        ReportTable table;
+        table.columns = columns;
         for (const auto& s : page->summaries) {
             report.lines.push_back("Table: " + s.table_name + ", Backup: " + s.backup_name +
                                    ", Status: " + s.backup_status + ", ARN: " + s.backup_arn +
                                    ", On: " + s.creation_datetime +
                                    ", Expires: " + s.expiry_datetime);
+            table.rows.push_back(ValueMap{
+                {"TableName", Value::string_value(s.table_name)},
+                {"BackupName", Value::string_value(s.backup_name)},
+                {"BackupStatus", Value::string_value(s.backup_status)},
+                {"BackupArn", Value::string_value(s.backup_arn)},
+                {"CreationDateTime", Value::string_value(s.creation_datetime)},
+                {"ExpiryDateTime", Value::string_value(s.expiry_datetime)},
+            });
         }
         if (!report.lines.empty()) {
+            report.table = std::move(table);
             sink.emit(ExecOutcome{std::move(report)});
+            emitted = true;
         }
         if (!page->last_evaluated_backup_arn.has_value()) {
             break;
         }
         request.exclusive_start_backup_arn = page->last_evaluated_backup_arn;
+    }
+    if (!emitted) {
+        ReportOutcome empty;
+        empty.table = ReportTable{columns, {}, true};
+        sink.emit(ExecOutcome{std::move(empty)});
     }
     return {};
 }
@@ -330,6 +356,21 @@ Result<void> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client,
     // ("Table Max (RCU, WCU):  %lld, %lld").
     header.lines.push_back("Table Max (RCU, WCU):  " + std::to_string(limits->table_max_rcu) +
                            ", " + std::to_string(limits->table_max_wcu));
+    // By column for the output formats (P12, D-P12-27): one row per figure,
+    // with the region on every row. The header's rows do not end a group, so
+    // the text table shows SHOW LIMITS as one box.
+    const auto limit_row = [&region](const char* limit, long long rcu, long long wcu) {
+        return ValueMap{{"Region", Value::string_value(region)},
+                        {"Limit", Value::string_value(limit)},
+                        {"RCU", Value::number_value(std::to_string(rcu))},
+                        {"WCU", Value::number_value(std::to_string(wcu))}};
+    };
+    static const std::vector<std::string> columns{"Region", "Limit", "RCU", "WCU"};
+    header.table =
+        ReportTable{columns,
+                    {limit_row("Account Max", limits->account_max_rcu, limits->account_max_wcu),
+                     limit_row("Table Max", limits->table_max_rcu, limits->table_max_wcu)},
+                    false};
     sink.emit(ExecOutcome{std::move(header)});
 
     auto listed = client.list_tables(ListTablesIn{});
@@ -370,6 +411,11 @@ Result<void> execute_show_limits(const ShowLimitsCmd&, IDDBClient& client,
                            std::to_string(gsiwcus));
     totals.lines.push_back("Total (RCU, WCU): " + std::to_string(rcus + gsircus) + ", " +
                            std::to_string(wcus + gsiwcus));
+    totals.table = ReportTable{
+        columns,
+        {limit_row("Total Tables", rcus, wcus), limit_row("Total GSI", gsircus, gsiwcus),
+         limit_row("Total", rcus + gsircus, wcus + gsiwcus)},
+        true};
     sink.emit(ExecOutcome{std::move(totals)});
     return {};
 }

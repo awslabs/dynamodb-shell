@@ -25,6 +25,7 @@
 #include <string>
 #include <string_view>
 
+#include "ddbsh/format.hpp"
 #include "ddbsh/outcome_sink.hpp"
 #include "ddbsh/renderer.hpp"
 #include "ddbsh/retry_event.hpp"
@@ -32,25 +33,27 @@
 
 namespace ddbsh::cli {
 
-/// The CLI's file-writing sink: renders each outcome fragment as the engine
-/// emits it and flushes, so a streaming command's output appears as its data
-/// arrives (P12, D-P12-1) and a multi-row INSERT interleaves its written
-/// status tokens with a mid-batch error exactly as the original did (AI-4 /
-/// D-2c-12). `out` gets the result bytes; `err` gets any diagnostics the
-/// outcome carries (a transaction's non-reducible-SELECT message, D-2d-6).
-/// Both default to the process's stdout/stderr; tests pass a temporary file.
-class FileRenderingSink : public ddbsh::OutcomeSink {
+/// The CLI's file-writing sink: a FormattingSink (ddbsh/format.hpp) whose
+/// writer puts result bytes on `out` and diagnostics on `err`, flushing after
+/// every write, so a streaming command's output appears as its data arrives
+/// (P12, D-P12-1) and a multi-row INSERT interleaves its written status tokens
+/// with a mid-batch error exactly as the original did (AI-4 / D-2c-12). In the
+/// default format it writes exactly what the Renderer renders; `--output` and
+/// `set output` select another format (P12, D-P12-26). Both streams default to
+/// the process's stdout/stderr; tests pass temporary files.
+class FileRenderingSink : public ddbsh::render::FormattingSink {
 public:
-    explicit FileRenderingSink(const ddbsh::render::Renderer& renderer, std::FILE* out = stdout,
-                               std::FILE* err = stderr)
-        : renderer_(renderer), out_(out), err_(err) {}
-    void emit(const ddbsh::ExecOutcome& fragment) override;
-
-private:
-    const ddbsh::render::Renderer& renderer_;
-    std::FILE* out_;
-    std::FILE* err_;
+    explicit FileRenderingSink(ddbsh::render::FormatOptions options = {}, std::FILE* out = stdout,
+                               std::FILE* err = stderr);
 };
+
+/// The message for an output format the CLI does not know, newline included:
+///   unknown output format: <id> (expected default, json, csv, table)
+std::string unknown_output_format_message(std::string_view id);
+
+/// The message for a JSON flavor the CLI does not know, newline included:
+///   unknown JSON flavor: <id> (expected plain, dynamodb)
+std::string unknown_json_flavor_message(std::string_view id);
 
 /// The text of one `--show-retries` line (P12, D-P12-20), newline included:
 ///   ddbsh: Scan throttled (ProvisionedThroughputExceededException); attempt 2 of 3 in 150 ms
@@ -105,6 +108,16 @@ bool is_terminator_line(std::string_view trimmed, const Terminator& term);
 // becomes the given word (surrounding quotes stripped). Returns true if the
 // line was the directive and was consumed.
 bool try_set_terminator_directive(std::string_view trimmed, Terminator& term);
+
+// Recognize the CLI-only output directives at the start of a batch (P12,
+// D-P12-26): `set output <format>` (default, json, csv, table) and
+// `set json-flavor <flavor>` (plain, dynamodb). Keywords and values are ASCII
+// case-insensitive; surrounding quotes on the value are stripped. Returns true
+// if the line was one of them and was consumed. A known value updates
+// `options`; an unknown one leaves it unchanged and sets `error` to the
+// message (unknown_output_format_message / unknown_json_flavor_message).
+bool try_set_output_directive(std::string_view trimmed, ddbsh::render::FormatOptions& options,
+                              std::string& error);
 
 // A source of physical input lines (one line, newline stripped), or nullopt at
 // end of input. Isolates the CLI's input backends behind one seam.
@@ -165,22 +178,30 @@ BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Rendere
 
 // Drive a LineSource through the isql assembly loop: buffer lines until a
 // terminator line (or EOF), flush each batch to the engine. Honors the runtime
-// `set terminator` meta-command (at batch start), stop-on-quit, and
-// abort-on-error. Returns the exit code: the last EXECUTED statement's error
-// status across the whole source (0 if the last executed statement succeeded or
-// none ran), with the original's last-executed-statement semantics (2h-3).
+// `set terminator` and `set output` / `set json-flavor` meta-commands (at
+// batch start), stop-on-quit, and abort-on-error. Returns the exit code: the
+// last EXECUTED statement's error status across the whole source (0 if the
+// last executed statement succeeded or none ran), with the original's
+// last-executed-statement semantics (2h-3). Output goes to stdout/stderr
+// through a FileRenderingSink. When `format` is set, the sink starts with
+// that selection and `*format` receives the selection in force at the end, so
+// the CLI can carry a config file's `set output` into the session (D-P12-26).
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
-               Terminator& term, bool abort_on_error);
+               Terminator& term, bool abort_on_error,
+               ddbsh::render::FormatOptions* format = nullptr);
 
 // The output-channel-agnostic core of run_source (above): the same isql
-// assembly loop, terminator handling, stop-on-quit, abort-on-error, and
-// last-executed-statement exit code, but each batch's result fragments go to
-// `sink` and each rendered error to `report_error` (exactly as run_batch). The
-// FD-writing overload delegates here with the CLI's stdout/stderr sink, so the
-// CLI bytes are unchanged; the browser embedding (web/bindings.cpp runScript,
-// P9 D-P9-02-11) buffers them into ordered segments instead.
+// assembly loop, terminator handling, output directives, stop-on-quit,
+// abort-on-error, and last-executed-statement exit code, but each batch's
+// result fragments go to `sink` and each rendered error (and an output
+// directive's unknown-value message) to `report_error` (exactly as
+// run_batch). An output directive changes `sink`'s options for the
+// statements that follow. The FD-writing overload delegates here with the
+// CLI's stdout/stderr sink, so the CLI bytes are unchanged; the browser
+// embedding (web/bindings.cpp runScript, P9 D-P9-02-11) buffers them into
+// ordered segments instead.
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,
-               Terminator& term, bool abort_on_error, ddbsh::OutcomeSink& sink,
+               Terminator& term, bool abort_on_error, ddbsh::render::FormattingSink& sink,
                const std::function<void(const std::string&)>& report_error);
 
 }  // namespace ddbsh::cli

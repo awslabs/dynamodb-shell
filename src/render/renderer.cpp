@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "ddbsh/value.hpp"
+#include "render/render_detail.hpp"
 
 namespace ddbsh::render {
 
@@ -113,17 +114,6 @@ std::string render_consumed_capacity(const ConsumedCapacity& cc) {
     return "SELECT (" + capacity + ")\n";
 }
 
-/// Format a SearchVectors similarity score (D-4b-6). trim_double trims trailing
-/// zeros but does not handle a leading '-' (DOT_PRODUCT scores can be
-/// negative), so the sign is split off and reapplied.
-std::string format_score(double score) {
-    std::string s = std::to_string(score);
-    if (!s.empty() && s[0] == '-') {
-        return "-" + trim_double(s.substr(1));
-    }
-    return trim_double(s);
-}
-
 std::string render_select(const SelectOutcome& s) {
     std::string out;
     for (const auto& item : s.items) {
@@ -149,9 +139,9 @@ std::string render_vector_search(const VectorSearchOutcome& v) {
     for (const auto& row : v.rows) {
         std::string item = show_item(row.item);
         if (item.empty()) {
-            out += "score " + format_score(row.score) + "\n";
+            out += "score " + detail::format_score(row.score) + "\n";
         } else {
-            out += item + " score " + format_score(row.score) + "\n";
+            out += item + " score " + detail::format_score(row.score) + "\n";
         }
     }
     if (v.vector_capacity.has_value()) {
@@ -347,6 +337,17 @@ std::string render_outcome_stderr(const ExecOutcome& outcome) {
 }
 
 }  // namespace
+
+/// Format a SearchVectors similarity score (D-4b-6). trim_double trims trailing
+/// zeros but does not handle a leading '-' (DOT_PRODUCT scores can be
+/// negative), so the sign is split off and reapplied.
+std::string detail::format_score(double score) {
+    std::string s = std::to_string(score);
+    if (!s.empty() && s[0] == '-') {
+        return "-" + trim_double(s.substr(1));
+    }
+    return trim_double(s);
+}
 
 std::string render_value(const Value& v) {
     // Port of CSelectHelper::serialize_value (arch §9). Nested maps use `:`

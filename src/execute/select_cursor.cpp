@@ -33,6 +33,7 @@ Result<SelectRowCursor> open_select_cursor(const SelectCmd& cmd, IDDBClient& cli
     cursor.query_ = std::move(plan.query);
     cursor.scan_ = std::move(plan.scan);
     cursor.report_capacity_ = (cmd.rcc != ReturnConsumedCapacity::none);
+    cursor.column_hint_ = std::move(plan.column_hint);
 
     // A WITH RATELIMIT clause meters the read bucket across pages (select.cpp
     // do_query/do_scan). GetItem is a single request — the original builds no

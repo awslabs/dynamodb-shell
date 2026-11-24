@@ -125,6 +125,7 @@ add_library(ddbsh
             src/retry_event.cpp
             src/connection/connection.cpp
             src/render/renderer.cpp
+            src/render/format.cpp
             src/parser/driver.cpp
             src/parser/param_bind.cpp
             src/parser/lex_debug.cpp
@@ -323,6 +324,7 @@ if(DDBSH_BUILD_TESTS)
                    tests/select_exec_test.cpp
                    tests/select_stream_test.cpp
                    tests/timely_output_test.cpp
+                   tests/format_test.cpp
                    tests/write_exec_test.cpp
                    tests/update_delete_exec_test.cpp
                    tests/return_values_ratelimit_test.cpp

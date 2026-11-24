@@ -22,6 +22,7 @@
 #define DDBSH_SRC_PLANNER_SELECT_PLANNER_HPP
 
 #include <string>
+#include <vector>
 
 #include "ddbsh/iddbclient.hpp"
 #include "ddbsh/result.hpp"
@@ -41,6 +42,10 @@ struct SelectPlan {
     QueryIn query;
     ScanIn scan;
     SearchVectorsIn search_vectors;  ///< phase 4b (api == search_vectors)
+    /// The columns the output formats show first (P12,
+    /// SelectOutcome::column_hint). Set for get_item/query/scan; empty for
+    /// search_vectors.
+    std::vector<std::string> column_hint;
 };
 
 /// Plan a SELECT. `alias_prefix` seeds the single SymbolTable (one per SELECT,

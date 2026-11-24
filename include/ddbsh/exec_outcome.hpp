@@ -35,11 +35,28 @@ struct StatusOutcome {
     std::vector<std::string> diagnostics{};
 };
 
+/// The rows of a report that has natural columns (SHOW TABLES, SHOW BACKUPS,
+/// SHOW LIMITS), for the opt-in output formats (P12, D-P12-27; format.hpp).
+/// `columns` is the complete, ordered column list; each row maps a column name
+/// to its value and may omit columns (a SHOW TABLES row whose describe failed
+/// carries only TableName). `group_end` marks the last row of an API page
+/// (one ListTables or ListBackups response); the text-table format prints a
+/// box there.
+struct ReportTable {
+    std::vector<std::string> columns;
+    std::vector<ValueMap> rows;
+    bool group_end = true;
+};
+
 /// A multi-line semi-structured human report: DESCRIBE, SHOW LIMITS,
 /// SHOW CREATE TABLE, SHOW TABLES/BACKUPS, DESCRIBE BACKUP. The command builds
 /// the lines (report shaping, not I/O); the Renderer joins them (P2a-03 §4.2).
+/// `table` is the same content as rows, set only by the reports with natural
+/// columns (P12); the Renderer ignores it, so `lines` alone decides the
+/// default output.
 struct ReportOutcome {
     std::vector<std::string> lines;
+    std::optional<ReportTable> table{};
 };
 
 /// Blank-line / comment-only input: renders nothing.
@@ -55,6 +72,12 @@ struct EmptyOutcome {};
 struct SelectOutcome {
     std::vector<ItemRow> items;
     std::optional<ConsumedCapacity> consumed_capacity;
+    /// The columns the opt-in output formats show first (P12, design §4.3;
+    /// format.hpp): for `SELECT *`, the base table's key attributes, then the
+    /// index's keys for a `.index` read; for an explicit projection, the
+    /// top-level attribute of each projected path, in the user's order,
+    /// without duplicates. The Renderer ignores it. Empty when unknown.
+    std::vector<std::string> column_hint{};
 };
 
 /// The result of a SELECT … NEAREST <n> TO [ … ] on a vector index
