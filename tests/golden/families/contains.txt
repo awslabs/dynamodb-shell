@@ -63,11 +63,12 @@ add_test(NAME icont-explain-string COMMAND ddbshtest -q -T ${RD}/icont-explain-s
 add_test(NAME icont-explain-update COMMAND ddbshtest -q -T ${RD}/icont-explain-update.exp -c "explain update ddbsh_contains set hit = 1 where pk = 1 and contains(l, NULL);")
 add_test(NAME icont-explain-upsert-bulk COMMAND ddbshtest -q -T ${RD}/icont-explain-upsert-bulk.exp -c "explain upsert ddbsh_contains set hit = 1 where contains(ns, 7);")
 add_test(NAME icont-explain-delete COMMAND ddbshtest -q -T ${RD}/icont-explain-delete.exp -c "explain delete from ddbsh_contains where pk = 6 and contains(l, FALSE);")
-# A TransactWriteItems EXPLAIN ends with a per-run ClientRequestToken, so
-# icont-explain-txn matches the two conditions and their operand types in
-# order with a regex instead of a byte-exact golden.
+# A TransactWriteItems EXPLAIN ends with a per-run ClientRequestToken in the
+# native edition (the AWS SDK for C++ fills it in; the browser edition sends
+# none), so icont-explain-txn matches the two conditions and their operand
+# types in order with a regex instead of a byte-exact golden.
 add_test(NAME icont-explain-txn COMMAND ddbshtest -q -c "explain begin; update ddbsh_contains set tx = 1 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 1 and contains(l, NULL); commit;")
-set_property(TEST icont-explain-txn PROPERTY PASS_REGULAR_EXPRESSION "^TransactWriteItems[(][{].*\"Update\":.*\"ConditionExpression\":   \"attribute_exists[(]#aaaa2[)] AND contains[(]#aaaa3, :vaaa2[)]\".*\":vaaa2\":   [{][\r\n ]*\"BOOL\":   true.*\"ConditionCheck\":.*\"ConditionExpression\":   \"contains[(]#abaa1, :vbaa1[)] AND attribute_exists[(]#abaa2[)]\".*\":vbaa1\":   [{][\r\n ]*\"NULL\":   true.*\"ClientRequestToken\":   \"[0-9A-F-]+\"[\r\n]+[}][)][\r\n]*$")
+set_property(TEST icont-explain-txn PROPERTY PASS_REGULAR_EXPRESSION "^TransactWriteItems[(][{].*\"Update\":.*\"ConditionExpression\":   \"attribute_exists[(]#aaaa2[)] AND contains[(]#aaaa3, :vaaa2[)]\".*\":vaaa2\":   [{][\r\n ]*\"BOOL\":   true.*\"ConditionCheck\":.*\"ConditionExpression\":   \"contains[(]#abaa1, :vbaa1[)] AND attribute_exists[(]#abaa2[)]\".*\":vbaa1\":   [{][\r\n ]*\"NULL\":   true.*[}][)][\r\n]*$")
 
 # --- UPDATE / UPSERT: single-item condition (full key) and bulk (Scan) ---
 add_test(NAME icont-update-single COMMAND ddbshtest -q -T ${RD}/icont-update-single.exp -c "update ddbsh_contains set hit = 1 where pk = 1 and contains(l, NULL);")
@@ -78,10 +79,11 @@ add_test(NAME icont-upsert-bulk COMMAND ddbshtest -q -T ${RD}/icont-upsert-bulk.
 
 # --- Write transaction: Update with a CONTAINS condition plus a ConditionCheck ---
 add_test(NAME icont-txn-commit COMMAND ddbshtest -q -T ${RD}/icont-txn-commit.exp -c "begin; update ddbsh_contains set tx = 1 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 1 and contains(l, NULL); commit;")
-# The cancellation message carries a per-request id, so icont-txn-abort matches
-# a regex (as itxt-11 does) instead of a byte-exact golden.
+# The cancellation message carries a per-request id (empty in the browser
+# edition), so icont-txn-abort matches a regex (as itxt-11 does) instead of a
+# byte-exact golden.
 add_test(NAME icont-txn-abort COMMAND ddbshtest -q -c "begin; update ddbsh_contains set tx = 2 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 2 and contains(l, NULL); commit;")
-set_property(TEST icont-txn-abort PROPERTY PASS_REGULAR_EXPRESSION "ABORT[\r\n]+Transaction failed\\. TransactionCanceledException\\. [A-Z0-9]+\\. Transaction cancelled, please refer cancellation reasons for specific reasons \\[None, ConditionalCheckFailed\\]")
+set_property(TEST icont-txn-abort PROPERTY PASS_REGULAR_EXPRESSION "ABORT[\r\n]+Transaction failed\\. TransactionCanceledException\\. [A-Z0-9]*\\. Transaction cancelled, please refer cancellation reasons for specific reasons \\[None, ConditionalCheckFailed\\]")
 add_test(NAME icont-after-writes COMMAND ddbshtest -q -s -T ${RD}/icont-after-writes.exp -c "select pk, hit, hit2, hit3, hit4, tx from ddbsh_contains;")
 
 # --- DELETE: single-item condition (mismatch, then match) and bulk (Scan) ---
