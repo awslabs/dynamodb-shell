@@ -1,0 +1,48 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# statement-end.txt — golden family for B4: a statement ends only at ';' or at
+# the end of the input. A token after a complete statement is a syntax error,
+# and nothing runs.
+#
+# Before B4 the grammar ended a statement on any following token, so the valid
+# prefix ran and the token was lost: `delete from t wehre pk = 1` deleted every
+# item, `delete from t where pk = 1 adn rk = 0` deleted the whole partition,
+# and `drop table t foo bar` dropped the table. v0.8.1 put ';' inside every
+# command production (parser.y) and appended the ';' that `-c` text lacked, so
+# each case below was a syntax error there and ran nothing. These goldens pin
+# that restored behavior.
+#
+# Each error golden holds the original's "[line, col] syntax error at <token>"
+# line, then the source line and a caret under the token (the additive caret
+# diagnostic, P4a-02 item 3). istmt-after then shows that the table and
+# its three items are unchanged after every case ran.
+#
+# Self-contained: it drops (if present), creates and seeds its own table
+# ddbsh_stmtend, and drops it at the end, so its position in GOLDEN_FAMILIES
+# does not matter to the other families.
+#
+# Recorded against real DynamoDB (632195519165, us-east-1) and reviewed by eye.
+#
+# WARNING: creates and drops a REAL DynamoDB table (ddbsh_stmtend) per run.
+
+add_test(NAME istmt-setup-drop COMMAND ddbshtest -c "drop table if exists ddbsh_stmtend;")
+add_test(NAME istmt-setup-load COMMAND ddbshtest -e -c "create table ddbsh_stmtend ( pk number, rk number ) primary key ( pk hash, rk range ); insert into ddbsh_stmtend (pk, rk, x) values (1, 0, 0), (1, 1, 0), (2, 0, 0);")
+
+# `consistent` belongs after `select`; after the table name it is a syntax error.
+add_test(NAME istmt-select-consistent COMMAND ddbshtest -q -T ${RD}/istmt-select-consistent.exp -c "select pk from ddbsh_stmtend consistent;")
+# A trailing token with no ';' (the end of input ends a statement, not a token).
+add_test(NAME istmt-select-trailing COMMAND ddbshtest -q -T ${RD}/istmt-select-trailing.exp -c "select pk from ddbsh_stmtend foo")
+# Misspelled WHERE: before B4 this deleted or updated every item.
+add_test(NAME istmt-delete-wehre COMMAND ddbshtest -q -T ${RD}/istmt-delete-wehre.exp -c "delete from ddbsh_stmtend wehre pk = 1;")
+add_test(NAME istmt-explain-delete-wehre COMMAND ddbshtest -q -T ${RD}/istmt-explain-delete-wehre.exp -c "explain delete from ddbsh_stmtend wehre pk = 1;")
+add_test(NAME istmt-update-wher COMMAND ddbshtest -q -T ${RD}/istmt-update-wher.exp -c "update ddbsh_stmtend set x = 1 wher pk = 1 and rk = 0;")
+# Misspelled AND: before B4 this deleted the whole pk = 1 partition.
+add_test(NAME istmt-delete-adn COMMAND ddbshtest -q -T ${RD}/istmt-delete-adn.exp -c "delete from ddbsh_stmtend where pk = 1 adn rk = 0;")
+# Trailing tokens on DROP TABLE: before B4 this dropped the table.
+add_test(NAME istmt-drop-trailing COMMAND ddbshtest -q -T ${RD}/istmt-drop-trailing.exp -c "drop table ddbsh_stmtend foo bar;")
+
+# Nothing above ran: the table exists and its three items are unchanged.
+add_test(NAME istmt-after COMMAND ddbshtest -s -q -T ${RD}/istmt-after.exp -c "select * from ddbsh_stmtend")
+
+add_test(NAME istmt-teardown COMMAND ddbshtest -c "drop table ddbsh_stmtend;")

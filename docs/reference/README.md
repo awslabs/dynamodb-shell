@@ -215,6 +215,12 @@ which parses every `;`-terminated statement in order (a missing trailing `;` on
 the last statement is tolerated). Statements inside a batch stay `;`-terminated;
 the terminator word itself is never sent to the engine.
 
+A statement ends only at its `;` or at the end of the batch. Any other token
+after a complete statement is a syntax error, and the statement does not run:
+`DELETE FROM t WEHRE pk = 1;` reports `syntax error at WEHRE` and deletes
+nothing. When a statement in a batch fails to parse, the statements before it
+run and the ones after it do not.
+
 - The default terminator is the word `go` on a line by itself (case-insensitive).
 - `-t[STR]` / `--terminator[=STR]` overrides the terminator word. `-t` with **no
   argument** makes a **blank line** the terminator.

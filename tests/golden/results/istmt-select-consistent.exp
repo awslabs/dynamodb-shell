@@ -1,0 +1,3 @@
+[1, 40] syntax error at consistent
+select pk from ddbsh_stmtend consistent;
+                             ^
