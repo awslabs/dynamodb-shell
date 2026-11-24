@@ -1,0 +1,108 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# vector-filters.txt — LIVE real-DynamoDB goldens for SearchConditionExpression
+# operators on vector-index inline filters (P13 T1).
+#
+# DynamoDB's inline filters now take range and membership operators, not only
+# equality (the guide's "SearchConditionExpression reference for vector
+# indexes"). The planner passes the WHERE tree to SearchVectors as a
+# SearchConditionExpression without validating it, so these goldens pin both
+# what ddbsh sends (the EXPLAIN cases) and what the service returns or rejects
+# (the data and error cases). The service's error strings are contracts.
+#
+# The seed ${DATA}/ddbsh-vec-f.sql builds ddbsh_vec_f with two vector indexes:
+# fidx (HASH tenant; inline filters price N, rating N, brand S) and widx (the
+# same inline filters, no HASH). Item N sits at [N, 0] and every query searches
+# from [0, 0], so item N scores N and no scores tie. NEAREST 12 covers every
+# item, so a data golden lists exactly the items the filter keeps. Data cases
+# use -s (rows come back in score order and the family sorts, as vector.txt
+# does); error and EXPLAIN cases are single, deterministic outputs, unsorted.
+#
+# `price > rating` (comparing two attributes) cannot be written in ddbsh: the
+# right side of a comparison is a literal, so ivecf-err-two-attrs pins ddbsh's
+# own syntax error. As in v0.8.1, `<>` passes through as `#a <> :v`
+# (ivecf-explain-ne) while `!=` desugars to `NOT (#a = :v)`
+# (ivecf-explain-bang-ne); the service accepts both and returns the same rows
+# (ivecf-ne-s, ivecf-bang-ne-s, ivecf-not), items without the attribute
+# included.
+#
+# Self-contained: it drops ddbsh_vec_f if present, creates and seeds it, and
+# drops it at the end. test-cleanup also drops it (if exists nowait).
+#
+# AUTHORED goldens (SearchVectors postdates v0.8.1, so there is no oracle),
+# recorded against real DynamoDB (632195519165, us-east-1) and checked by eye
+# against the seed table above.
+#
+# WARNING: creates and drops a REAL DynamoDB table (ddbsh_vec_f) per run.
+
+add_test(NAME ivecf-setup-drop COMMAND ddbshtest -c "drop table if exists ddbsh_vec_f;")
+add_test(NAME ivecf-setup COMMAND ddbshtest -e -f ${DATA}/ddbsh-vec-f.sql)
+
+# --- Data: operators the service accepts (whole index widx, then HASH fidx) ---
+add_test(NAME ivecf-lt COMMAND ddbshtest -q -s -T ${RD}/ivecf-lt.exp -c "select id from ddbsh_vec_f.widx where price < 30 nearest 12 to [0, 0];")
+add_test(NAME ivecf-le COMMAND ddbshtest -q -s -T ${RD}/ivecf-le.exp -c "select id from ddbsh_vec_f.widx where price <= 30 nearest 12 to [0, 0];")
+add_test(NAME ivecf-gt COMMAND ddbshtest -q -s -T ${RD}/ivecf-gt.exp -c "select id from ddbsh_vec_f.widx where price > 40 nearest 12 to [0, 0];")
+add_test(NAME ivecf-ge COMMAND ddbshtest -q -s -T ${RD}/ivecf-ge.exp -c "select id from ddbsh_vec_f.widx where price >= 40 nearest 12 to [0, 0];")
+add_test(NAME ivecf-between COMMAND ddbshtest -q -s -T ${RD}/ivecf-between.exp -c "select id from ddbsh_vec_f.widx where price between 20 and 40 nearest 12 to [0, 0];")
+add_test(NAME ivecf-between-equal COMMAND ddbshtest -q -s -T ${RD}/ivecf-between-equal.exp -c "select id from ddbsh_vec_f.widx where rating between 2 and 2 nearest 12 to [0, 0];")
+add_test(NAME ivecf-ne-n COMMAND ddbshtest -q -s -T ${RD}/ivecf-ne-n.exp -c "select id from ddbsh_vec_f.widx where price <> 30 nearest 12 to [0, 0];")
+add_test(NAME ivecf-bang-ne-s COMMAND ddbshtest -q -s -T ${RD}/ivecf-bang-ne-s.exp -c "select id from ddbsh_vec_f.widx where brand != \"acme\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-ne-s COMMAND ddbshtest -q -s -T ${RD}/ivecf-ne-s.exp -c "select id from ddbsh_vec_f.widx where brand <> \"acme\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-in-n COMMAND ddbshtest -q -s -T ${RD}/ivecf-in-n.exp -c "select id from ddbsh_vec_f.widx where price in (10, 20, 60) nearest 12 to [0, 0];")
+add_test(NAME ivecf-in-s COMMAND ddbshtest -q -s -T ${RD}/ivecf-in-s.exp -c "select id from ddbsh_vec_f.widx where brand in (\"acme\", \"cirque\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-eq-s COMMAND ddbshtest -q -s -T ${RD}/ivecf-eq-s.exp -c "select id from ddbsh_vec_f.widx where brand = \"bravo\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-and COMMAND ddbshtest -q -s -T ${RD}/ivecf-and.exp -c "select id from ddbsh_vec_f.widx where price > 20 and rating >= 3 nearest 12 to [0, 0];")
+add_test(NAME ivecf-or COMMAND ddbshtest -q -s -T ${RD}/ivecf-or.exp -c "select id from ddbsh_vec_f.widx where brand = \"acme\" or price > 50 nearest 12 to [0, 0];")
+add_test(NAME ivecf-not COMMAND ddbshtest -q -s -T ${RD}/ivecf-not.exp -c "select id from ddbsh_vec_f.widx where not (brand = \"acme\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-exists COMMAND ddbshtest -q -s -T ${RD}/ivecf-exists.exp -c "select id from ddbsh_vec_f.widx where attribute_exists(brand) nearest 12 to [0, 0];")
+add_test(NAME ivecf-not-exists COMMAND ddbshtest -q -s -T ${RD}/ivecf-not-exists.exp -c "select id from ddbsh_vec_f.widx where attribute_not_exists(brand) nearest 12 to [0, 0];")
+add_test(NAME ivecf-ne-and-exists COMMAND ddbshtest -q -s -T ${RD}/ivecf-ne-and-exists.exp -c "select id from ddbsh_vec_f.widx where brand <> \"acme\" and attribute_exists(brand) nearest 12 to [0, 0];")
+add_test(NAME ivecf-group COMMAND ddbshtest -q -s -T ${RD}/ivecf-group.exp -c "select id from ddbsh_vec_f.widx where (brand = \"acme\" or brand = \"bravo\") and not (price < 20) nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-eq COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-eq.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t1\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-between COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-between.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t1\" and price between 20 and 40 nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-or-group COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-or-group.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t2\" and (brand = \"acme\" or brand = \"bravo\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-ne COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-ne.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t1\" and price <> 30 nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-in COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-in.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t2\" and brand in (\"acme\", \"cirque\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-and-and COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-and-and.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t2\" and price > 20 and rating < 4 nearest 12 to [0, 0];")
+add_test(NAME ivecf-hash-paren COMMAND ddbshtest -q -s -T ${RD}/ivecf-hash-paren.exp -c "select id from ddbsh_vec_f.fidx where (tenant = \"t1\" and price > 30) nearest 12 to [0, 0];")
+
+# --- Errors: the service rejects these (verbatim ValidationException text) ---
+add_test(NAME ivecf-err-range-s COMMAND ddbshtest -q -T ${RD}/ivecf-err-range-s.exp -c "select id from ddbsh_vec_f.widx where brand > \"b\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-begins-with COMMAND ddbshtest -q -T ${RD}/ivecf-err-begins-with.exp -c "select id from ddbsh_vec_f.widx where begins_with(brand, \"a\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-contains COMMAND ddbshtest -q -T ${RD}/ivecf-err-contains.exp -c "select id from ddbsh_vec_f.widx where contains(brand, \"a\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-size COMMAND ddbshtest -q -T ${RD}/ivecf-err-size.exp -c "select id from ddbsh_vec_f.widx where size(brand) > 1 nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-not-in-schema COMMAND ddbshtest -q -T ${RD}/ivecf-err-not-in-schema.exp -c "select id from ddbsh_vec_f.widx where color = \"red\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-nested-dot COMMAND ddbshtest -q -T ${RD}/ivecf-err-nested-dot.exp -c "select id from ddbsh_vec_f.widx where brand.x = \"a\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-nested-index COMMAND ddbshtest -q -T ${RD}/ivecf-err-nested-index.exp -c "select id from ddbsh_vec_f.widx where brand[0] = \"a\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-two-attrs COMMAND ddbshtest -q -T ${RD}/ivecf-err-two-attrs.exp -c "select id from ddbsh_vec_f.widx where price > rating nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-type-null COMMAND ddbshtest -q -T ${RD}/ivecf-err-type-null.exp -c "select id from ddbsh_vec_f.widx where brand is null nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-type-mismatch COMMAND ddbshtest -q -T ${RD}/ivecf-err-type-mismatch.exp -c "select id from ddbsh_vec_f.widx where price = \"10\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-missing COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-missing.exp -c "select id from ddbsh_vec_f.fidx where price > 10 nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-ne COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-ne.exp -c "select id from ddbsh_vec_f.fidx where tenant <> \"t1\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-gt COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-gt.exp -c "select id from ddbsh_vec_f.fidx where tenant > \"t1\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-in COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-in.exp -c "select id from ddbsh_vec_f.fidx where tenant in (\"t1\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-or COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-or.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t1\" or price > 10 nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-not COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-not.exp -c "select id from ddbsh_vec_f.fidx where not (tenant = \"t1\") nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-twice COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-twice.exp -c "select id from ddbsh_vec_f.fidx where tenant = \"t1\" and tenant = \"t2\" nearest 12 to [0, 0];")
+add_test(NAME ivecf-err-hash-exists COMMAND ddbshtest -q -T ${RD}/ivecf-err-hash-exists.exp -c "select id from ddbsh_vec_f.fidx where attribute_exists(tenant) nearest 12 to [0, 0];")
+
+# --- EXPLAIN: the exact SearchConditionExpression for each operator form ---
+add_test(NAME ivecf-explain-lt COMMAND ddbshtest -q -T ${RD}/ivecf-explain-lt.exp -c "explain select id from ddbsh_vec_f.widx where price < 30 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-le COMMAND ddbshtest -q -T ${RD}/ivecf-explain-le.exp -c "explain select id from ddbsh_vec_f.widx where price <= 30 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-gt COMMAND ddbshtest -q -T ${RD}/ivecf-explain-gt.exp -c "explain select id from ddbsh_vec_f.widx where price > 40 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-ge COMMAND ddbshtest -q -T ${RD}/ivecf-explain-ge.exp -c "explain select id from ddbsh_vec_f.widx where price >= 40 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-between COMMAND ddbshtest -q -T ${RD}/ivecf-explain-between.exp -c "explain select id from ddbsh_vec_f.widx where price between 20 and 40 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-ne COMMAND ddbshtest -q -T ${RD}/ivecf-explain-ne.exp -c "explain select id from ddbsh_vec_f.widx where brand <> \"acme\" nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-bang-ne COMMAND ddbshtest -q -T ${RD}/ivecf-explain-bang-ne.exp -c "explain select id from ddbsh_vec_f.widx where brand != \"acme\" nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-in COMMAND ddbshtest -q -T ${RD}/ivecf-explain-in.exp -c "explain select id from ddbsh_vec_f.widx where price in (10, 20, 60) nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-eq COMMAND ddbshtest -q -T ${RD}/ivecf-explain-eq.exp -c "explain select id from ddbsh_vec_f.widx where brand = \"bravo\" nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-and COMMAND ddbshtest -q -T ${RD}/ivecf-explain-and.exp -c "explain select id from ddbsh_vec_f.widx where price > 20 and rating >= 3 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-or COMMAND ddbshtest -q -T ${RD}/ivecf-explain-or.exp -c "explain select id from ddbsh_vec_f.widx where brand = \"acme\" or price > 50 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-not COMMAND ddbshtest -q -T ${RD}/ivecf-explain-not.exp -c "explain select id from ddbsh_vec_f.widx where not (brand = \"acme\") nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-exists COMMAND ddbshtest -q -T ${RD}/ivecf-explain-exists.exp -c "explain select id from ddbsh_vec_f.widx where attribute_exists(brand) nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-not-exists COMMAND ddbshtest -q -T ${RD}/ivecf-explain-not-exists.exp -c "explain select id from ddbsh_vec_f.widx where attribute_not_exists(brand) nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-hash-between COMMAND ddbshtest -q -T ${RD}/ivecf-explain-hash-between.exp -c "explain select id from ddbsh_vec_f.fidx where tenant = \"t1\" and price between 20 and 40 nearest 3 to [0, 0];")
+add_test(NAME ivecf-explain-hash-group COMMAND ddbshtest -q -T ${RD}/ivecf-explain-hash-group.exp -c "explain select id from ddbsh_vec_f.fidx where tenant = \"t2\" and (brand in (\"acme\", \"cirque\") or not (rating between 1 and 2)) nearest 3 to [0, 0];")
+
+add_test(NAME ivecf-drop COMMAND ddbshtest -c "drop table ddbsh_vec_f;")

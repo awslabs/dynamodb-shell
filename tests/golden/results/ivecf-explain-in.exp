@@ -1,0 +1,28 @@
+SearchVectors({
+   "TableName":   "ddbsh_vec_f",
+   "IndexName":   "widx",
+   "ReturnConsumedCapacity":   "NONE",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "id",
+      "#aaaa2":   "price"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "10"
+      },
+      ":vaaa2":   {
+         "N":   "20"
+      },
+      ":vaaa3":   {
+         "N":   "60"
+      }
+   },
+   "ProjectionExpression":   "#aaaa1",
+   "SearchVector":   [{
+         "N":   "0"
+      }, {
+         "N":   "0"
+      }],
+   "SearchConditionExpression":   "#aaaa2 IN (:vaaa1, :vaaa2, :vaaa3)",
+   "TopK":   3
+})

@@ -1,0 +1,1 @@
+SearchConditionExpression must contain only one condition on the HASH attribute; to search more than one HASH value, make one SearchVectors call for each value
