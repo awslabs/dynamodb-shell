@@ -267,6 +267,65 @@ TEST(DeleteExec, SingleFullKeyDeleteItem) {
     EXPECT_EQ(client.delete_item_requests()[0].key[0].second.s, "0");
 }
 
+// P13 T2 (D-P13-3, issue #20): a CONTAINS condition with a NULL, number or
+// boolean operand rides the single-item UPDATE / UPSERT / DELETE condition with
+// its own AttributeValue type.
+const Value* value_of(const ddbsh::ValueMap& values, const std::string& token) {
+    for (const auto& [name, value] : values) {
+        if (name == token) {
+            return &value;
+        }
+    }
+    return nullptr;
+}
+
+TEST(UpdateExec, ContainsNullOperandInCondition) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("t", "pk"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("update t set hit = 1 where pk = 1 and contains(l, NULL);");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_requests().size(), 1u);
+    const auto& req = client.update_requests()[0];
+    EXPECT_EQ(*req.condition_expression, "attribute_exists(#aaaa2) AND contains(#aaaa3, :vaaa2)");
+    const Value* v = value_of(req.expression_attribute_values, ":vaaa2");
+    ASSERT_NE(v, nullptr);
+    EXPECT_EQ(v->type, Value::Type::NUL);
+}
+
+TEST(UpdateExec, UpsertContainsNumberOperandInCondition) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("t", "pk"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("upsert t set hit = 1 where pk = 4 and contains(ns, 5);");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.update_requests().size(), 1u);
+    const auto& req = client.update_requests()[0];
+    EXPECT_EQ(*req.condition_expression, "contains(#aaaa2, :vaaa2)");
+    const Value* v = value_of(req.expression_attribute_values, ":vaaa2");
+    ASSERT_NE(v, nullptr);
+    EXPECT_EQ(v->type, Value::Type::N);
+    EXPECT_EQ(v->s, "5");
+}
+
+TEST(DeleteExec, ContainsBooleanOperandInCondition) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("t", "pk"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("delete from t where pk = 6 and contains(l, FALSE);");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    ASSERT_EQ(client.delete_item_requests().size(), 1u);
+    const auto& req = client.delete_item_requests()[0];
+    EXPECT_EQ(*req.condition_expression, "contains(#aaaa1, :vaaa1)");
+    const Value* v = value_of(req.expression_attribute_values, ":vaaa1");
+    ASSERT_NE(v, nullptr);
+    EXPECT_EQ(v->type, Value::Type::BOOL);
+    EXPECT_FALSE(v->boolean);
+}
+
 TEST(DeleteExec, NoWhereScansAndDeletesAll) {
     ddbsh::test::FakeDDBClient client;
     client.set_table(table_pk("idt1", "pk"));

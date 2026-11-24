@@ -86,6 +86,47 @@ TEST(MemoryClientFilter, ScanContains) {
     EXPECT_EQ((*rows)[0].get_string("id"), "c");  // "gamma"
 }
 
+// P13 T2 (D-P13-3, issue #20): CONTAINS with a NULL, boolean or number
+// operand, and the DynamoDB rule that an operand whose type cannot be in the
+// path matches nothing (the live icont-* goldens pin the same results).
+TEST(MemoryClientFilter, ScanContainsScalarOperands) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    ASSERT_TRUE(db.exec("create table c ( pk number ) primary key ( pk hash );").has_value());
+    ASSERT_TRUE(db.exec("insert into c ( pk, l, s ) values ( 1, [1, NULL, \"x\"], \"hello\" );")
+                    .has_value());
+    ASSERT_TRUE(
+        db.exec("insert into c ( pk, l, s ) values ( 3, [TRUE, 2], \"true\" );").has_value());
+    ddbsh::PutItemIn put;
+    put.table_name = "c";
+    put.item = {{"pk", ddbsh::Value::number_value("4")},
+                {"ns", ddbsh::Value::number_set({"5", "6"})},
+                {"s", ddbsh::Value::string_value("five")}};
+    ASSERT_TRUE(client.put_item(put).has_value());
+
+    auto pks = [&](const std::string& where) {
+        auto rows = db.query("select pk from c where " + where + ";");
+        EXPECT_TRUE(rows.has_value()) << where;
+        std::string out;
+        if (rows.has_value()) {
+            for (const auto& row : *rows) {
+                out += std::to_string(row.get_int("pk").value_or(-1)) + " ";
+            }
+        }
+        return out;
+    };
+    EXPECT_EQ(pks("contains(l, NULL)"), "1 ");
+    EXPECT_EQ(pks("contains(l, TRUE)"), "3 ");
+    EXPECT_EQ(pks("contains(l, 2)"), "3 ");
+    EXPECT_EQ(pks("contains(l, 2.0)"), "3 ");  // numeric, not textual, equality
+    EXPECT_EQ(pks("contains(ns, 5)"), "4 ");
+    EXPECT_EQ(pks("contains(s, \"ell\")"), "1 ");
+    // Type mismatch: false, not an error.
+    EXPECT_EQ(pks("contains(s, NULL)"), "");
+    EXPECT_EQ(pks("contains(s, 5)"), "");
+    EXPECT_EQ(pks("contains(ns, \"5\")"), "");
+}
+
 TEST(MemoryClientFilter, ScanIn) {
     MemoryClient client;
     Connection db(SessionConfig{"us-east-1", ""}, client);

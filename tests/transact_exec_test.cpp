@@ -256,6 +256,36 @@ TEST(TransactWrite, InsertAndConditionCheckCommit) {
     ASSERT_TRUE(std::holds_alternative<ddbsh::TransactUpdate>(items[1]));
 }
 
+// P13 T2 (D-P13-3, issue #20): CONTAINS with a TRUE / NULL operand in a write
+// transaction, on an Update condition and a ConditionCheck.
+TEST(TransactWrite, ContainsScalarOperandsInUpdateAndConditionCheck) {
+    ddbsh::test::FakeDDBClient client;
+    register_tables(client);
+    ddbsh::Session session = make_session(client);
+    auto out = session.run(
+        "begin; update itxt1 set tx = 1 where a = 3 and contains(l, TRUE); "
+        "exists select * from itxt1 where a = 1 and contains(l, NULL); commit;");
+    ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+    EXPECT_EQ(render(*out), "COMMIT\n");
+    ASSERT_EQ(client.transact_write_requests().size(), 1u);
+    const auto& items = client.transact_write_requests()[0].items;
+    ASSERT_EQ(items.size(), 2u);
+
+    ASSERT_TRUE(std::holds_alternative<ddbsh::TransactUpdate>(items[0]));
+    const auto& up = std::get<ddbsh::TransactUpdate>(items[0]);
+    EXPECT_EQ(*up.condition_expression, "attribute_exists(#aaaa2) AND contains(#aaaa3, :vaaa2)");
+    ASSERT_EQ(up.expression_attribute_values.size(), 2u);
+    EXPECT_EQ(up.expression_attribute_values[1].first, ":vaaa2");
+    EXPECT_EQ(up.expression_attribute_values[1].second.type, Value::Type::BOOL);
+    EXPECT_TRUE(up.expression_attribute_values[1].second.boolean);
+
+    ASSERT_TRUE(std::holds_alternative<ddbsh::TransactConditionCheck>(items[1]));
+    const auto& cc = std::get<ddbsh::TransactConditionCheck>(items[1]);
+    EXPECT_EQ(cc.condition_expression, "contains(#abaa1, :vbaa1) AND attribute_exists(#abaa2)");
+    ASSERT_EQ(cc.expression_attribute_values.size(), 1u);
+    EXPECT_EQ(cc.expression_attribute_values[0].second.type, Value::Type::NUL);
+}
+
 TEST(TransactWrite, ServiceCancellationAbortsThenErrors) {
     ddbsh::test::FakeDDBClient client;
     register_tables(client);

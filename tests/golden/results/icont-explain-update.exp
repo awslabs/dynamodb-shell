@@ -1,0 +1,23 @@
+UpdateItem({
+   "TableName":   "ddbsh_contains",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND contains(#aaaa3, :vaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "hit",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "l"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "NULL":   true
+      }
+   }
+})

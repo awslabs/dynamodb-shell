@@ -1151,19 +1151,35 @@ private:
         }
     }
 
+    // DynamoDB's contains(path, operand): a substring of an S, an element of a
+    // set of the operand's own type, or an element of a list. An operand whose
+    // type cannot be in the path (a NULL or a number in a string, a string in a
+    // number set) is false, not an error (P13, D-P13-3; pinned live by the
+    // icont-mismatch-* goldens).
     static bool value_contains(const Value& container, const Value& needle) {
         switch (container.type) {
             case Value::Type::S:
-                return container.s.find(needle.s) != std::string::npos;
+                return needle.type == Value::Type::S &&
+                       container.s.find(needle.s) != std::string::npos;
             case Value::Type::SS:
             case Value::Type::NS:
-            case Value::Type::BS:
+            case Value::Type::BS: {
+                const Value::Type element = container.type == Value::Type::SS   ? Value::Type::S
+                                            : container.type == Value::Type::NS ? Value::Type::N
+                                                                                : Value::Type::B;
+                if (needle.type != element) {
+                    return false;
+                }
                 for (const auto& e : container.set) {
-                    if (e == needle.s) {
+                    Value member;
+                    member.type = element;
+                    member.s = e;
+                    if (value_equal(member, needle)) {
                         return true;
                     }
                 }
                 return false;
+            }
             case Value::Type::L:
                 for (const auto& e : container.list) {
                     if (value_equal(e, needle)) {

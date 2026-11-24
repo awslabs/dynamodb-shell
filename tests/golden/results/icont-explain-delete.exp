@@ -1,0 +1,17 @@
+DeleteItem({
+   "TableName":   "ddbsh_contains",
+   "Key":   {
+      "pk":   {
+         "N":   "6"
+      }
+   },
+   "ConditionExpression":   "contains(#aaaa1, :vaaa1)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "l"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "BOOL":   false
+      }
+   }
+})

@@ -25,6 +25,7 @@
 namespace {
 
 using ddbsh::StatementKind;
+using ddbsh::Value;
 
 ddbsh::Session make_session(ddbsh::test::FakeDDBClient& client) {
     return ddbsh::Session(ddbsh::SessionConfig{"us-east-1", ""}, client);
@@ -670,6 +671,64 @@ TEST(Parse, SelectWhereBetweenInBeginsWithContains) {
     EXPECT_EQ(scan_filter_of(sel),
               "#aaaa1 BETWEEN :vaaa1 AND :vaaa2 AND #aaaa2 IN (:vaaa3, :vaaa4) AND "
               "begins_with(#aaaa3, :vaaa5) AND contains(#aaaa4, :vaaa6)");
+}
+
+// P13 T2 (D-P13-3, issue #20): the second argument of CONTAINS is any scalar
+// literal. Each operand keeps its AttributeValue type in
+// ExpressionAttributeValues; the expression text is the same for every type.
+TEST(Parse, ContainsScalarOperands) {
+    struct Case {
+        const char* operand;
+        Value::Type type;
+        const char* text;  // Value::s for S/N
+        bool boolean;
+    };
+    const Case cases[] = {
+        {"NULL", Value::Type::NUL, "", false},
+        {"null", Value::Type::NUL, "", false},
+        {"5", Value::Type::N, "5", false},
+        {"-7", Value::Type::N, "-7", false},
+        {"3.5", Value::Type::N, "3.5", false},
+        {"TRUE", Value::Type::BOOL, "", true},
+        {"false", Value::Type::BOOL, "", false},
+        {"\"x y\"", Value::Type::S, "x y", false},
+        {"x", Value::Type::S, "x", false},
+        // A leading-zero integer is not a number token (arch §4); it stays the
+        // bare string it was before P13.
+        {"01", Value::Type::S, "01", false},
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.operand);
+        ddbsh::test::FakeDDBClient client;
+        ddbsh::Session session = make_session(client);
+        auto stmt =
+            parse_ok(session, std::string("select * from t where contains(l, ") + c.operand + ");");
+        const auto& sel = node_of<ddbsh::engine::SelectCmd>(stmt);
+        ddbsh::engine::SymbolTable st("aaa");
+        EXPECT_EQ(sel.where->scan_filter_expression(&st), "contains(#aaaa1, :vaaa1)");
+        ASSERT_EQ(st.get_values().size(), 1u);
+        const Value& v = st.get_values().at(":vaaa1");
+        EXPECT_EQ(v.type, c.type);
+        EXPECT_EQ(v.s, c.text);
+        EXPECT_EQ(v.boolean, c.boolean);
+    }
+}
+
+// CONTAINS takes a scalar only: a list or map literal is still a syntax error
+// (D-P13-3, YAGNI), as is a missing operand.
+TEST(Parse, ContainsRejectsListMapAndMissingOperand) {
+    for (const char* text :
+         {"select * from t where contains(l, [1, 2]);",
+          "select * from t where contains(l, {a: 1});", "select * from t where contains(l, []);",
+          "select * from t where contains(l, );"}) {
+        SCOPED_TRACE(text);
+        ddbsh::test::FakeDDBClient client;
+        ddbsh::Session session = make_session(client);
+        auto result = session.parse(text);
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().message.find("syntax error"), std::string::npos)
+            << result.error().message;
+    }
 }
 
 TEST(Parse, SelectWhereAttributeExistsTypeAndSize) {

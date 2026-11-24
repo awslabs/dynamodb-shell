@@ -300,6 +300,8 @@
 %type <std::string> table_name insert_column
 %type <std::vector<std::string>> insert_column_list
 %type <ddbsh::Value> insert_value lee_rhs map_element_list
+/* The second argument of CONTAINS: a scalar literal (P13, D-P13-3). */
+%type <ddbsh::Value> contains_operand
 %type <ddbsh::ValueList> insert_values lee_rhs_list
 %type <std::vector<ddbsh::ValueList>> value_list
 %type <std::optional<ddbsh::engine::RateLimit>> optional_ratelimit ratelimit
@@ -1987,10 +1989,10 @@ logical_expression_element:
             $$ = std::make_unique<ddbsh::engine::LogicalBeginsWith>(
                 std::move($3), ddbsh::Value::string_value(std::move($5)));
         }
-    | K_CONTAINS '(' lee_lhs ',' string ')'
+    | K_CONTAINS '(' lee_lhs ',' contains_operand ')'
         {
-            $$ = std::make_unique<ddbsh::engine::LogicalContains>(
-                std::move($3), ddbsh::Value::string_value(std::move($5)));
+            $$ = std::make_unique<ddbsh::engine::LogicalContains>(std::move($3),
+                                                                  std::move($5));
         }
     | K_SIZE '(' lee_lhs ')' comparison_op lee_rhs
         {
@@ -1999,6 +2001,21 @@ logical_expression_element:
             $$ = std::make_unique<ddbsh::engine::LogicalComparison>(
                 std::move(lhs), $5, std::move($6));
         }
+    ;
+
+/* contains_operand is the second argument of CONTAINS. v0.8.1 accepted only a
+ * string (quoted or bare). P13 (D-P13-3, issue #20) widens it to any scalar
+ * literal, so `contains(list, NULL)`, `contains(numberset, 5)` and
+ * `contains(list, TRUE)` parse. The string alternative is unchanged, so every
+ * statement that parsed before renders byte-identically. List and map
+ * literals stay out. DynamoDB validates the operand type against the path. */
+contains_operand:
+      string                    { $$ = ddbsh::Value::string_value(std::move($1)); }
+    | T_WHOLE_NUMBER            { $$ = ddbsh::Value::number_value(std::move($1)); }
+    | T_FLOATING_POINT_NUMBER   { $$ = ddbsh::Value::number_value(std::move($1)); }
+    | K_TRUE                    { $$ = ddbsh::Value::bool_value(true); }
+    | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
+    | K_NULL                    { $$ = ddbsh::Value::null_value(); }
     ;
 
 /* lee_lhs is an attribute path: a bare name, a `[subscript]` index, or a dotted

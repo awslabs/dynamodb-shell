@@ -1,0 +1,38 @@
+Scan({
+   "TableName":   "ddbsh_contains",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1",
+   "FilterExpression":   "contains(#abaa2, :vbaa1)",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "ns"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "7"
+      }
+   },
+   "ConsistentRead":   false
+})
+UpdateItem({
+   "TableName":   "ddbsh_contains",
+   "Key":   {
+      "pk":   {
+         "N":   "5"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "contains(#aaaa2, :vaaa2)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "hit",
+      "#aaaa2":   "ns"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "7"
+      }
+   }
+})
