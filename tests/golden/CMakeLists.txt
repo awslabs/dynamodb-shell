@@ -16,7 +16,8 @@
 #   families/   — one manifest .txt per command family (basic, create-drop,
 #                 select, insert-replace, update, delete, transactions, pitr,
 #                 symbol-table, return-values, composite-gsi, vector,
-#                 cross-account, explain, show, help, formats, statement-end,
+#                 vector-filters, cross-account, explain, show, help, formats,
+#                 contains, statement-end,
 #                 global-tables, test-cleanup, test-cleanup-last). The
 #                 original add_test lines are reused verbatim; `ddbshtest` is
 #                 an IMPORTED target that resolves to the harness (see below).
@@ -105,7 +106,8 @@ set(DATA "${GOLDEN_DIR}/data")
 #   * test-cleanup drops the data-family tables, so it comes AFTER them
 #     (D-2h-1 §7).
 #   * cross-account uses its own account's tables and is unaffected by cleanup.
-#   * explain / show / help / formats / statement-end are self-contained (each
+#   * vector-filters / explain / show / help / formats / contains /
+#     statement-end are self-contained (each
 #     creates+drops its own tables or needs none), so their position is
 #     independent.
 #   * global-tables is self-contained (its own `gttest` table in
@@ -126,6 +128,7 @@ set(GOLDEN_FAMILIES
     insert-replace
     composite-gsi
     vector
+    vector-filters
     transactions
     return-values
     test-cleanup
@@ -134,6 +137,7 @@ set(GOLDEN_FAMILIES
     explain
     show
     formats
+    contains
     statement-end
     global-tables
     test-cleanup-last)
