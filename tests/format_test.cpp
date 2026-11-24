@@ -15,8 +15,11 @@
 //   * a failure after a result set: the set closes before the error;
 //   * the default format through FormattingSink equals the Renderer for every
 //     arm, on both streams;
-//   * the CLI's output directives and their precedence.
+//   * the CLI's output directives and their precedence;
+//   * the CLI's file sink: an embedded NUL cuts a write in the default format
+//     only (review R-S4-1).
 
+#include <cstdio>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -698,6 +701,96 @@ TEST(CliOutputDirective, TheFdOverloadCarriesTheSelectionInAndOut) {
     EXPECT_EQ(ddbsh::cli::run_source(session, renderer, cfg_src, term, true, &format), 0);
     EXPECT_EQ(format.format, OutputFormat::csv);
     EXPECT_EQ(format.json_flavor, JsonFlavor::dynamodb);
+}
+
+// ---- the CLI's file sink and NUL bytes (review R-S4-1) -------------------------
+
+/// Everything written to `f`, read back from the start.
+std::string file_text(std::FILE* f) {
+    std::fseek(f, 0, SEEK_END);
+    std::string text(static_cast<std::size_t>(std::ftell(f)), '\0');
+    std::rewind(f);
+    EXPECT_EQ(std::fread(text.data(), 1, text.size(), f), text.size());
+    return text;
+}
+
+/// One SELECT page of two rows; the first row's `a` holds an embedded NUL.
+ExecOutcome page_with_a_nul() {
+    SelectOutcome sel;
+    sel.items = {row({{"pk", n("1")}, {"a", s(std::string("x\0y", 3))}}),
+                 row({{"pk", n("2")}, {"a", s("z")}})};
+    sel.column_hint = {"pk"};
+    return ExecOutcome{std::move(sel)};
+}
+
+/// The stdout bytes a FileRenderingSink in `options` writes for one statement
+/// that returns page_with_a_nul().
+std::string file_sink_bytes(FormatOptions options) {
+    std::FILE* out = std::tmpfile();
+    std::FILE* err = std::tmpfile();
+    EXPECT_NE(out, nullptr);
+    EXPECT_NE(err, nullptr);
+    if (out == nullptr || err == nullptr) {
+        return {};
+    }
+    {
+        ddbsh::cli::FileRenderingSink sink(options, out, err);
+        sink.emit(page_with_a_nul());
+        sink.end_statement();
+    }
+    std::string text = file_text(out);
+    EXPECT_EQ(file_text(err), "");
+    std::fclose(out);
+    std::fclose(err);
+    return text;
+}
+
+TEST(CliFileSink, CsvWritesEveryByteOfAStringHoldingANul) {
+    // Both rows arrive, with the NUL in its cell: no cut, no escape (RFC 4180
+    // has none for NUL; a consumer gets the stored value).
+    EXPECT_EQ(file_sink_bytes(fmt(OutputFormat::csv)), std::string("pk,a\n1,x\0y\n2,z\n", 15));
+}
+
+TEST(CliFileSink, JsonAndTableEscapeTheNulAndKeepEveryRow) {
+    const std::string json = file_sink_bytes(fmt(OutputFormat::json));
+    EXPECT_EQ(json.find('\0'), std::string::npos);
+    EXPECT_NE(json.find("x\\u0000y"), std::string::npos) << json;
+    EXPECT_NE(json.find("\"z\""), std::string::npos) << json;
+    const std::string table = file_sink_bytes(fmt(OutputFormat::table));
+    EXPECT_EQ(table.find('\0'), std::string::npos);
+    EXPECT_NE(table.find("x\\u0000y"), std::string::npos) << table;
+    EXPECT_NE(table.find(" z "), std::string::npos) << table;
+}
+
+TEST(CliFileSink, TheDefaultFormatStillStopsAtTheNulAsTheOriginalDid) {
+    // The fidelity behavior the cut exists for: the old fputs, like the
+    // original's printf, stopped at the NUL, so the rest of the page is not
+    // written in the default format.
+    const std::string rendered = ddbsh::render::Renderer{}.render(page_with_a_nul());
+    ASSERT_NE(rendered.find('\0'), std::string::npos);
+    const std::string written = file_sink_bytes(fmt(OutputFormat::standard));
+    EXPECT_EQ(written, rendered.substr(0, rendered.find('\0')));
+    EXPECT_EQ(written, "{a: \"x");
+}
+
+TEST(CliFileSink, SetOutputSwitchesTheCutWithTheFormat) {
+    // The writer reads the current format at each write, so a `set output`
+    // between statements takes effect for the next statement.
+    std::FILE* out = std::tmpfile();
+    std::FILE* err = std::tmpfile();
+    ASSERT_NE(out, nullptr);
+    ASSERT_NE(err, nullptr);
+    {
+        ddbsh::cli::FileRenderingSink sink(fmt(OutputFormat::standard), out, err);
+        sink.emit(page_with_a_nul());
+        sink.end_statement();
+        sink.set_options(fmt(OutputFormat::csv));
+        sink.emit(page_with_a_nul());
+        sink.end_statement();
+    }
+    EXPECT_EQ(file_text(out), std::string("{a: \"xpk,a\n1,x\0y\n2,z\n", 21));
+    std::fclose(out);
+    std::fclose(err);
 }
 
 }  // namespace

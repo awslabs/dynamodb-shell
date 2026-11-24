@@ -5,7 +5,6 @@
 
 #include "repl.hpp"
 
-#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -63,21 +62,35 @@ void report_error_to_stderr(const std::string& rendered) {
 }
 
 // Write `text` to `f` and flush, so each piece of output is on the terminal
-// (or pipe) before the engine makes its next API call (P12, D-P12-1). Like the
-// fputs this replaces (and the original's printf), it stops at an embedded
-// NUL byte, so the default output keeps its exact bytes.
-void write_and_flush(std::FILE* f, std::string_view text) {
-    std::fwrite(text.data(), 1, std::min(text.size(), text.find('\0')), f);
+// (or pipe) before the engine makes its next API call (P12, D-P12-1).
+//
+// With `stop_at_nul` (the default format) it stops at an embedded NUL byte,
+// like the fputs this replaces (and the original's printf), so the default
+// output keeps its exact bytes. The other formats write every byte: CSV writes
+// an S value raw, and one write holds a whole page, so a cut there would drop
+// the rest of the page without an error (P12 review R-S4-1). JSON and the
+// table escape the byte, so for them the flag changes nothing.
+void write_and_flush(std::FILE* f, std::string_view text, bool stop_at_nul) {
+    if (stop_at_nul) {
+        text = text.substr(0, text.find('\0'));
+    }
+    std::fwrite(text.data(), 1, text.size(), f);
     std::fflush(f);
 }
 
 }  // namespace
 
+// The writer reads the sink's current format at each write, so a `set output`
+// directive takes effect at once. It captures `this`, which is why the class
+// cannot be copied or moved (see repl.hpp). set_options closes an open result
+// set before it switches, so the closing bytes are written in the old format.
 FileRenderingSink::FileRenderingSink(ddbsh::render::FormatOptions options, std::FILE* out,
                                      std::FILE* err)
-    : FormattingSink(options, [out, err](ddbsh::render::Stream stream, std::string_view text) {
-          write_and_flush(stream == ddbsh::render::Stream::out ? out : err, text);
-      }) {}
+    : FormattingSink(
+          options, [this, out, err](ddbsh::render::Stream stream, std::string_view text) {
+              write_and_flush(stream == ddbsh::render::Stream::out ? out : err, text,
+                              this->options().format == ddbsh::render::OutputFormat::standard);
+          }) {}
 
 std::string unknown_output_format_message(std::string_view id) {
     return "unknown output format: " + std::string(id) + " (expected default, json, csv, table)\n";
@@ -271,12 +284,6 @@ BatchStatus run_batch(ddbsh::Session& session, const ddbsh::render::Renderer& re
         report_error(renderer.render_error(*batch.error));
     }
     return status;
-}
-
-BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
-                           std::string_view text, bool abort_on_error) {
-    FileRenderingSink sink;
-    return run_batch(session, renderer, text, abort_on_error, sink, report_error_to_stderr);
 }
 
 int run_source(ddbsh::Session& session, const ddbsh::render::Renderer& renderer, LineSource& src,

@@ -149,6 +149,11 @@ private:
 /// Append `text` as a JSON string: `"`, `\` and U+0000..U+001F escaped
 /// (`\b \f \n \r \t` by name, the rest as lowercase `\u00xx`), every other byte
 /// (UTF-8 included) copied as is.
+///
+/// The wire codec (`wire/codec.cpp`, `write_string`) escapes every string of a
+/// DynamoDB request body with this function too, and the EXPLAIN-vs-wire
+/// differential test (`ddbsh_wire_serialize_diff`) pins that its output matches
+/// EXPLAIN. A change here changes every request body the browser edition sends.
 void append_json_string(std::string& out, std::string_view text);
 
 /// True when `text` matches the RFC 8259 number grammar
@@ -180,7 +185,8 @@ enum class Stream { out, err };
 /// end_statement(). In the other formats it writes each row as it arrives
 /// (the table format, per API page), closes an open result set before any
 /// text, and closes it at end_statement(), so the closing bytes precede the
-/// error the caller prints. Not thread-safe; one statement at a time.
+/// error the caller prints. Not thread-safe; one statement at a time. A
+/// moved-from sink may only be destroyed or assigned to.
 class FormattingSink : public OutcomeSink {
 public:
     /// Receives each piece of output, in order. Never called with empty text.

@@ -21,7 +21,10 @@
 //   --output <format>, --json-flavor <flavor> (also --opt=value)
 //               the output format, as in the native CLI (P12, D-P12-26);
 //               passed to runScript. An unknown value prints the native CLI's
-//               message and usage and exits 1.
+//               message and usage and exits 1. The shim matches the native
+//               CLI only in the cases the goldens use: an option with no
+//               value prints the usage alone, without getopt_long's
+//               "option '--output' requires an argument" line.
 // Output goes to stdout/stderr in the engine's emission order; the exit code is
 // the CLI's (last executed statement).
 //

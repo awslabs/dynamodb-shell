@@ -41,10 +41,22 @@ namespace ddbsh::cli {
 /// default format it writes exactly what the Renderer renders; `--output` and
 /// `set output` select another format (P12, D-P12-26). Both streams default to
 /// the process's stdout/stderr; tests pass temporary files.
+///
+/// In the default format a write stops at an embedded NUL byte, as the
+/// original's printf did, so the default bytes are unchanged. The other
+/// formats write every byte, so a CSV cell holding U+0000 keeps the rest of
+/// its row and page (P12 review R-S4-1).
+///
+/// The writer refers to this sink's current format, so the sink can be neither
+/// copied nor moved.
 class FileRenderingSink : public ddbsh::render::FormattingSink {
 public:
     explicit FileRenderingSink(ddbsh::render::FormatOptions options = {}, std::FILE* out = stdout,
                                std::FILE* err = stderr);
+    FileRenderingSink(const FileRenderingSink&) = delete;
+    FileRenderingSink& operator=(const FileRenderingSink&) = delete;
+    FileRenderingSink(FileRenderingSink&&) = delete;
+    FileRenderingSink& operator=(FileRenderingSink&&) = delete;
 };
 
 /// The message for an output format the CLI does not know, newline included:
@@ -165,16 +177,6 @@ struct BatchStatus {
 BatchStatus run_batch(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
                       std::string_view text, bool abort_on_error, ddbsh::OutcomeSink& sink,
                       const std::function<void(const std::string&)>& report_error);
-
-// Execute a BATCH of ';'-separated statements through the engine, in order,
-// rendering each result to stdout and each error to stderr. A trailing PARSE
-// error is reported to stderr but does NOT contribute to the exit code (it
-// never sets `last_error`), matching the original run loop. When
-// `abort_on_error` is set, execution stops at the first failing statement (that
-// failure is then the last executed → nonzero exit). This is the CLI's thin
-// stdout/stderr adapter over run_batch (above).
-BatchStatus run_batch_text(ddbsh::Session& session, const ddbsh::render::Renderer& renderer,
-                           std::string_view text, bool abort_on_error);
 
 // Drive a LineSource through the isql assembly loop: buffer lines until a
 // terminator line (or EOF), flush each batch to the engine. Honors the runtime
