@@ -361,6 +361,9 @@ async function submit(text, { addToHistory }) {
         // as it arrives, then any internal error (P12, D-P12-17).
         const prompt = buildPrompt(session.region(), session.endpointOverridden());
         await streamSubmission({ session, prompt, text, appender: createDomTranscriptAppender() });
+        // History keeps the input even when runStreaming itself threw
+        // (streamSubmission reported it and returned null): the user typed
+        // it, and recalling it to retry is the useful behavior (P12 N9).
         if (addToHistory) {
             history.push(text);
             persistHistory();
