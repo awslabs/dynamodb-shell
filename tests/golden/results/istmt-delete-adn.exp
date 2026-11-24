@@ -1,0 +1,3 @@
+[1, 43] syntax error at adn
+delete from ddbsh_stmtend where pk = 1 adn rk = 0;
+                                       ^

@@ -171,4 +171,69 @@ TEST(Batch, ErrorLocationStaysContinuousAcrossStatements) {
     EXPECT_NE(batch.error->message.find("["), std::string::npos);
 }
 
+// ---- B4: a statement ends only at ';' or at end of input --------------------
+
+TEST(Batch, TrailingTokenAfterCompleteStatementIsASyntaxError) {
+    // Each text is a complete statement followed by a token that does not
+    // belong to it. Before B4 the prefix parsed as a statement and the token
+    // was lost; now the statement is a syntax error at that token, as in
+    // v0.8.1 (every command production ended in ';').
+    struct Case {
+        const char* text;
+        const char* token;
+    };
+    const Case cases[] = {
+        {"select pk from t consistent;", "consistent"},
+        {"select pk from t foo;", "foo"},
+        {"select pk from t foo", "foo"},
+        {"drop table t foo bar;", "foo"},
+        {"delete from t wehre pk = 1;", "wehre"},
+        {"explain delete from t wehre pk = 1;", "wehre"},
+        {"explain delete from t wehre pk = 1", "wehre"},
+        {"update t set x = 1 wher pk = 1 and rk = 0;", "wher"},
+        {"delete from t where pk = 1 adn rk = 0;", "adn"},
+        {"show version please;", "please"},
+        {"begin; select * from t where pk = 1; commit now;", "now"},
+    };
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    for (const Case& c : cases) {
+        auto batch = session.parse_batch(c.text);
+        EXPECT_TRUE(batch.statements.empty()) << c.text;
+        ASSERT_TRUE(batch.error.has_value()) << c.text;
+        EXPECT_EQ(batch.error->code, ddbsh::Errc::parse_error) << c.text;
+        const std::string want = std::string("syntax error at ") + c.token + "\n";
+        EXPECT_NE(batch.error->message.find(want), std::string::npos)
+            << c.text << " -> " << batch.error->message;
+    }
+}
+
+TEST(Batch, TrailingTokenStopsTheBatchAtThatStatement) {
+    // The statements before the bad one are kept ("execute what you can");
+    // the bad one and everything after it are not returned.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    auto batch = session.parse_batch("show version; drop table t foo; show version");
+    ASSERT_EQ(batch.statements.size(), 1u);
+    EXPECT_EQ(batch.statements[0].kind(), StatementKind::show_version);
+    ASSERT_TRUE(batch.error.has_value());
+    EXPECT_NE(batch.error->message.find("syntax error at foo"), std::string::npos)
+        << batch.error->message;
+}
+
+TEST(Batch, FinalStatementWithoutSemicolonStillEndsAtEndOfInput) {
+    // The B4 fix keeps the optional final ';' (arch §4): end of input still
+    // ends a statement, for a command, an EXPLAIN and a transaction.
+    ddbsh::test::FakeDDBClient client;
+    ddbsh::Session session = make_session(client);
+    for (const char* text :
+         {"select consistent pk from t", "explain delete from t where pk = 1",
+          "begin; select * from t where pk = 1; commit", "show version; select * from t"}) {
+        auto batch = session.parse_batch(text);
+        EXPECT_FALSE(batch.error.has_value())
+            << text << " -> " << (batch.error ? batch.error->message : "");
+        EXPECT_FALSE(batch.statements.empty()) << text;
+    }
+}
+
 }  // namespace

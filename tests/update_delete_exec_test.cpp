@@ -460,4 +460,61 @@ TEST(DeleteExec, BulkDeleteThroughCompositeGsiEnumeratesViaIndex) {
     EXPECT_EQ(client.delete_item_requests()[0].key[0].first, "id");
 }
 
+// ---- B4: a trailing token after a complete statement runs nothing ----------
+//
+// Before B4 the grammar ended a statement on ANY lookahead, so the valid prefix
+// ran: `delete from t wehre pk = 1` deleted every item, and
+// `delete from t where pk = 1 adn rk = 0` deleted the whole partition. Each
+// case below has items the bad prefix would have read and written; the parse
+// error now stops the statement before any API call.
+
+TEST(StatementEnd, MisspelledWhereOnDeleteIsASyntaxErrorAndDeletesNothing) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("iut2", "pk", "rk"));
+    client.set_items({key_row({{"pk", "1"}, {"rk", "0"}}), key_row({{"pk", "2"}, {"rk", "0"}})});
+    ddbsh::Session session = make_session(client);
+
+    for (const char* text :
+         {"delete from iut2 wehre pk = 1;", "delete from iut2 wehre pk = 1",
+          "delete from iut2 where pk = 1 adn rk = 0;", "explain delete from iut2 wehre pk = 1;"}) {
+        auto out = session.run(text);
+        ASSERT_FALSE(out.has_value()) << text;
+        EXPECT_EQ(out.error().code, Errc::parse_error) << text;
+        EXPECT_NE(out.error().message.find("syntax error at "), std::string::npos)
+            << out.error().message;
+    }
+    EXPECT_EQ(client.read_calls(), 0);
+    EXPECT_TRUE(client.delete_item_requests().empty());
+}
+
+TEST(StatementEnd, MisspelledWhereOnUpdateIsASyntaxErrorAndUpdatesNothing) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("iut2", "pk", "rk"));
+    client.set_items({key_row({{"pk", "1"}, {"rk", "0"}}), key_row({{"pk", "1"}, {"rk", "1"}})});
+    ddbsh::Session session = make_session(client);
+
+    RecordingSink sink;
+    auto out = session.run("update iut2 set x = 1 wher pk = 1 and rk = 0;", sink);
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::parse_error);
+    EXPECT_NE(out.error().message.find("syntax error at wher"), std::string::npos)
+        << out.error().message;
+    EXPECT_TRUE(sink.fragments.empty());
+    EXPECT_EQ(client.read_calls(), 0);
+    EXPECT_TRUE(client.update_requests().empty());
+}
+
+TEST(StatementEnd, TrailingTokensOnDropTableDropNothing) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_pk("iut1", "pk"));
+    ddbsh::Session session = make_session(client);
+
+    auto out = session.run("drop table iut1 foo bar;");
+    ASSERT_FALSE(out.has_value());
+    EXPECT_EQ(out.error().code, Errc::parse_error);
+    EXPECT_NE(out.error().message.find("syntax error at foo"), std::string::npos)
+        << out.error().message;
+    EXPECT_TRUE(client.deleted_tables().empty());
+}
+
 }  // namespace

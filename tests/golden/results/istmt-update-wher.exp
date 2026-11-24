@@ -1,0 +1,3 @@
+[1, 36] syntax error at wher
+update ddbsh_stmtend set x = 1 wher pk = 1 and rk = 0;
+                               ^

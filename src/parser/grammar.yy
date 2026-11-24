@@ -354,17 +354,25 @@
  * calls and no state carries over (human-ratified isql-batch model, 2026-10-14
  * — supersedes the InputSource/StatementStream design).
  *
- * The trailing ';' is OPTIONAL on the final statement (the `command` /
- * `K_EXPLAIN explainable` arms with no SEMICOLON). This reproduces the
- * original string input source, which appended a ';' if the `-c` payload
- * lacked one (arch §4) — many golden `-c` commands omit the terminator
- * (e.g. `drop table if exists icd1`, `explain select ... from st1`, and the
+ * The trailing ';' is OPTIONAL on the final statement (the `command END` /
+ * `K_EXPLAIN explainable END` arms). This reproduces the original string
+ * input source, which appended a ';' if the `-c` payload lacked one (arch §4)
+ * — many golden `-c` commands omit the terminator (e.g.
+ * `drop table if exists icd1`, `explain select ... from st1`, and the
  * trailing `select` of a multi-statement batch). The engine never mutates its
- * input to add the ';'; the grammar accepts the end-of-input in its place. The
- * `command SEMICOLON` vs `command` (and explainable) pair is unambiguous: the
- * state after `command` shifts on ';' and reduces (to a complete statement)
- * only on end-of-input, so there is no shift/reduce conflict and no lookahead
- * token is consumed past the terminator.
+ * input to add the ';'; the grammar accepts the end-of-input in its place.
+ *
+ * A statement ends ONLY at ';' or at the explicit end-of-input token END.
+ * The state after `command` therefore has two shifts (';' and END) and no
+ * reduction, so any other token after a complete statement is a syntax
+ * error and the statement never reaches the executor. This matches the
+ * original, whose every command production ended in ';' (parser.y), so
+ * `select pk from t consistent;` or `delete from t wehre pk = 1;` failed to
+ * parse and ran nothing. (Before B4 the arm was a bare `command`, which bison
+ * reduced as a default reduction on ANY lookahead: the valid prefix ran and
+ * the lookahead token was lost — `delete from t wehre pk = 1` deleted every
+ * item. See backlog B4.) The END consumed here is re-delivered by the
+ * scanner's <<EOF>> rule on the next parse, which then ends the batch.
  *
  * The EXPLAIN prefix wraps a ddl/dml command (arch §7); it sets the AST's
  * explain flag rather than mutating a shared command object (P2a-02 §4.2). On a
@@ -377,11 +385,11 @@ input:
         { drv.set_empty_result(); YYACCEPT; }
     | command SEMICOLON
         { drv.set_result(std::move($1), false); YYACCEPT; }
-    | command
+    | command END
         { drv.set_result(std::move($1), false); YYACCEPT; }
     | K_EXPLAIN explainable SEMICOLON
         { drv.set_result(std::move($2), true); YYACCEPT; }
-    | K_EXPLAIN explainable
+    | K_EXPLAIN explainable END
         { drv.set_result(std::move($2), true); YYACCEPT; }
     | error SEMICOLON
         { /* error already recorded by error(); recover to ';' */ YYACCEPT; }
