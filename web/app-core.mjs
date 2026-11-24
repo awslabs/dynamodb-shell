@@ -31,6 +31,11 @@
 //     streamSubmission:       the streaming transcript (P12, D-P12-17): the
 //                             prompt echo first, then each engine text event
 //                             appended as it arrives.
+//   - createTableModel:       the HTML result table's column growth (P12,
+//                             D-P12-25): rows events -> DOM-free plans.
+//   - OUTPUT_CHOICES / JSON_FLAVOR_CHOICES / jsonFlavorApplies /
+//     outputOptions:          the Output and JSON dropdowns -> runStreaming
+//                             options (P12, D-P12-26).
 //   - THROTTLING_ERROR_CODES / isThrottlingError: which DynamoDB errors count
 //                             as throttling (P12, D-P12-18).
 //
@@ -167,8 +172,8 @@ export function promptEntry(prompt, input) {
 
 /**
  * Create the appender that writes one submission's transcript as its output
- * arrives (P12, D-P12-17). It is DOM-free: the caller supplies three
- * operations on its own block type (a `<pre>` in the page, a plain object in
+ * arrives (P12, D-P12-17). It is DOM-free: the caller supplies operations on
+ * its own block type (a `<pre>` or `<table>` in the page, a plain object in
  * the tests):
  *
  *   - createBlock(kind): make and attach a new, empty block for "prompt",
@@ -177,7 +182,11 @@ export function promptEntry(prompt, input) {
  *     appends a Text node; it never sets innerHTML, D-P6e-6, and never uses
  *     `textContent +=`, which copies the whole block on every event);
  *   - isAttached(block): false once the block has left the transcript (the
- *     Clear button empties the pane while a submission runs).
+ *     Clear button empties the pane while a submission runs);
+ *   - createTable() and applyTablePlan(table, plan): only for the `html`
+ *     output (P12, D-P12-25). createTable makes and attaches an empty result
+ *     table and returns it; applyTablePlan applies one createTableModel plan
+ *     to it. Without them, rows events are ignored.
  *
  * write(kind, text) adds text to the current block when it has the same kind
  * and is still attached, and otherwise starts a new block. So adjacent text of
@@ -185,12 +194,18 @@ export function promptEntry(prompt, input) {
  * change of stream starts a new one. Empty text writes nothing. prompt()
  * always starts a new block.
  *
+ * A `rows` event adds to the current result table, or starts one (when none
+ * is open, or Clear removed it); an `end` event closes it, so the next result
+ * set starts a new table and the next text a new block.
+ *
  * @param {{createBlock: (kind: string) => unknown,
  *          appendText: (block: unknown, text: string) => void,
- *          isAttached: (block: unknown) => boolean}} io
+ *          isAttached: (block: unknown) => boolean,
+ *          createTable?: () => unknown,
+ *          applyTablePlan?: (table: unknown, plan: object) => void}} io
  */
-export function createTranscriptAppender({ createBlock, appendText, isAttached }) {
-    let current = null; // {kind, block} of the block the next same-kind text joins.
+export function createTranscriptAppender({ createBlock, appendText, isAttached, createTable, applyTablePlan }) {
+    let current = null; // {kind, block, model?} of the block the next same-kind output joins.
 
     function write(kind, text) {
         if (typeof text !== "string" || text.length === 0) {
@@ -200,6 +215,16 @@ export function createTranscriptAppender({ createBlock, appendText, isAttached }
             current = { kind, block: createBlock(kind) };
         }
         appendText(current.block, text);
+    }
+
+    function rows(ev) {
+        if (typeof createTable !== "function" || typeof applyTablePlan !== "function") {
+            return;
+        }
+        if (current === null || current.kind !== "table" || !isAttached(current.block)) {
+            current = { kind: "table", block: createTable(), model: createTableModel() };
+        }
+        applyTablePlan(current.block, current.model.apply(ev));
     }
 
     return {
@@ -216,15 +241,119 @@ export function createTranscriptAppender({ createBlock, appendText, isAttached }
         },
 
         /**
-         * Append one runStreaming event. Only `text` events carry transcript
-         * text today; any other type is ignored.
+         * Append one runStreaming event: `text` to a text block, `rows` to the
+         * current result table, `end` closes that table. Any other type is
+         * ignored.
          */
         event(ev) {
-            if (ev && ev.type === "text") {
+            if (!ev) {
+                return;
+            }
+            if (ev.type === "text") {
                 write(ev.stream === "stderr" ? "stderr" : "stdout", ev.text);
+            } else if (ev.type === "rows") {
+                rows(ev);
+            } else if (ev.type === "end" && current !== null && current.kind === "table") {
+                current = null;
             }
         },
     };
+}
+
+// ---- result tables (P12, D-P12-25) -------------------------------------------
+
+/**
+ * The column-growth model of one HTML result table (design §4.7). It turns
+ * each `rows` event from runStreaming's `html` output into a plan of DOM
+ * changes, which the page applies with createElement and textContent only:
+ *
+ *   {addHeaders: string[],   // a <th> to append for each, in order
+ *    padRows: number,        // how many rows already in the table get...
+ *    padCells: number,       // ...this many empty cells appended (the new columns)
+ *    rows: [[{text, className}]]}  // rows to append, one cell per column
+ *
+ * Columns only grow (the engine's ColumnTracker never reorders or drops
+ * one), so a new column is a header at the end and an empty cell at the end
+ * of every earlier row. The model trusts the event's full `columns` list over
+ * `newColumnsFrom`: the headers it adds are the ones the table does not have
+ * yet. A cell's className is "num" for a number (right-aligned), "missing"
+ * for an attribute the row does not have, and "" otherwise.
+ */
+export function createTableModel() {
+    let columnCount = 0;
+    let rowCount = 0;
+    return {
+        /** The plan for one rows event. */
+        apply(ev) {
+            const columns = Array.isArray(ev && ev.columns) ? ev.columns : [];
+            const addHeaders = columns.slice(columnCount).map(String);
+            // Rows already in the table (earlier events) lack the new columns.
+            const padRows = addHeaders.length > 0 ? rowCount : 0;
+            const plan = { addHeaders, padRows, padCells: padRows > 0 ? addHeaders.length : 0, rows: [] };
+            columnCount += addHeaders.length;
+            for (const row of Array.isArray(ev && ev.rows) ? ev.rows : []) {
+                const cells = [];
+                for (let i = 0; i < columnCount; i += 1) {
+                    const c = Array.isArray(row) ? row[i] : undefined;
+                    if (!c || c.m) {
+                        cells.push({ text: "", className: "missing" });
+                    } else {
+                        cells.push({ text: String(c.t), className: c.n ? "num" : "" });
+                    }
+                }
+                plan.rows.push(cells);
+            }
+            rowCount += plan.rows.length;
+            return plan;
+        },
+        /** Columns and rows the table has after the plans so far. */
+        get size() {
+            return { columns: columnCount, rows: rowCount };
+        },
+    };
+}
+
+// ---- output selection (P12, D-P12-26) ----------------------------------------
+
+/** The Output dropdown's choices: [value, label], in order. */
+export const OUTPUT_CHOICES = Object.freeze([
+    ["default", "Default"],
+    ["json", "JSON"],
+    ["csv", "CSV"],
+    ["table", "Table (text)"],
+    ["html", "Table (HTML)"],
+]);
+
+/** The JSON dropdown's choices: [value, label], in order. */
+export const JSON_FLAVOR_CHOICES = Object.freeze([
+    ["plain", "Plain"],
+    ["dynamodb", "DynamoDB"],
+]);
+
+/**
+ * Whether the JSON dropdown applies to an output: every format but Default
+ * uses the flavor (JSON for its values; CSV and the tables for nested maps,
+ * lists and sets in a cell).
+ */
+export function jsonFlavorApplies(output) {
+    return output !== "default";
+}
+
+/**
+ * The runStreaming options for the two dropdowns' values, read at submit
+ * (not persisted). An unknown value falls back to the default, so a stale or
+ * tampered <select> never sends the engine an id it rejects. Default sends
+ * no flavor.
+ *
+ * @returns {{output: string, jsonFlavor?: string}}
+ */
+export function outputOptions(output, jsonFlavor) {
+    const out = OUTPUT_CHOICES.some(([v]) => v === output) ? output : "default";
+    if (!jsonFlavorApplies(out)) {
+        return { output: out };
+    }
+    const flavor = JSON_FLAVOR_CHOICES.some(([v]) => v === jsonFlavor) ? jsonFlavor : "plain";
+    return { output: out, jsonFlavor: flavor };
 }
 
 /**

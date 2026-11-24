@@ -234,7 +234,16 @@ export function createSdkBridge({
                 const longPoll = typeof token.isLongPoll === "function" && token.isLongPoll();
                 // One observer per backoff object at a time. A second retry
                 // overlapping the first (none today: one request in flight)
-                // takes the fallback path.
+                // takes the fallback path, with one exception (P12 review
+                // N11): while retry A holds the observer and awaits the
+                // inner strategy, a retry B on the same client also runs the
+                // hooked computeNextBackoffDelay, which calls A's observer.
+                // If B's retry count equals A's, A raises its event at B's
+                // time with B's delay, and A's own computation then finds
+                // `pending.raised` and raises nothing. This needs two
+                // requests in flight on one client, which the page never
+                // makes (the run guard admits one submission and the engine
+                // sends one request at a time).
                 const pending = { raised: false };
                 const hooked = backoff !== null && !longPoll && backoff.observer === null;
                 if (hooked) {

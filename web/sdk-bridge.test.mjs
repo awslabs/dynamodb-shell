@@ -179,9 +179,14 @@ async function withRandom(value, fn) {
 // The browser's fetch failure, which the SDK classifies as transient (a
 // network error with no HTTP response).
 const fetchFailure = () => new TypeError("Failed to fetch");
-// How far an event may lag the failed attempt, or an attempt may lead its
-// computed sleep, in ms (timer and event-loop slack).
-const TOLERANCE_MS = 100;
+// How far an event may lag the failed attempt, in ms (timer and event-loop
+// slack; generous for slow CI runners: the regression it catches measured
+// 901 ms, P12 review N12).
+const TOLERANCE_MS = 300;
+// How far a timer may fire before its delay, in ms. A lower bound ("attempt 2
+// goes out the backoff after the event") uses this, not TOLERANCE_MS, so it
+// stays meaningful for short delays such as the 22 ms 500 backoff (N12).
+const EARLY_MS = 5;
 
 // ---- retry events (P12, D-P12-18) -------------------------------------------
 console.log("send: retry events");
@@ -202,7 +207,7 @@ await withRandom(0.9, async () => {
     const lag = events[0].raisedAt - calls[0].sentAt;
     check(lag <= TOLERANCE_MS, `the event is raised promptly after the throttled response (${lag} ms)`);
     const wait = calls[1].sentAt - events[0].raisedAt;
-    check(wait >= events[0].delayMs - TOLERANCE_MS,
+    check(wait >= events[0].delayMs - EARLY_MS,
         `attempt 2 goes out the backoff after the event, so the event precedes the sleep (${wait} ms)`);
 });
 await withRandom(0.9, async () => {
@@ -214,7 +219,7 @@ await withRandom(0.9, async () => {
     bridge.setCredentials(CREDS);
     eq(await bridge.send("ListTables", "{}"), "{}", "success after a 500 (pinned backoff)");
     eq([events[0].type, events[0].delayMs], ["retry", 22], "a 500 retry carries the base backoff (0.9 x 25 ms)");
-    check(calls[1].sentAt - events[0].raisedAt >= events[0].delayMs - TOLERANCE_MS,
+    check(calls[1].sentAt - events[0].raisedAt >= events[0].delayMs - EARLY_MS,
         "attempt 2 after a 500 goes out the backoff after the event");
 });
 await withRandom(0.9, async () => {
@@ -298,11 +303,11 @@ await withRandom(0.9, async () => {
             `fallback (${label}): one retry event, then settled`);
         if (sleepsItself) {
             eq(events[0].delayMs, 120, "fallback (sleeps itself): the delay is $retryLog.acquisitionDelay");
-            check(events[0].raisedAt - s.calls[0].sentAt >= 120 - TOLERANCE_MS,
+            check(events[0].raisedAt - s.calls[0].sentAt >= 120 - EARLY_MS,
                 "fallback (sleeps itself): the event follows the strategy's sleep");
         } else {
             eq(events[0].delayMs, 130, "fallback (middleware sleeps): the delay is getRetryDelay()");
-            check(s.calls[1].sentAt - events[0].raisedAt >= 130 - TOLERANCE_MS,
+            check(s.calls[1].sentAt - events[0].raisedAt >= 130 - EARLY_MS,
                 "fallback (middleware sleeps): the middleware sleeps the delay after the event");
         }
     }

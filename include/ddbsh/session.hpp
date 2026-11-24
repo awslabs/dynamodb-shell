@@ -130,7 +130,11 @@ public:
     /// completes it arrives (P12, D-P12-1): one per SELECT page, per written
     /// INSERT row, per SHOW TABLES row, per SHOW BACKUPS page, per DESCRIBE /
     /// SHOW LIMITS response group, per bulk-write RETURN VALUES item, and per
-    /// bulk EXPLAIN request group. After the last fragment, success or failure,
+    /// bulk EXPLAIN request group. A fragment can carry no rows: an empty
+    /// SELECT emits one SelectOutcome with no items (it carries the
+    /// column_hint), and SHOW TABLES / SHOW BACKUPS emit an empty
+    /// ReportOutcome to mark a page end (or an empty result); the Renderer
+    /// renders these as nothing. After the last fragment, success or failure,
     /// this calls sink.end_statement() exactly once (D-P12-16); an exception
     /// thrown by the sink's emit() propagates and skips it.
     Result<void> execute(const Statement& statement, OutcomeSink& sink);

@@ -68,8 +68,10 @@ void report_error_to_stderr(const std::string& rendered) {
 // like the fputs this replaces (and the original's printf), so the default
 // output keeps its exact bytes. The other formats write every byte: CSV writes
 // an S value raw, and one write holds a whole page, so a cut there would drop
-// the rest of the page without an error (P12 review R-S4-1). JSON and the
-// table escape the byte, so for them the flag changes nothing.
+// the rest of the page without an error (P12 review R-S4-1). In JSON and the
+// table, rows escape the byte; in every non-default format, text parts
+// (status lines, service error text: the Renderer's own bytes) are written
+// whole, NUL included (P12 review N18).
 void write_and_flush(std::FILE* f, std::string_view text, bool stop_at_nul) {
     if (stop_at_nul) {
         text = text.substr(0, text.find('\0'));

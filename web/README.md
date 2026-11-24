@@ -47,22 +47,79 @@ unchanged, and service errors arrive as their verbatim `__type` document.
 | File | Role |
 |---|---|
 | `CMakeLists.txt` | the `ddbsh-wasm` target (OUTPUT_NAME `ddbsh`): `bindings.cpp` + `js_sdk_transport.cpp`, linking the engine, `ddbsh-wire` and `ddbsh-cli-core`; stages the static bundle |
-| `bindings.cpp` | embind `DdbshSession`: `runStreaming(text, options, onEvent)` (the UI path, `run_batch`: each piece of output goes to `onEvent` as a `{type: "text", stream, text}` event as soon as the engine emits it; `options` is reserved), `run(text)` (the same path, buffered), `runScript(text, abortOnError, options)` (CLI `-c`/`-f` path, `run_source`; `options` is `{output, jsonFlavor}`, the CLI's `--output`/`--json-flavor`), `region()`, `endpointOverridden()`; `RunResult {stdout, stderr, segments, ok, status}`; `WebWireClient` (retry cap 1, CONNECT-rejection notice); the free function `version()` (the header's version) |
+| `bindings.cpp` | embind `DdbshSession`: `runStreaming(text, options, onEvent)` (the UI path, `run_batch`: each piece of output goes to `onEvent` as an event as soon as the engine emits it; `options` is `{output, jsonFlavor}`, plus the web-only output `html`; see [Streaming and output formats](#streaming-and-output-formats)), `run(text)` (the same path, buffered), `runScript(text, abortOnError, options)` (CLI `-c`/`-f` path, `run_source`; `options` is `{output, jsonFlavor}`, the CLI's `--output`/`--json-flavor`), `region()`, `endpointOverridden()`; `RunResult {stdout, stderr, segments, ok, status}`; `WebWireClient` (retry cap 1, CONNECT-rejection notice); the free function `version()` (the header's version) |
 | `js_sdk_transport.{hpp,cpp}` | `JsSdkTransport`: `send` → `Module.ddbshSend` (Asyncify), `on_connect` → `Module.ddbshConnect`, `descriptor` → `Module.ddbshDescriptor` |
 | `sdk-bridge.mjs` | DOM-free bridge: credentials (closure only), the `DynamoDBClient`, CONNECT validation + fail-closed blocking, the two middlewares, the retry-strategy wrapper behind `onRetryEvent` (a `retry` event for each retry the SDK decides to make, before its backoff and with that backoff's delay, and `settled` when each send ends; SDK 3.1174.0 sleeps inside its retry strategy, so the wrapper hooks the strategy's backoff computation to raise the event before the sleep, and falls back to raising it after the strategy returns when there is no such hook), the SHOW CONNECTION descriptor, `installHooks(Module, bridge)` |
-| `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments; the streaming `createTranscriptAppender`, `guardedEventSink` and `streamSubmission`), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus`, the throttling-code list (`isThrottlingError`), the header's `versionLabel` and busy clock (`createBusyClock`, with its throttled / retrying states) |
-| `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the header (version, busy indicator and its retry states), the editor, the streaming transcript (Text nodes and textContent only) |
+| `app-core.mjs` | DOM-free UI logic: prompt, transcript (ordered segments; the streaming `createTranscriptAppender`, `guardedEventSink` and `streamSubmission`), the HTML result table's column growth (`createTableModel`), the output dropdowns (`OUTPUT_CHOICES`, `JSON_FLAVOR_CHOICES`, `outputOptions`), history, run guard, `parseCredentials` / `validateCredentials` / `credentialStatus`, the throttling-code list (`isThrottlingError`), the header's `versionLabel` and busy clock (`createBusyClock`, with its throttled / retrying states) |
+| `app.js` | thin DOM wiring: load the module, wire the bridge, the credentials panel, the header (version, busy indicator and its retry states), the editor, the Output and JSON dropdowns, the streaming transcript (Text nodes and textContent only) and the HTML result tables (`createElement` and `textContent`, classes only) |
 | `index.html`, `styles.css` | the page; the CSP `<meta>` between the `csp:begin`/`csp:end` markers is generated |
 | `bundle-files.txt` | the publish allowlist: the 9 files the page loads plus the 2 SDK notices, 11 in all |
 | `package.cmake` | the packaging step (target `ddbsh-web-package`): copies the allowlist into `dist/ddbsh-web-<version>/`, zips it, writes `SHA256SUMS` |
 | `hosting/aws/` | `ddbsh-web-hosting.yaml` (private S3 bucket + CloudFront with Origin Access Control and security headers) and `deploy.sh` (the upload); see `docs/HOSTING.md` |
 | `vendor/aws-sdk/` | the pinned SDK: `package.json` + `package-lock.json` + `entry.mjs` + `generate.mjs` (inputs), `aws-sdk-dynamodb.mjs` + `allowed-hosts.mjs` + `THIRD-PARTY-NOTICES.txt` + `PROVENANCE.json` (outputs) |
 | `ddbsh-node.mjs` | CLI-shaped Node front end over the same files (the web golden gate's `DDBSH_SHELL_BIN`) |
-| `live-smoke.mjs` | live UI-path smoke (`DdbshSession.run` and `runStreaming`) against real DynamoDB |
+| `live-smoke.mjs` | live UI-path smoke (`DdbshSession.run`, and `runStreaming` in the default, `html` and `json` outputs) against real DynamoDB |
 | `app-core.test.mjs`, `sdk-bridge.test.mjs` | offline Node unit tests (the bridge tests run the real SDK bundle with a stub HTTP handler) |
-| `streaming.test.mjs` | offline Node test of `runStreaming` against the built `ddbsh.wasm` with stub transport hooks: SHOW TABLES row k reaches the callback before row k+1 is described, the events equal `runScript`'s and `run`'s segments, and a throwing callback does not break the run |
+| `streaming.test.mjs` | offline Node test of `runStreaming` against the built `ddbsh.wasm` with stub transport hooks: SHOW TABLES row k reaches the callback before row k+1 is described, the events equal `runScript`'s and `run`'s segments (in every format and flavor), the `html` rows/end events (column growth, cells, empty results, a mid-stream error), option errors, and a throwing callback does not break the run |
 | `package.test.mjs` | offline check of the packaging step: the allowlist matches the page's load graph, the packaged folder, zip and `SHA256SUMS` match the allowlist and the build, and `package.cmake` refuses bad input |
 | `package.json` | marks the bundle dir as ES modules for Node |
+
+## Streaming and output formats
+
+The page runs every submission through
+`DdbshSession.runStreaming(text, options, onEvent)` (P12, D-P12-17). It runs
+`text` as one `run_batch` submission and calls `onEvent` synchronously each
+time the engine emits a piece of output, so the page paints it while the next
+DynamoDB request is in flight. It returns `{ok, status}` (a `RunResult` with
+empty `stdout`, `stderr` and `segments`, so nothing is delivered twice).
+
+`options` selects the output (D-P12-26). An absent field keeps the default.
+
+| Field | Values |
+|---|---|
+| `output` | `default`, `json`, `csv`, `table` (as the CLI's `--output`), or `html` (web only) |
+| `jsonFlavor` | `plain` or `dynamodb` (as the CLI's `--json-flavor`); ignored by `default` |
+
+An unknown value runs nothing: `onEvent` receives the CLI's message as one
+`stderr` text event, and the status is 1. `runScript` takes the same options
+but rejects `html`, as the CLI does.
+
+The events:
+
+- `{type: "text", stream: "stdout" | "stderr", text}`: one per piece of
+  rendered output, in the CLI's order. A failing statement's error is a
+  `stderr` event after that statement's output. In `default`, `json`, `csv`
+  and `table` every event is a text event, and the events of a run
+  concatenate to the bytes `runScript` returns for the same text and options.
+- `{type: "rows", columns, newColumnsFrom, rows, groupEnd}`: `html` only (D-P12-25).
+  Rows of the open result set. `columns` is the set's full column list so far
+  (it only grows); `newColumnsFrom` is the index of the first column this
+  event added (equal to `columns.length` when it added none). `rows` holds one
+  array per row with one cell per column: `{t, n, m}`, where `t` is the cell's
+  text (not escaped: set it with `textContent`), `n` is true for a number,
+  and `m` is true when the row has no such attribute. `groupEnd` is true when
+  a DynamoDB response page ended with this event. The first event of a set
+  always comes, so an empty result still carries its columns; a later event
+  comes only when it brings rows or columns.
+- `{type: "end"}`: `html` only. The open result set closed. It comes before
+  the text that follows the set and before a failing statement's error.
+
+In `html` everything that is not rows (status tokens, DESCRIBE, EXPLAIN, the
+`SELECT (…)` capacity line) is a text event with the same bytes as in
+`default`. The library emits no HTML: the page builds each result set as a
+`<table>` with `createElement` and `textContent`, styled by class only, because
+the CSP below allows no `innerHTML` and no `style` attribute. When an event
+adds columns, the page appends a header cell and an empty cell to every row
+already in the table (`createTableModel` in `app-core.mjs`).
+
+The result sets of `html` open and close exactly where `json`'s arrays do:
+both sinks derive from the library's `ddbsh::render::ResultSetSink`, which
+holds the one open-set rule (a row part opens a set or continues it; text, or
+the end of the statement, closes it).
+
+The Output dropdown (Default, JSON, CSV, Table (text), Table (HTML)) and the
+JSON dropdown (Plain, DynamoDB; disabled for Default) sit by the Run button.
+The page reads them at submit and does not save them.
 
 ## Prerequisites
 

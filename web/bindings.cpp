@@ -21,6 +21,9 @@
 //                                   piece of output goes to onEvent as soon as
 //                                   the engine emits it, so the page can paint
 //                                   it while the next request is in flight.
+//                                   `options` is runScript's, plus the
+//                                   web-only output "html", which sends rows
+//                                   as structured events (D-P12-25).
 //   runScript(text, abortOnError, options)
 //                                   the CLI `-c` / `-f` path: run_source over
 //                                   the text, exactly as the CLI drives it
@@ -42,11 +45,13 @@
 
 #if defined(__EMSCRIPTEN__)
 
+#include <cstddef>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
@@ -148,22 +153,47 @@ private:
     RunResult& result_;
 };
 
-// Read runScript's `options` ({output, jsonFlavor}, P12 D-P12-26) into
-// `format`. Absent (or undefined/null) fields keep the default. Returns the
-// CLI's message for an unknown value, or "" when every value is known.
-std::string read_format_options(const emscripten::val& options,
-                                ddbsh::render::FormatOptions& format) {
+// One output selection read from a JS `options` object ({output, jsonFlavor},
+// P12 D-P12-26). `html` is set for the web-only "html" id (D-P12-25), which
+// only runStreaming accepts; `format` then carries just the JSON flavor (the
+// flavor of nested values in the cells).
+struct WebFormat {
+    ddbsh::render::FormatOptions format;
+    bool html = false;
+};
+
+// ASCII case-insensitive equality, as parse_output_format compares ids.
+bool iequals_ascii(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c; };
+        if (lower(a[i]) != lower(b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Read `options` into `out`. Absent (or undefined/null) fields keep the
+// default. `allow_html` admits the "html" id (runStreaming only; runScript
+// rejects it as the CLI does). Returns the CLI's message for an unknown value,
+// or "" when every value is known.
+std::string read_format_options(const emscripten::val& options, WebFormat& out, bool allow_html) {
     if (options.isUndefined() || options.isNull()) {
         return {};
     }
     const emscripten::val output = options["output"];
     if (!output.isUndefined() && !output.isNull()) {
         const std::string id = output.as<std::string>();
-        auto f = ddbsh::render::parse_output_format(id);
-        if (!f.has_value()) {
+        if (allow_html && iequals_ascii(id, "html")) {
+            out.html = true;
+        } else if (auto f = ddbsh::render::parse_output_format(id); f.has_value()) {
+            out.format.format = *f;
+        } else {
             return ddbsh::cli::unknown_output_format_message(id);
         }
-        format.format = *f;
     }
     const emscripten::val flavor = options["jsonFlavor"];
     if (!flavor.isUndefined() && !flavor.isNull()) {
@@ -172,41 +202,166 @@ std::string read_format_options(const emscripten::val& options,
         if (!f.has_value()) {
             return ddbsh::cli::unknown_json_flavor_message(id);
         }
-        format.json_flavor = *f;
+        out.format.json_flavor = *f;
     }
     return {};
 }
 
-// Delivers each emitted fragment to a JavaScript callback as it is emitted
-// (P12, D-P12-17): one {type: "text", stream: "stdout"|"stderr", text} event
-// per non-empty render, in the order BufferingSink would append them (the
-// fragment's stdout, its stderr, then a rejected CONNECT's notice). The
-// callback runs synchronously inside emit(), while the engine is on the stack;
-// it must not throw (the page passes app-core's guardedEventSink) and must not
-// call back into the module or the session.
-struct StreamingSink : ddbsh::OutcomeSink {
-    const ddbsh::render::Renderer& renderer;
-    WebWireClient& client;
+// runStreaming's JavaScript callback (P12, D-P12-17). It runs synchronously
+// inside emit(), while the engine is on the stack; it must not throw (the page
+// passes app-core's guardedEventSink) and must not call back into the module
+// or the session.
+struct EventChannel {
     emscripten::val on_event;
-    StreamingSink(const ddbsh::render::Renderer& r, WebWireClient& c, emscripten::val cb)
-        : renderer(r), client(c), on_event(std::move(cb)) {}
 
-    void text(const char* stream, const std::string& text) const {
+    // One {type: "text", stream, text} event; empty text sends nothing.
+    void text(const char* stream, std::string_view text) const {
         if (text.empty()) {
             return;
         }
         emscripten::val ev = emscripten::val::object();
         ev.set("type", std::string("text"));
         ev.set("stream", std::string(stream));
-        ev.set("text", text);
+        ev.set("text", std::string(text));
         on_event(ev);
     }
 
+    void send(const emscripten::val& ev) const { on_event(ev); }
+};
+
+// runStreaming in `default`, `json`, `csv` and `table`: a FormattingSink (the
+// one the CLI and runScript use) whose writer sends each piece of output as
+// one text event, so the events of a run concatenate to runScript's bytes.
+// A rejected CONNECT's notice follows that statement's output, as in
+// BufferingSink.
+class StreamingSink : public ddbsh::render::FormattingSink {
+public:
+    StreamingSink(ddbsh::render::FormatOptions options, WebWireClient& client,
+                  const EventChannel& channel)
+        : FormattingSink(options,
+                         [&channel](ddbsh::render::Stream stream, std::string_view text) {
+                             channel.text(
+                                 stream == ddbsh::render::Stream::out ? "stdout" : "stderr", text);
+                         }),
+          client_(client),
+          channel_(channel) {}
+
     void emit(const ddbsh::ExecOutcome& fragment) override {
-        text("stdout", renderer.render(fragment));
-        text("stderr", renderer.render_stderr(fragment));
-        text("stderr", client.take_notice());
+        FormattingSink::emit(fragment);
+        channel_.text("stderr", client_.take_notice());
     }
+
+private:
+    WebWireClient& client_;
+    const EventChannel& channel_;
+};
+
+// runStreaming in the web-only `html` format (P12, D-P12-25, design §4.7).
+// The library emits no HTML: this sink sends the rows of each result set as
+// structured events and the page builds the table from them with
+// createElement/textContent. It is a ResultSetSink, so its result sets open
+// and close exactly where FormattingSink's JSON arrays do:
+//   {type: "rows", columns, newColumnsFrom, rows, groupEnd}
+//       one per RowsPart that brings something: the first part of a set
+//       (even with no rows: an empty SELECT still shows its header), and any
+//       later part with rows or new columns (a later empty part, such as the
+//       capacity-only fragment that ends a SELECT or a page end a LIKE filter
+//       emptied, sends nothing). `columns` is the set's full column list so
+//       far (ColumnTracker); `newColumnsFrom` the index of the first column
+//       this event added (== columns.length when none). `rows` holds one
+//       array per row, one cell per column in `columns`:
+//       {t: format_cell text (not escaped; the page sets it as textContent),
+//        n: the value is a number (N), m: the row has no such attribute}.
+//       `groupEnd` is RowsPart::group_end (an API page ended here).
+//   {type: "end"}
+//       the result set closed (before the text that follows it, and at the
+//       end of the statement, so before a failing statement's error).
+// Everything else (status tokens, DESCRIBE, EXPLAIN, capacity lines) arrives
+// as text events with the Renderer's own bytes, as in `default`.
+class HtmlEventSink : public ddbsh::render::ResultSetSink {
+public:
+    HtmlEventSink(ddbsh::render::JsonFlavor flavor, WebWireClient& client,
+                  const EventChannel& channel)
+        : flavor_(flavor), client_(client), channel_(channel) {}
+
+    void emit(const ddbsh::ExecOutcome& fragment) override {
+        ResultSetSink::emit(fragment);
+        channel_.text("stderr", client_.take_notice());
+    }
+
+private:
+    void on_open() override {
+        tracker_.clear();
+        announced_ = false;
+    }
+
+    void on_rows(const ddbsh::render::RowsPart& part) override {
+        const std::size_t from = tracker_.add(part);
+        const std::vector<std::string>& columns = tracker_.columns();
+        // A part with no rows and no new column carries nothing for the page
+        // once the set has had its first event (the capacity-only fragment
+        // that ends a SELECT, a page end a LIKE filter emptied). The first
+        // event of a set is always sent, so an empty result still shows its
+        // header.
+        if (announced_ && part.rows.empty() && from == columns.size()) {
+            return;
+        }
+        announced_ = true;
+        emscripten::val cols = emscripten::val::array();
+        for (const auto& c : columns) {
+            cols.call<void>("push", c);
+        }
+        emscripten::val rows = emscripten::val::array();
+        for (const auto& row : part.rows) {
+            emscripten::val cells = emscripten::val::array();
+            for (const auto& c : columns) {
+                cells.call<void>("push", cell(row.attributes, c));
+            }
+            rows.call<void>("push", cells);
+        }
+        emscripten::val ev = emscripten::val::object();
+        ev.set("type", std::string("rows"));
+        ev.set("columns", cols);
+        ev.set("newColumnsFrom", static_cast<double>(from));
+        ev.set("rows", rows);
+        ev.set("groupEnd", part.group_end);
+        channel_.send(ev);
+    }
+
+    void on_close() override {
+        tracker_.clear();
+        emscripten::val ev = emscripten::val::object();
+        ev.set("type", std::string("end"));
+        channel_.send(ev);
+    }
+
+    void on_text(const ddbsh::render::TextPart& part) override {
+        channel_.text("stdout", part.out);
+        channel_.text("stderr", part.err);
+    }
+
+    // One {t, n, m} cell: the attribute `name` of `attrs`, or a missing cell.
+    emscripten::val cell(const ddbsh::ValueMap& attrs, const std::string& name) const {
+        emscripten::val c = emscripten::val::object();
+        for (const auto& [key, value] : attrs) {
+            if (key == name) {
+                c.set("t", ddbsh::render::format_cell(value, flavor_));
+                c.set("n", value.type == ddbsh::Value::Type::N);
+                c.set("m", false);
+                return c;
+            }
+        }
+        c.set("t", std::string());
+        c.set("n", false);
+        c.set("m", true);
+        return c;
+    }
+
+    ddbsh::render::JsonFlavor flavor_;
+    WebWireClient& client_;
+    const EventChannel& channel_;
+    ddbsh::render::ColumnTracker tracker_;
+    bool announced_ = false;  ///< the open set has sent its first rows event
 };
 
 }  // namespace
@@ -235,16 +390,19 @@ public:
     }
 
     // The streaming UI path (P12, D-P12-17): run() with each piece of output
-    // delivered to `on_event` as it is emitted (see StreamingSink), a failing
-    // statement's error as a stderr event after that statement's output, and
-    // a trailing parse error last. Returns {ok, status} with empty text
-    // fields and no segments, so nothing is delivered twice. `options` is
-    // reserved for the output-format selection (P12 S5) and is ignored.
-    // A non-function `on_event` runs nothing and returns status 1 with the
-    // reason in `stderr`.
+    // delivered to `on_event` as it is emitted, a failing statement's error as
+    // a stderr event after that statement's output (and after the `end` of its
+    // result set), and a trailing parse error last. `options` is
+    // {output, jsonFlavor} as in runScript, plus the web-only output "html"
+    // (D-P12-25; see HtmlEventSink). In `default`, `json`, `csv` and `table`
+    // the text events concatenate to the bytes runScript returns for the same
+    // text and options. Returns {ok, status} with empty text fields and no
+    // segments, so nothing is delivered twice. A non-function `on_event` runs
+    // nothing and returns status 1 with the reason in `stderr`; an unknown
+    // option value runs nothing and returns status 1 with the CLI's message
+    // as a stderr event.
     RunResult run_streaming(const std::string& text, emscripten::val options,
                             emscripten::val on_event) {
-        (void)options;
         RunResult result;
         if (on_event.typeOf().as<std::string>() != "function") {
             result.stderr_text = "runStreaming: onEvent is not a function\n";
@@ -252,10 +410,28 @@ public:
             result.status = 1;
             return result;
         }
-        StreamingSink sink(renderer_, client_, on_event);
-        ddbsh::cli::BatchStatus st = ddbsh::cli::run_batch(
-            session_, renderer_, text, /*abort_on_error=*/false, sink,
-            [&](const std::string& rendered) { sink.text("stderr", rendered); });
+        const EventChannel channel{std::move(on_event)};
+        WebFormat format;
+        if (std::string error = read_format_options(options, format, /*allow_html=*/true);
+            !error.empty()) {
+            channel.text("stderr", error);
+            result.ok = false;
+            result.status = 1;
+            return result;
+        }
+        const auto report = [&channel](const std::string& rendered) {
+            channel.text("stderr", rendered);
+        };
+        ddbsh::cli::BatchStatus st;
+        if (format.html) {
+            HtmlEventSink sink(format.format.json_flavor, client_, channel);
+            st = ddbsh::cli::run_batch(session_, renderer_, text, /*abort_on_error=*/false, sink,
+                                       report);
+        } else {
+            StreamingSink sink(format.format, client_, channel);
+            st = ddbsh::cli::run_batch(session_, renderer_, text, /*abort_on_error=*/false, sink,
+                                       report);
+        }
         const bool failed = st.last_error.value_or(false);
         result.ok = !failed;
         result.status = failed ? 1 : 0;
@@ -269,14 +445,15 @@ public:
     // stderr.
     RunResult run_script(const std::string& text, bool abort_on_error, emscripten::val options) {
         RunResult result;
-        ddbsh::render::FormatOptions format;
-        if (std::string error = read_format_options(options, format); !error.empty()) {
+        WebFormat format;
+        if (std::string error = read_format_options(options, format, /*allow_html=*/false);
+            !error.empty()) {
             result.append("stderr", error);
             result.ok = false;
             result.status = 1;
             return result;
         }
-        BufferingSink sink(format, client_, result);
+        BufferingSink sink(format.format, client_, result);
         std::istringstream in(text);
         ddbsh::cli::StreamLineSource src(in);
         ddbsh::cli::Terminator term;  // the CLI default (`go`); the shim passes no -t

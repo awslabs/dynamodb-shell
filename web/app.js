@@ -17,6 +17,13 @@
 // screen while row k+1 is being described. The event callback touches only
 // the transcript, never the module or the session (D-P6e-2).
 //
+// Output formats (P12, D-P12-26 / D-P12-25): two dropdowns by the Run button
+// pick the output (Default, JSON, CSV, Table (text), Table (HTML)) and the JSON
+// flavor; app-core's outputOptions turns them into runStreaming's options at
+// submit. Table (HTML) arrives as rows events, and the page builds a <table>
+// from them with createElement and textContent (the model is app-core's
+// createTableModel); every other format is engine text.
+//
 // Throttling (P12, D-P12-18 / D-P12-19): the SDK bridge reports each retry
 // the SDK decides to make; the busy indicator shows "throttled, retrying" (or
 // "retrying") in its own color until that request settles.
@@ -46,6 +53,8 @@
 // static markup in index.html (D-P10-17).
 
 import {
+    JSON_FLAVOR_CHOICES,
+    OUTPUT_CHOICES,
     buildPrompt,
     createBusyClock,
     credentialEnvironmentProblem,
@@ -56,6 +65,8 @@ import {
     createRunGuard,
     createTranscriptAppender,
     historyRemovedElsewhere,
+    jsonFlavorApplies,
+    outputOptions,
     parseCredentials,
     streamSubmission,
     versionLabel,
@@ -86,6 +97,8 @@ const els = {
     runBtn: document.getElementById("run-btn"),
     fileLabel: document.getElementById("file-label"),
     fileInput: document.getElementById("file-input"),
+    outputSelect: document.getElementById("output-select"),
+    flavorSelect: document.getElementById("flavor-select"),
     clearBtn: document.getElementById("clear-btn"),
     clearHistoryBtn: document.getElementById("clear-history-btn"),
     toolbarStatus: document.getElementById("toolbar-status"),
@@ -197,11 +210,18 @@ function paintTranscript(change) {
     return result;
 }
 
-// The streaming transcript's blocks are <pre> elements in the result pane.
-// Text goes in as Text nodes (pre.append(text) creates one): never innerHTML,
-// because item data is untrusted, and never `textContent +=`, which copies the
-// whole block on every event.
+// The streaming transcript's text blocks are <pre> elements in the result
+// pane. Text goes in as Text nodes (pre.append(text) creates one): never
+// innerHTML, because item data is untrusted, and never `textContent +=`, which
+// copies the whole block on every event.
+//
+// The `html` output's result sets are <table> elements (P12, D-P12-25), built
+// with createElement and textContent only: the page's CSP requires Trusted
+// Types with no policy (so no innerHTML) and allows styles from styles.css
+// only (so classes, never a style attribute). A table block is
+// {root, headRow, body}; root is a scrolling wrapper <div>.
 function createDomTranscriptAppender() {
+    const nodeOf = (block) => (block instanceof HTMLElement ? block : block.root);
     return createTranscriptAppender({
         createBlock: (kind) => paintTranscript(() => {
             const pre = document.createElement("pre");
@@ -211,8 +231,66 @@ function createDomTranscriptAppender() {
         }),
         appendText: (pre, text) => paintTranscript(() => pre.append(text)),
         // Clear (replaceChildren) detaches the blocks of a running submission.
-        isAttached: (pre) => pre.parentNode === els.resultPane,
+        isAttached: (block) => nodeOf(block).parentNode === els.resultPane,
+        createTable: () => paintTranscript(() => {
+            const root = document.createElement("div");
+            root.className = "result-table-wrap";
+            const table = document.createElement("table");
+            table.className = "result-table";
+            const head = document.createElement("thead");
+            const headRow = document.createElement("tr");
+            const body = document.createElement("tbody");
+            head.appendChild(headRow);
+            table.append(head, body);
+            root.appendChild(table);
+            els.resultPane.appendChild(root);
+            return { root, headRow, body };
+        }),
+        applyTablePlan: (t, plan) => paintTranscript(() => applyTablePlan(t, plan)),
     });
+}
+
+// Apply one createTableModel plan (app-core) to a result table.
+function applyTablePlan({ headRow, body }, plan) {
+    for (const name of plan.addHeaders) {
+        const th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = name;
+        headRow.appendChild(th);
+    }
+    for (let r = 0; r < plan.padRows && r < body.rows.length; r += 1) {
+        for (let c = 0; c < plan.padCells; c += 1) {
+            const td = document.createElement("td");
+            td.className = "missing";
+            body.rows[r].appendChild(td);
+        }
+    }
+    for (const cells of plan.rows) {
+        const tr = document.createElement("tr");
+        for (const cell of cells) {
+            const td = document.createElement("td");
+            td.className = cell.className;
+            td.textContent = cell.text; // never innerHTML: the value is untrusted data.
+            tr.appendChild(td);
+        }
+        body.appendChild(tr);
+    }
+}
+
+// ---- output format dropdowns (P12, D-P12-26) ---------------------------------
+// Read at submit; not persisted (the page's only storage is the command
+// history). The JSON flavor does not apply to Default, so it is disabled then.
+function fillSelect(select, choices) {
+    for (const [value, label] of choices) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+    }
+}
+
+function refreshFlavorSelect() {
+    els.flavorSelect.disabled = !jsonFlavorApplies(els.outputSelect.value);
 }
 
 // Append whole blocks (messages outside a submission's stream).
@@ -360,7 +438,8 @@ async function submit(text, { addToHistory }) {
         // streamSubmission paints the echo first, then each piece of output
         // as it arrives, then any internal error (P12, D-P12-17).
         const prompt = buildPrompt(session.region(), session.endpointOverridden());
-        await streamSubmission({ session, prompt, text, appender: createDomTranscriptAppender() });
+        const options = outputOptions(els.outputSelect.value, els.flavorSelect.value);
+        await streamSubmission({ session, prompt, text, options, appender: createDomTranscriptAppender() });
         // History keeps the input even when runStreaming itself threw
         // (streamSubmission reported it and returned null): the user typed
         // it, and recalling it to retry is the useful behavior (P12 N9).
@@ -509,6 +588,10 @@ async function start() {
     }
 
     fillRegionSelect();
+    fillSelect(els.outputSelect, OUTPUT_CHOICES);
+    fillSelect(els.flavorSelect, JSON_FLAVOR_CHOICES);
+    refreshFlavorSelect();
+    els.outputSelect.addEventListener("change", refreshFlavorSelect);
     els.runBtn.addEventListener("click", runFromEditor);
     els.clearBtn.addEventListener("click", onClear);
     els.clearHistoryBtn.addEventListener("click", onClearHistory);

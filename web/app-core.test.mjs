@@ -18,8 +18,11 @@
 // Help link (D-P10-17); and the P12 additions: the streaming transcript
 // (promptEntry, createTranscriptAppender, guardedEventSink; D-P12-17), the
 // throttling-code list (isThrottlingError, D-P12-18) and the busy indicator's
-// throttled / retrying states (setRetrying, D-P12-19). streamSubmission is
-// tested against the built engine in streaming.test.mjs.
+// throttled / retrying states (setRetrying, D-P12-19), the HTML result
+// table's column growth (createTableModel and the appender's rows/end
+// handling, D-P12-25), and the output dropdowns (outputOptions, D-P12-26).
+// streamSubmission and the engine's rows events are tested against the built
+// engine in streaming.test.mjs.
 
 import { readFileSync } from "node:fs";
 
@@ -31,8 +34,13 @@ import {
     busyRetryAnnouncement,
     busyText,
     createBusyClock,
+    createTableModel,
     createTranscriptAppender,
     guardedEventSink,
+    JSON_FLAVOR_CHOICES,
+    jsonFlavorApplies,
+    OUTPUT_CHOICES,
+    outputOptions,
     isThrottlingError,
     promptEntry,
     THROTTLING_ERROR_CODES,
@@ -798,6 +806,126 @@ console.log("header markup");
     const busy = openingTag("busy");
     check(busy !== "" && attr(busy, "aria-live") === null && attr(busy, "role") === null,
         "#busy (the ticking text) is not a live region");
+}
+
+// ---- HTML result tables (P12, D-P12-25) ---------------------------------------
+console.log("createTableModel");
+{
+    const cell = (t, n = false, m = false) => ({ t, n, m });
+    const model = createTableModel();
+    const p1 = model.apply({ type: "rows", columns: ["pk", "a"], newColumnsFrom: 0,
+        rows: [[cell("1", true), cell("x\ny")]], groupEnd: true });
+    eq(p1, { addHeaders: ["pk", "a"], padRows: 0, padCells: 0,
+        rows: [[{ text: "1", className: "num" }, { text: "x\ny", className: "" }]] },
+        "the first event: every header, its rows; numbers get the num class, text is kept as is");
+    const p2 = model.apply({ type: "rows", columns: ["pk", "a"], newColumnsFrom: 2,
+        rows: [[cell("2", true), cell("", false, true)]], groupEnd: true });
+    eq(p2, { addHeaders: [], padRows: 0, padCells: 0,
+        rows: [[{ text: "2", className: "num" }, { text: "", className: "missing" }]] },
+        "no new column: no header, no padding; a missing attribute is an empty missing cell");
+    const p3 = model.apply({ type: "rows", columns: ["pk", "a", "b", "c"], newColumnsFrom: 2,
+        rows: [[cell("3", true), cell("y"), cell("{\"k\": 3}"), cell("", false, true)]], groupEnd: true });
+    eq([p3.addHeaders, p3.padRows, p3.padCells], [["b", "c"], 2, 2],
+        "two new columns: two headers, and two empty cells for each of the two earlier rows");
+    eq(p3.rows[0].map((c) => c.className), ["num", "", "", "missing"], "the new row has a cell per column");
+    eq(model.size, { columns: 4, rows: 3 }, "the model counts the table's columns and rows");
+    const p4 = model.apply({ type: "rows", columns: ["pk", "a", "b", "c"], newColumnsFrom: 4, rows: [] });
+    eq(p4, { addHeaders: [], padRows: 0, padCells: 0, rows: [] }, "an event with nothing new plans nothing");
+    // A short row (fewer cells than columns) is padded with missing cells.
+    const p5 = model.apply({ type: "rows", columns: ["pk", "a", "b", "c"], rows: [[cell("9", true)]] });
+    eq(p5.rows[0].map((c) => c.className), ["num", "missing", "missing", "missing"],
+        "a row shorter than the columns is completed with missing cells");
+    // The empty-result header: columns, no rows.
+    const empty = createTableModel().apply({ type: "rows", columns: ["pk"], newColumnsFrom: 0, rows: [] });
+    eq(empty, { addHeaders: ["pk"], padRows: 0, padCells: 0, rows: [] }, "an empty result: the header only");
+    // New columns before any row: headers only, nothing to pad.
+    const m2 = createTableModel();
+    m2.apply({ columns: ["pk"], rows: [] });
+    eq(m2.apply({ columns: ["pk", "x"], rows: [] }), { addHeaders: ["x"], padRows: 0, padCells: 0, rows: [] },
+        "a new column with no row yet pads nothing");
+}
+
+console.log("transcript appender: rows and end");
+{
+    const blocks = [];
+    const plans = [];
+    const appender = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, parts: [], attached: true };
+            blocks.push(b);
+            return b;
+        },
+        appendText: (b, t) => b.parts.push(t),
+        isAttached: (b) => b.attached,
+        createTable: () => {
+            const b = { kind: "table", plans: [], attached: true };
+            blocks.push(b);
+            return b;
+        },
+        applyTablePlan: (b, plan) => {
+            b.plans.push(plan);
+            plans.push(plan);
+        },
+    });
+    const rows = (columns, n) => ({ type: "rows", columns, newColumnsFrom: 0,
+        rows: Array.from({ length: n }, () => columns.map(() => ({ t: "v", n: false, m: false }))), groupEnd: true });
+    appender.prompt("p> ", "select …;");
+    appender.event(rows(["a"], 1));
+    appender.event(rows(["a", "b"], 1));
+    appender.event({ type: "end" });
+    appender.event({ type: "text", stream: "stdout", text: "SELECT (t, 1, 0, 0)\n" });
+    appender.event(rows(["x"], 2));
+    eq(blocks.map((b) => b.kind), ["prompt", "table", "stdout", "table"],
+        "rows events share a table until end; text after it is a new block; the next set a new table");
+    eq(blocks[1].plans.map((p) => [p.addHeaders, p.padRows, p.padCells]), [[["a"], 0, 0], [["b"], 1, 1]],
+        "the table's model pads the earlier row when page 2 adds a column");
+    eq(blocks[3].plans[0].addHeaders, ["x"], "the second table has its own model");
+    blocks[3].attached = false; // Clear while the set is open
+    appender.event(rows(["x"], 1));
+    eq(blocks.map((b) => b.kind), ["prompt", "table", "stdout", "table", "table"],
+        "a rows event after Clear starts a new table");
+    eq(blocks[4].plans[0].addHeaders, ["x"], "  … with its headers again");
+    // Without the table operations, rows events are ignored (a text-only consumer).
+    const textOnly = [];
+    const a2 = createTranscriptAppender({
+        createBlock: (kind) => {
+            const b = { kind, parts: [] };
+            textOnly.push(b);
+            return b;
+        },
+        appendText: (b, t) => b.parts.push(t),
+        isAttached: () => true,
+    });
+    a2.event(rows(["a"], 1));
+    a2.event({ type: "end" });
+    a2.event({ type: "text", stream: "stdout", text: "x\n" });
+    eq(textOnly.map((b) => b.kind), ["stdout"], "a text-only appender ignores rows and end");
+}
+
+// ---- output dropdowns (P12, D-P12-26) ----------------------------------------
+console.log("output dropdowns");
+{
+    eq(OUTPUT_CHOICES.map(([v]) => v), ["default", "json", "csv", "table", "html"], "the Output values, in order");
+    eq(OUTPUT_CHOICES.map(([, l]) => l), ["Default", "JSON", "CSV", "Table (text)", "Table (HTML)"],
+        "the Output labels");
+    eq(JSON_FLAVOR_CHOICES, [["plain", "Plain"], ["dynamodb", "DynamoDB"]], "the JSON choices");
+    eq(OUTPUT_CHOICES.map(([v]) => jsonFlavorApplies(v)), [false, true, true, true, true],
+        "JSON is disabled for Default only");
+    eq(outputOptions("default", "dynamodb"), { output: "default" }, "Default sends no flavor");
+    eq(outputOptions("json", "dynamodb"), { output: "json", jsonFlavor: "dynamodb" }, "JSON + DynamoDB");
+    eq(outputOptions("html", "plain"), { output: "html", jsonFlavor: "plain" }, "Table (HTML) + Plain");
+    eq(outputOptions("csv", "bogus"), { output: "csv", jsonFlavor: "plain" }, "an unknown flavor falls back to plain");
+    eq(outputOptions("xml", "dynamodb"), { output: "default" }, "an unknown output falls back to Default");
+    eq(outputOptions(undefined, undefined), { output: "default" }, "no values: Default");
+
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    for (const id of ["output-select", "flavor-select"]) {
+        check(new RegExp(`<select id="${id}"[^>]*></select>`).test(html), `#${id} is an empty <select> (app.js fills it)`);
+        check(new RegExp(`<label[^>]*\\bfor="${id}"[^>]*>`).test(html), `#${id} has a <label for>`);
+    }
+    check(html.indexOf('id="run-btn"') < html.indexOf('id="output-select"') &&
+        html.indexOf('id="output-select"') < html.indexOf('id="flavor-select"'),
+        "the dropdowns follow the Run button, Output first");
 }
 
 // ---- summary ---------------------------------------------------------------

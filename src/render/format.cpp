@@ -5,7 +5,7 @@
 //
 // Three writers share one shape: a result set opens on its first RowsPart,
 // takes rows as they arrive, and closes on the next TextPart or at the end of
-// the statement.
+// the statement (the rule ResultSetSink implements once, below).
 //   * JSON (D-P12-22): `[` + one element per line, indented two spaces; each
 //     element is written as soon as its row arrives (the `,` that separates it
 //     from the next goes out with the next); `]` at the close. An empty set is
@@ -694,15 +694,43 @@ std::string format_cell(const Value& value, JsonFlavor flavor) {
     return out;
 }
 
+// ---- ResultSetSink ------------------------------------------------------------
+
+void ResultSetSink::emit(const ExecOutcome& fragment) {
+    for (const auto& part : decompose(fragment)) {
+        if (const auto* text = std::get_if<TextPart>(&part)) {
+            close_set();
+            on_text(*text);
+        } else {
+            if (!open_) {
+                open_ = true;
+                on_open();
+            }
+            on_rows(std::get<RowsPart>(part));
+        }
+    }
+}
+
+void ResultSetSink::end_statement() {
+    close_set();
+}
+
+void ResultSetSink::close_set() {
+    if (open_) {
+        open_ = false;
+        on_close();
+    }
+}
+
 // ---- FormattingSink -------------------------------------------------------------
 
+// The writers' state. Whether a result set is open is ResultSetSink's; this
+// holds what the open set's writer has done so far.
 struct FormattingSink::State {
     FormatOptions options;
     Writer writer;
     Renderer renderer;
 
-    // The open result set, if any, and what its writer has done so far.
-    bool open = false;
     ColumnTracker tracker;
     std::size_t json_elements = 0;    ///< JSON: elements written
     std::size_t csv_header_size = 0;  ///< CSV: columns in the last header written
@@ -718,7 +746,6 @@ struct FormattingSink::State {
     }
 
     void start_set() {
-        open = true;
         tracker.clear();
         json_elements = 0;
         csv_header_size = 0;
@@ -737,10 +764,8 @@ struct FormattingSink::State {
         pending.clear();
     }
 
+    // Write the open set's closing bytes. Called only while a set is open.
     void close_set() {
-        if (!open) {
-            return;
-        }
         switch (options.format) {
             case OutputFormat::json:
                 write(Stream::out, json_elements == 0 ? "[]\n" : "\n]\n");
@@ -755,21 +780,16 @@ struct FormattingSink::State {
             case OutputFormat::standard:
                 break;
         }
-        open = false;
         tracker.clear();
         pending.clear();
     }
 
-    void text(const TextPart& part) {
-        close_set();
+    void text(const TextPart& part) const {
         write(Stream::out, part.out);
         write(Stream::err, part.err);
     }
 
     void rows(const RowsPart& part) {
-        if (!open) {
-            start_set();
-        }
         switch (options.format) {
             case OutputFormat::json:
                 for (const auto& row : part.rows) {
@@ -837,17 +857,23 @@ void FormattingSink::emit(const ExecOutcome& fragment) {
         s.write(Stream::err, s.renderer.render_stderr(fragment));
         return;
     }
-    for (const auto& part : decompose(fragment)) {
-        if (const auto* text = std::get_if<TextPart>(&part)) {
-            s.text(*text);
-        } else {
-            s.rows(std::get<RowsPart>(part));
-        }
-    }
+    ResultSetSink::emit(fragment);
 }
 
-void FormattingSink::end_statement() {
+void FormattingSink::on_open() {
+    state_->start_set();
+}
+
+void FormattingSink::on_rows(const RowsPart& part) {
+    state_->rows(part);
+}
+
+void FormattingSink::on_close() {
     state_->close_set();
+}
+
+void FormattingSink::on_text(const TextPart& part) {
+    state_->text(part);
 }
 
 const FormatOptions& FormattingSink::options() const noexcept {
@@ -855,7 +881,7 @@ const FormatOptions& FormattingSink::options() const noexcept {
 }
 
 void FormattingSink::set_options(FormatOptions options) {
-    state_->close_set();
+    close_set();
     state_->options = options;
 }
 

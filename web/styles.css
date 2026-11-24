@@ -4,7 +4,7 @@
  *
  * styles.css — minimal styling for the ddbsh browser edition (P6e UI; P9
  * credentials panel; P10 header Help link, busy indicator and input height;
- * P12 busy indicator retry states).
+ * P12 busy indicator retry states, output dropdowns and HTML result tables).
  *
  * Monospace throughout so the engine Renderer's byte-exact alignment survives
  * (O-2). Zero runtime dependencies (O-4): plain CSS, no framework.
@@ -307,6 +307,68 @@ body {
     font-size: 11px;
     text-align: center;
     min-height: 1em;
+}
+
+/* ---- output format dropdowns (P12, D-P12-26) ------------------------------ */
+.toolbar-label {
+    color: var(--muted);
+    font-size: 11px;
+    margin-bottom: -4px;
+}
+
+.toolbar-select {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.toolbar-select:disabled {
+    opacity: 0.5;
+}
+
+/* ---- HTML result tables (P12, D-P12-25) -----------------------------------
+   Built by app.js with createElement/textContent; styled by class only (the
+   CSP allows styles from this file, never a style attribute). A wide table
+   scrolls inside its wrapper instead of widening the transcript. */
+.result-table-wrap {
+    overflow-x: auto;
+    margin: 2px 0;
+}
+
+.result-table {
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.result-table th,
+.result-table td {
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    text-align: left;
+    vertical-align: top;
+    /* A newline in a value shows as a newline (the text is set as is). */
+    white-space: pre-wrap;
+}
+
+.result-table th {
+    background: var(--panel-bg);
+    font-weight: bold;
+}
+
+.result-table td.num {
+    text-align: right;
+}
+
+/* An attribute the row does not have: an empty cell, shaded so it reads as
+   "absent", not as an empty string. */
+.result-table td.missing {
+    background: rgba(255, 255, 255, 0.03);
 }
 
 /* ---- credentials panel (P9) ---------------------------------------------- */

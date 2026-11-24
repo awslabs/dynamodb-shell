@@ -326,6 +326,209 @@ console.log("streamSubmission");
     other.delete();
 }
 
+// ---- output formats (P12 S5, D-P12-17 / D-P12-25) ---------------------------------
+
+// A table `t` (pk number HASH) whose Scan returns two pages; page 2 adds the
+// attribute `b`, and its second item has only the key. With `empty`, one empty page; with `failPageTwo`, page 2 is
+// an InternalServerError.
+function selectResponder({ empty = false, failPageTwo = false } = {}) {
+    let scans = 0;
+    return (op) => {
+        if (op === "DescribeTable") {
+            return JSON.stringify({ Table: {
+                TableName: "t", TableStatus: "ACTIVE",
+                KeySchema: [{ AttributeName: "pk", KeyType: "HASH" }],
+                AttributeDefinitions: [{ AttributeName: "pk", AttributeType: "N" }],
+            } });
+        }
+        if (op === "Scan") {
+            scans += 1;
+            const cc = { TableName: "t", CapacityUnits: 0.5 };
+            if (empty) {
+                return JSON.stringify({ Items: [], Count: 0, ScannedCount: 0, ConsumedCapacity: cc });
+            }
+            if (scans % 2 === 1) {
+                return JSON.stringify({ Items: [{ pk: { N: "1" }, a: { S: "x\ny" } }],
+                    LastEvaluatedKey: { pk: { N: "1" } }, ConsumedCapacity: cc });
+            }
+            if (failPageTwo) {
+                return JSON.stringify({
+                    __type: "com.amazonaws.dynamodb.v20120810#InternalServerError",
+                    message: "page two failed",
+                });
+            }
+            return JSON.stringify({ Items: [{ pk: { N: "2" }, a: { S: "z" }, b: { M: { k: { N: "3" } } } },
+                { pk: { N: "3" } }], ConsumedCapacity: cc });
+        }
+        return "{}"; // PutItem
+    };
+}
+
+async function streamWith(text, options, responderFactory) {
+    responder = responderFactory();
+    sends = [];
+    events = [];
+    const session = new Module.DdbshSession("us-east-1");
+    const result = await settle(session.runStreaming(text, options, (ev) => events.push(ev)));
+    const out = { result, events, sends };
+    session.delete();
+    return out;
+}
+
+async function scriptWith(text, options, responderFactory) {
+    responder = responderFactory();
+    sends = [];
+    events = [];
+    const session = new Module.DdbshSession("us-east-1");
+    const result = await settle(session.runScript(text, false, options));
+    const segments = [];
+    for (const seg of result.segments) {
+        segments.push({ stream: seg.stream, text: seg.text });
+    }
+    session.delete();
+    return { segments, status: result.status };
+}
+
+console.log("runStreaming: every format's events equal runScript's bytes");
+{
+    const inputs = [
+        ["show tables; describe nosuch; connect eu-west-1; show tables like \"t[13]\"; select * from;",
+            showTablesResponder],
+        ["select * from t return consumed capacity total; insert into t (pk) values (5); select * from t;",
+            selectResponder],
+        ["select * from t;", () => selectResponder({ empty: true })],
+        ["select * from t; select * from t;", () => selectResponder({ failPageTwo: true })],
+    ];
+    for (const output of ["default", "json", "csv", "table"]) {
+        for (const jsonFlavor of ["plain", "dynamodb"]) {
+            for (const [text, factory] of inputs) {
+                const options = { output, jsonFlavor };
+                const streamed = await streamWith(text, options, factory);
+                const script = await scriptWith(text, options, factory);
+                const label = `${output}/${jsonFlavor}: ${text.slice(0, 32)}…`;
+                eq(coalesce(streamed.events), script.segments, `${label} events equal runScript's segments`);
+                eq(streamed.result.status, script.status, `${label} same status`);
+            }
+        }
+    }
+    // A sanity check that the comparison saw formatted bytes, not default ones.
+    const json = await streamWith("select * from t;", { output: "json" }, selectResponder);
+    eq(json.events.map((e) => e.text).join(""),
+        '[\n  {"a": "x\\ny", "pk": 1},\n  {"a": "z", "b": {"k": 3}, "pk": 2},\n  {"pk": 3}\n]\n',
+        "json: one array over both pages, one element per row");
+}
+
+console.log("runStreaming: html rows events");
+{
+    const { result, events: evs, sends: log } = await streamWith(
+        "select * from t return consumed capacity total; insert into t (pk) values (5);",
+        { output: "html" }, selectResponder);
+    eq(evs.map((e) => e.type), ["rows", "rows", "end", "text", "text"],
+        "two rows events (one per page; the empty capacity-only fragment sends none), end, then the capacity line and the INSERT token");
+    eq([evs[0].columns, evs[0].newColumnsFrom, evs[0].groupEnd], [["pk", "a"], 0, true],
+        "page 1: the key column first (the hint), then the page's other attributes");
+    eq(evs[0].rows, [[{ t: "1", n: true, m: false }, { t: "x\ny", n: false, m: false }]],
+        "page 1's cells: number flagged, text not escaped");
+    eq([evs[1].columns, evs[1].newColumnsFrom], [["pk", "a", "b"], 2],
+        "page 2 adds `b`: the full column list, newColumnsFrom = the old column count");
+    eq(evs[1].rows, [
+        [{ t: "2", n: true, m: false }, { t: "z", n: false, m: false }, { t: '{"k": 3}', n: false, m: false }],
+        [{ t: "3", n: true, m: false }, { t: "", n: false, m: true }, { t: "", n: false, m: true }],
+    ], "page 2's cells: a map as plain JSON; a missing attribute is an empty m cell");
+    check(/^SELECT \(t, /.test(evs[3].text) && evs[3].stream === "stdout", "the capacity line follows the end");
+    eq([evs[4].stream, evs[4].text], ["stdout", "INSERT\n"], "then the INSERT token");
+    const scans = log.filter((s) => s.op === "Scan");
+    eq(scans[1].eventsBefore, 1, "page 1's rows event arrived before page 2 was requested");
+    eq([result.ok, result.status, result.stderr, result.segments.length], [true, 0, "", 0],
+        "the result is {ok, status} only");
+}
+{
+    const typed = await streamWith("select * from t;", { output: "html", jsonFlavor: "dynamodb" }, selectResponder);
+    eq(typed.events[1].rows[0][2], { t: '{"M": {"k": {"N": "3"}}}', n: false, m: false },
+        "html + dynamodb flavor: a map cell in the typed encoding (format_cell)");
+}
+{
+    // A mid-stream error closes the set before the error.
+    const { result, events: evs } = await streamWith("select * from t;", { output: "html" },
+        () => selectResponder({ failPageTwo: true }));
+    eq(evs.map((e) => e.type), ["rows", "end", "text"], "a failure on page 2: rows, end, then the error");
+    eq(evs[2].stream, "stderr", "  … the error is a stderr text event");
+    check(evs[2].text.includes("page two failed"), "  … naming the failure");
+    eq([result.ok, result.status], [false, 1], "  … and status 1");
+}
+{
+    const { events: evs } = await streamWith("select * from t;", { output: "html" },
+        () => selectResponder({ empty: true }));
+    eq(evs, [{ type: "rows", columns: ["pk"], newColumnsFrom: 0, rows: [], groupEnd: true }, { type: "end" }],
+        "an empty SELECT: a rows event with the hint column and no rows, then end");
+}
+{
+    // SHOW TABLES: report columns; a row whose describe failed has missing cells.
+    const { events: evs } = await streamWith("show tables;", { output: "html" }, showTablesResponder);
+    eq(evs.map((e) => e.type), ["rows", "rows", "rows", "end"], "SHOW TABLES: one rows event per table, then end");
+    eq(evs[0].columns.slice(0, 3), ["TableName", "TableStatus", "BillingMode"], "the report's fixed columns");
+    eq(evs[0].rows[0][0], { t: "t1", n: false, m: false }, "the first cell is the table name");
+    eq(evs[2].newColumnsFrom, evs[2].columns.length, "a later row adds no column");
+}
+{
+    // The open-set boundaries: each JSON array of a run is one html rows…end run.
+    const text = "select * from t return consumed capacity total; insert into t (pk) values (5); select * from t;";
+    const json = await streamWith(text, { output: "json" }, selectResponder);
+    const html = await streamWith(text, { output: "html" }, selectResponder);
+    // A JSON writer's pieces: "[\n  {…}" opens, ",\n  {…}" continues, "\n]\n"
+    // closes, "[]\n" opens and closes; anything else is a text part.
+    const jsonShape = [];
+    for (const e of json.events) {
+        if (e.text.startsWith("[\n")) {
+            jsonShape.push("open");
+        } else if (e.text === "[]\n") {
+            jsonShape.push("open", "close");
+        } else if (e.text === "\n]\n") {
+            jsonShape.push("close");
+        } else if (!e.text.startsWith(",\n")) {
+            jsonShape.push("text");
+        }
+    }
+    let open = false;
+    const htmlShape = [];
+    for (const e of html.events) {
+        if (e.type === "rows" && !open) {
+            open = true;
+            htmlShape.push("open");
+        } else if (e.type === "end") {
+            open = false;
+            htmlShape.push("close");
+        } else if (e.type === "text") {
+            htmlShape.push("text");
+        }
+    }
+    eq(htmlShape, jsonShape, "html rows/end runs open and close where the JSON arrays do");
+    eq(htmlShape, ["open", "close", "text", "text", "open", "close"], "  … rows, capacity, INSERT, rows");
+}
+
+console.log("runStreaming / runScript: option errors");
+{
+    const { result, events: evs, sends: log } = await streamWith("show tables;", { output: "xml" }, showTablesResponder);
+    eq([result.ok, result.status], [false, 1], "an unknown output: status 1");
+    eq(evs.map((e) => [e.type, e.stream]), [["text", "stderr"]], "  … one stderr event");
+    check(evs[0].text.startsWith("unknown output format: xml"), `  … with the CLI's message (${JSON.stringify(evs[0].text)})`);
+    eq(log.length, 0, "  … and no request was sent");
+}
+{
+    const { result, events: evs, sends: log } = await streamWith("show tables;", { output: "json", jsonFlavor: "typed" },
+        showTablesResponder);
+    eq([result.status, log.length], [1, 0], "an unknown jsonFlavor: status 1, nothing sent");
+    check(evs.length === 1 && /typed/.test(evs[0].text), "  … the message names the value");
+}
+{
+    const script = await scriptWith("show tables;", { output: "html" }, showTablesResponder);
+    eq(script.status, 1, "runScript rejects html (web-only, runStreaming's)");
+    check(script.segments.length === 1 && script.segments[0].text.startsWith("unknown output format: html"),
+        "  … with the CLI's message");
+    const upper = await streamWith("select * from t;", { output: "HTML" }, selectResponder);
+    eq(upper.events.map((e) => e.type), ["rows", "rows", "end"], "runStreaming accepts HTML in any case, as the CLI ids");
+}
+
 if (failures > 0) {
     console.error(`\nstreaming tests: ${failures} FAILED`);
     process.exit(1);

@@ -23,7 +23,10 @@
 // TextPart closes it first; the end of the statement closes it. So a
 // multi-page SELECT is one JSON array and one CSV header, and a status line
 // never lands inside a JSON array. A run of several statements is a sequence
-// of documents, one per result set, with the text output between them.
+// of documents, one per result set, with the text output between them. That
+// rule lives once, in ResultSetSink, which FormattingSink derives from and a
+// front end that lays out rows itself (the browser's HTML table) can derive
+// from too.
 //
 // Everything here is a pure function of its input or of the sink's own state:
 // no globals, no locale, no terminal, no AWS SDK (tenet 3).
@@ -178,6 +181,51 @@ std::string format_cell(const Value& value, JsonFlavor flavor);
 /// Which stream a piece of formatted output belongs on.
 enum class Stream { out, err };
 
+/// The open-result-set rule every formatter follows (design §4.2), for a front
+/// end that lays out rows itself (the browser's HTML table, P12 D-P12-25).
+///
+/// emit() splits each fragment with decompose() and calls the hooks in order:
+///   * a RowsPart with no set open calls on_open(), then on_rows(); with a set
+///     open, on_rows() only (the part continues the set);
+///   * a TextPart calls on_close() first when a set is open, then on_text();
+///   * end_statement() calls on_close() when a set is open.
+/// So a multi-page SELECT is one result set, and text never lands inside one.
+/// FormattingSink derives from this class, so every format, and a front end's
+/// own layout, opens and closes its result sets at the same places.
+class ResultSetSink : public OutcomeSink {
+public:
+    ~ResultSetSink() override = default;
+
+    void emit(const ExecOutcome& fragment) override;
+    void end_statement() override;
+
+    /// True while a result set is open (between on_open and on_close).
+    bool set_open() const noexcept { return open_; }
+
+protected:
+    ResultSetSink() = default;
+    ResultSetSink(const ResultSetSink&) = default;
+    ResultSetSink(ResultSetSink&&) noexcept = default;
+    ResultSetSink& operator=(const ResultSetSink&) = default;
+    ResultSetSink& operator=(ResultSetSink&&) noexcept = default;
+
+    /// Close the open result set (on_close), if there is one.
+    void close_set();
+
+    /// A result set opens; the first on_rows of the set follows at once.
+    virtual void on_open() = 0;
+    /// A part of the open result set. Its rows may be empty (an empty SELECT,
+    /// a page end a LIKE filter emptied).
+    virtual void on_rows(const RowsPart& part) = 0;
+    /// The open result set closes.
+    virtual void on_close() = 0;
+    /// Text, never inside a result set.
+    virtual void on_text(const TextPart& part) = 0;
+
+private:
+    bool open_ = false;
+};
+
 /// An OutcomeSink that formats each fragment as it arrives and hands the
 /// bytes to a writer (the CLI's writes to two FILE*s and flushes; the web's
 /// appends to strings). In `standard` it writes exactly Renderer::render (to
@@ -185,9 +233,10 @@ enum class Stream { out, err };
 /// end_statement(). In the other formats it writes each row as it arrives
 /// (the table format, per API page), closes an open result set before any
 /// text, and closes it at end_statement(), so the closing bytes precede the
-/// error the caller prints. Not thread-safe; one statement at a time. A
-/// moved-from sink may only be destroyed or assigned to.
-class FormattingSink : public OutcomeSink {
+/// error the caller prints (the ResultSetSink rule). Not thread-safe; one
+/// statement at a time. A moved-from sink may only be destroyed or assigned
+/// to.
+class FormattingSink : public ResultSetSink {
 public:
     /// Receives each piece of output, in order. Never called with empty text.
     using Writer = std::function<void(Stream, std::string_view)>;
@@ -200,7 +249,6 @@ public:
     FormattingSink& operator=(const FormattingSink&) = delete;
 
     void emit(const ExecOutcome& fragment) override;
-    void end_statement() override;
 
     /// The current selection.
     const FormatOptions& options() const noexcept;
@@ -210,6 +258,11 @@ public:
     void set_options(FormatOptions options);
 
 private:
+    void on_open() override;
+    void on_rows(const RowsPart& part) override;
+    void on_close() override;
+    void on_text(const TextPart& part) override;
+
     struct State;
     std::unique_ptr<State> state_;
 };

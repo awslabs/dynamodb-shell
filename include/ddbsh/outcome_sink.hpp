@@ -32,7 +32,12 @@ namespace ddbsh {
 /// per page, a multi-row INSERT one per written row, SHOW TABLES one per row,
 /// SHOW BACKUPS one per ListBackups page, SHOW LIMITS and DESCRIBE one per
 /// response group, a bulk UPDATE/DELETE with RETURN VALUES one per returned
-/// item before its accounting line. The embedder owns the sink and decides
+/// item before its accounting line. A fragment can carry no rows: an empty
+/// SELECT emits one SelectOutcome with no items (it carries the column_hint),
+/// and SHOW TABLES / SHOW BACKUPS emit an empty ReportOutcome to mark a page
+/// end that a LIKE filter emptied (or an empty result); the Renderer renders
+/// these as nothing, so a sink that treats each fragment as content should
+/// expect them. The embedder owns the sink and decides
 /// what to do with each fragment (render it, buffer it, count it). The engine
 /// never buffers to a stream itself.
 ///

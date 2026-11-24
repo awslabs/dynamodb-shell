@@ -7,8 +7,9 @@
 // run_batch) through the same bridge, vendored SDK and credential validation as
 // the page, against REAL DynamoDB: create a `ddbsh_web_smoke_<pid>` table and
 // wait for ACTIVE, insert, a Query-selecting SELECT (also through
-// runStreaming), UPDATE, a write transaction, EXPLAIN, SHOW CONNECTION, a
-// rejected CONNECT, and DROP (always, in `finally`). The full golden corpus is
+// runStreaming, and in the html and json outputs), UPDATE, a write
+// transaction, EXPLAIN, SHOW CONNECTION, a rejected CONNECT, and DROP
+// (always, in `finally`). The full golden corpus is
 // devtools/run-web-golden's job; this proves the UI entry points and their
 // ordered output.
 //
@@ -83,6 +84,40 @@ try {
         check(s.status === 1 && streams === "stdout,stderr" &&
             out === "{pk: 1, rk: 1, v: a}\n{pk: 1, rk: 2, v: b}\n" && evs[1].text.includes("no_such_table"),
             "runStreaming delivers the rows, then the error, as events", JSON.stringify({ s, evs }));
+    }
+
+    {
+        // Output formats through the page's path (P12 S5, D-P12-25).
+        const streamOf = async (text, options) => {
+            const evs = [];
+            let s = session.runStreaming(text, options, (ev) => evs.push(ev));
+            if (s && typeof s.then === "function") {
+                s = await s;
+            }
+            return { s, evs };
+        };
+        const scriptOf = async (text, options) => {
+            let s = session.runScript(text, false, options);
+            if (s && typeof s.then === "function") {
+                s = await s;
+            }
+            return s;
+        };
+        const q = `select * from ${table} where pk = 1;`;
+        const html = await streamOf(q, { output: "html" });
+        check(html.s.status === 0 && html.evs.map((e) => e.type).join(",") === "rows,end" &&
+            JSON.stringify(html.evs[0].columns) === JSON.stringify(["pk", "rk", "v"]) &&
+            JSON.stringify(html.evs[0].rows.map((r) => r.map((c) => c.t))) ===
+                JSON.stringify([["1", "1", "a"], ["1", "2", "b"]]) &&
+            html.evs[0].rows[0][0].n === true && html.evs[0].rows[0][2].n === false,
+        "runStreaming html: one rows event (key columns first, numbers flagged), then end",
+        JSON.stringify(html));
+        const json = await streamOf(q, { output: "json", jsonFlavor: "dynamodb" });
+        const script = await scriptOf(q, { output: "json", jsonFlavor: "dynamodb" });
+        const streamed = json.evs.map((e) => e.text).join("");
+        check(json.s.status === 0 && json.evs.every((e) => e.type === "text" && e.stream === "stdout") &&
+            streamed === script.stdout && streamed.startsWith('[\n  {"pk": {"N": "1"}'),
+        "runStreaming json events equal runScript's bytes", JSON.stringify({ streamed, script: script.stdout }));
     }
 
     r = await run(`explain select * from ${table} where pk = 1;`);

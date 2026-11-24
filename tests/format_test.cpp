@@ -601,6 +601,54 @@ TEST(ResultSet, SetOptionsClosesTheOpenSetInTheOldFormat) {
     EXPECT_EQ(c.sink.options().format, OutputFormat::csv);
 }
 
+/// A ResultSetSink that logs its hooks, the way a front end that lays out rows
+/// itself (the browser's HTML table) receives them.
+struct HookLog : ddbsh::render::ResultSetSink {
+    std::string log;
+    void on_open() override { log += "open "; }
+    void on_rows(const RowsPart& part) override {
+        log += "rows:" + std::to_string(part.rows.size()) + " ";
+    }
+    void on_close() override { log += "close "; }
+    void on_text(const TextPart& part) override { log += "text:" + part.out + part.err + " "; }
+};
+
+TEST(ResultSet, TheHooksFollowTheOneOpenSetRule) {
+    HookLog h;
+    h.end_statement();  // nothing open: no close
+    EXPECT_EQ(h.log, "");
+    h.emit(page({row({{"a", n("1")}}), row({{"a", n("2")}})}));
+    EXPECT_TRUE(h.set_open());
+    h.emit(page({row({{"a", n("3")}})}));     // continues the open set
+    h.emit(ExecOutcome{StatusOutcome{"X"}});  // closes it before the text
+    EXPECT_FALSE(h.set_open());
+    h.emit(page({}));  // an empty SELECT still opens a set
+    h.end_statement();
+    h.end_statement();  // closes once
+    EXPECT_EQ(h.log, "open rows:2 rows:1 close text:X\n open rows:0 close ");
+}
+
+TEST(ResultSet, FormattingSinkAndAHookSinkShareTheBoundaries) {
+    // The same fragments through the JSON writer and the hooks: every `[`
+    // matches an open, every `]` a close.
+    const std::vector<ExecOutcome> frags = {
+        page({row({{"a", n("1")}})}),
+        page({row({{"a", n("2")}})}),
+        ExecOutcome{StatusOutcome{"CONNECT"}},
+        page({}),
+    };
+    Capture c(fmt(OutputFormat::json));
+    HookLog h;
+    for (const auto& f : frags) {
+        c.sink.emit(f);
+        h.emit(f);
+    }
+    c.sink.end_statement();
+    h.end_statement();
+    EXPECT_EQ(c.out, "[\n  {\"a\": 1},\n  {\"a\": 2}\n]\nCONNECT\n[]\n");
+    EXPECT_EQ(h.log, "open rows:1 rows:1 close text:CONNECT\n open rows:0 close ");
+}
+
 // ---- default == Renderer ------------------------------------------------------
 
 TEST(DefaultFormat, FormattingSinkWritesExactlyTheRenderer) {

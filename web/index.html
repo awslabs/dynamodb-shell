@@ -119,6 +119,14 @@
                   aria-label="command editor" disabled></textarea>
         <div class="toolbar">
             <button id="run-btn" type="button" disabled>Run</button>
+            <!-- The output format and JSON flavor (P12, D-P12-26). app.js
+                 fills the options (app-core OUTPUT_CHOICES /
+                 JSON_FLAVOR_CHOICES) and reads both at submit; they are not
+                 saved. JSON is disabled for Default, which ignores it. -->
+            <label class="toolbar-label" for="output-select">Output</label>
+            <select id="output-select" class="toolbar-select"></select>
+            <label class="toolbar-label" for="flavor-select">JSON</label>
+            <select id="flavor-select" class="toolbar-select"></select>
             <label id="file-label" class="file-label" aria-disabled="true">
                 ⇪ file
                 <input id="file-input" type="file" hidden disabled>
