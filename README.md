@@ -104,6 +104,9 @@ another host), see [docs/HOSTING.md](docs/HOSTING.md).
   surface: [control](docs/reference/control.md),
   [DDL](docs/reference/ddl.md), [DML](docs/reference/dml.md), and
   [special topics](docs/reference/special-topics.md).
+- **[Output formats](docs/reference/output-formats.md)** — rows as JSON
+  (plain or DynamoDB-typed), CSV, or a text table, with `--output`,
+  `--json-flavor` or `set output`.
 
 Developer notes for the browser edition (layout, rebuilding the bundled AWS SDK
 for JavaScript, the web gates) are in [`web/README.md`](web/README.md).

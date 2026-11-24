@@ -784,6 +784,12 @@ TEST(TimelyOutput, ExplainBulkUpdateQueryFailureOnPageTwoKeepsTheEarlierBlocks) 
         "end",
     };
     EXPECT_EQ(log, expected);
+
+    // The buffering overload discards the partial output (P12 N5: the same
+    // rerun as the Scan and DELETE siblings).
+    auto buffered = session.run("explain update t set x = 9 where pk = 1 and x = 0;");
+    ASSERT_FALSE(buffered.has_value());
+    EXPECT_EQ(buffered.error().message, "Query failed");
 }
 
 TEST(TimelyOutput, ExplainBulkDeleteScanFailureOnPageTwoKeepsTheEarlierBlocks) {

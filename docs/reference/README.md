@@ -16,6 +16,8 @@ the full command surface, grouped by family:
   `UPDATE`, `UPSERT`, `DELETE`, `EXPLAIN`.
 - **[DML — special topics](special-topics.md)** — the `WHERE` clause, rate
   limiting, return values, on-demand throughput, warm throughput.
+- **[Output formats](output-formats.md)** — `--output json|csv|table`, the
+  JSON flavors, `set output`, and what each format writes.
 
 The rest of this page summarizes the supported command set, the isql-mode input
 model, syntax-error diagnostics, and the CLI flags/config/environment.
@@ -307,7 +309,8 @@ Usage: ddbsh [-q] [-e] [-d] [-t[TERM]] [--ca-bundle <file>] [--show-retries] [--
   Status lines, `DESCRIBE`, `EXPLAIN`, `HELP` and errors stay text in every
   format, so a run of several statements is a sequence of result sets with
   text between them. An unknown value prints a message and the usage, and
-  exits 1.
+  exits 1. [Output formats](output-formats.md) shows each format, the column
+  order and the edge cases.
 - `--json-flavor plain|dynamodb` — how `json` writes values, and how `csv` and
   `table` cells write maps, lists and sets: plain JSON values (`{"pk": 1}`, the
   default) or the DynamoDB typed encoding (`{"pk": {"N": "1"}}`).

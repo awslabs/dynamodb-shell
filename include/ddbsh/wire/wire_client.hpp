@@ -131,11 +131,16 @@ protected:
     /// run multiple sessions concurrently (shared-steering tenet).
     virtual double jitter_unit();
 
-    /// Retry attempt cap: 1 initial attempt + (cap - 1) retries. Default 11 is
-    /// parity with the AWS SDK DefaultRetryStrategy (maxRetries = 10) the
-    /// SDK-backed CLI used below the IDDBClient seam, so the SDK-free wire path
-    /// gets the same resilience ceiling (HT-1 §4.5). A test subclass lowers it to
-    /// exercise exhaustion quickly.
+    /// Retry attempt cap: 1 initial attempt + (cap - 1) retries. The default 11
+    /// (10 retries) is the wire path's own budget, chosen in HT-1 §4.5 so that
+    /// an embedder of the SDK-free wire path rides out a burst of throttling or
+    /// transient errors before it reports one. With retry_delay's backoff (a
+    /// 50 ms ceiling doubling to a 1000 ms cap, full jitter), the 10 waits sum
+    /// to at most 6.55 s. It is not the AWS SDK's budget: the SDK-backed CLI
+    /// retries with the SDK's own strategy, whose attempt count depends on the
+    /// SDK version and retry mode, and the browser edition sets the cap to 1
+    /// because the JavaScript SDK retries there (web/bindings.cpp). A test
+    /// subclass lowers it to exercise exhaustion quickly.
     unsigned max_retry_attempts_ = 11;
 
 private:

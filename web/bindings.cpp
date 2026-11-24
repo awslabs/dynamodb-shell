@@ -176,28 +176,59 @@ bool iequals_ascii(std::string_view a, std::string_view b) {
     return true;
 }
 
+// The text that names an option value in an unknown-value message. A string
+// is named as itself. Any other value (a number, an object, ...) is an
+// unknown value too (P12 N-S5-1), named by its JavaScript type in angle
+// brackets, for example `<number>`. The type is read with `typeof`, which
+// cannot throw; converting the value itself (String(v)) could run a throwing
+// toString while the engine is on the stack.
+std::string option_value_name(const emscripten::val& value) {
+    if (value.isString()) {
+        return value.as<std::string>();
+    }
+    return "<" + value.typeOf().as<std::string>() + ">";
+}
+
+// runStreaming's message for an unknown output id. It lists `html`, which
+// only runStreaming accepts (P12 N-S5-2). runScript keeps the CLI's message
+// (unknown_output_format_message), which the shim parity and the
+// ifmt-bad-output golden pin.
+std::string unknown_web_output_format_message(std::string_view id) {
+    return "unknown output format: " + std::string(id) +
+           " (expected default, json, csv, table, html)\n";
+}
+
 // Read `options` into `out`. Absent (or undefined/null) fields keep the
 // default. `allow_html` admits the "html" id (runStreaming only; runScript
-// rejects it as the CLI does). Returns the CLI's message for an unknown value,
-// or "" when every value is known.
+// rejects it as the CLI does) and selects the message that lists it. Returns
+// the message for an unknown value (a non-string value is unknown), or ""
+// when every value is known.
 std::string read_format_options(const emscripten::val& options, WebFormat& out, bool allow_html) {
     if (options.isUndefined() || options.isNull()) {
         return {};
     }
     const emscripten::val output = options["output"];
     if (!output.isUndefined() && !output.isNull()) {
-        const std::string id = output.as<std::string>();
+        const std::string id = option_value_name(output);
+        if (!output.isString()) {
+            return allow_html ? unknown_web_output_format_message(id)
+                              : ddbsh::cli::unknown_output_format_message(id);
+        }
         if (allow_html && iequals_ascii(id, "html")) {
             out.html = true;
         } else if (auto f = ddbsh::render::parse_output_format(id); f.has_value()) {
             out.format.format = *f;
         } else {
-            return ddbsh::cli::unknown_output_format_message(id);
+            return allow_html ? unknown_web_output_format_message(id)
+                              : ddbsh::cli::unknown_output_format_message(id);
         }
     }
     const emscripten::val flavor = options["jsonFlavor"];
     if (!flavor.isUndefined() && !flavor.isNull()) {
-        const std::string id = flavor.as<std::string>();
+        const std::string id = option_value_name(flavor);
+        if (!flavor.isString()) {
+            return ddbsh::cli::unknown_json_flavor_message(id);
+        }
         auto f = ddbsh::render::parse_json_flavor(id);
         if (!f.has_value()) {
             return ddbsh::cli::unknown_json_flavor_message(id);
@@ -399,8 +430,9 @@ public:
     // text and options. Returns {ok, status} with empty text fields and no
     // segments, so nothing is delivered twice. A non-function `on_event` runs
     // nothing and returns status 1 with the reason in `stderr`; an unknown
-    // option value runs nothing and returns status 1 with the CLI's message
-    // as a stderr event.
+    // option value (a non-string value included) runs nothing and returns
+    // status 1 with its message as a stderr event. For `output`, that message
+    // lists `html` (unknown_web_output_format_message).
     RunResult run_streaming(const std::string& text, emscripten::val options,
                             emscripten::val on_event) {
         RunResult result;
@@ -441,8 +473,8 @@ public:
     // The CLI `-c` / `-f` path (run_source): status is the CLI's exit code.
     // `options` ({output, jsonFlavor}) is the CLI's --output / --json-flavor
     // (P12, D-P12-26); `set output` lines in the text change it as in the CLI.
-    // An unknown value runs nothing and returns status 1 with the message in
-    // stderr.
+    // An unknown value (a non-string value included) runs nothing and returns
+    // status 1 with the CLI's message in stderr.
     RunResult run_script(const std::string& text, bool abort_on_error, emscripten::val options) {
         RunResult result;
         WebFormat format;

@@ -59,7 +59,10 @@ struct RetryEvent {
 /// the thread that issued the request, synchronously, before it sleeps; a slow
 /// observer delays the retry. on_retry must not call back into the client and
 /// should not throw: the transport catches and discards anything it throws, so
-/// the retry it has decided on still happens.
+/// the retry it has decided on still happens. Keep the observer alive until it
+/// is cleared (set_retry_observer(nullptr)) and no call to on_retry is still
+/// running: clearing the observer does not wait for an on_retry call already
+/// running on another thread.
 class RetryObserver {
 public:
     virtual ~RetryObserver() = default;

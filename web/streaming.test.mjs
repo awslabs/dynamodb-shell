@@ -508,23 +508,39 @@ console.log("runStreaming: html rows events");
 
 console.log("runStreaming / runScript: option errors");
 {
-    const { result, events: evs, sends: log } = await streamWith("show tables;", { output: "xml" }, showTablesResponder);
-    eq([result.ok, result.status], [false, 1], "an unknown output: status 1");
-    eq(evs.map((e) => [e.type, e.stream]), [["text", "stderr"]], "  … one stderr event");
-    check(evs[0].text.startsWith("unknown output format: xml"), `  … with the CLI's message (${JSON.stringify(evs[0].text)})`);
-    eq(log.length, 0, "  … and no request was sent");
+    // runStreaming names html in its list (N-S5-2); a non-string value is an
+    // unknown value, named by its JavaScript type (N-S5-1).
+    const web = "(expected default, json, csv, table, html)\n";
+    const cases = [
+        [{ output: "xml" }, `unknown output format: xml ${web}`],
+        [{ output: 5 }, `unknown output format: <number> ${web}`],
+        [{ output: "json", jsonFlavor: {} }, "unknown JSON flavor: <object> (expected plain, dynamodb)\n"],
+        [{ output: "json", jsonFlavor: "typed" }, "unknown JSON flavor: typed (expected plain, dynamodb)\n"],
+    ];
+    for (const [options, message] of cases) {
+        const label = JSON.stringify(options);
+        const { result, events: evs, sends: log } = await streamWith("show tables;", options, showTablesResponder);
+        eq([result.ok, result.status, result.segments.length], [false, 1, 0], `runStreaming ${label}: status 1`);
+        eq(evs, [{ type: "text", stream: "stderr", text: message }], `  … one stderr event with the message`);
+        eq(log.length, 0, "  … and no request was sent");
+    }
 }
 {
-    const { result, events: evs, sends: log } = await streamWith("show tables;", { output: "json", jsonFlavor: "typed" },
-        showTablesResponder);
-    eq([result.status, log.length], [1, 0], "an unknown jsonFlavor: status 1, nothing sent");
-    check(evs.length === 1 && /typed/.test(evs[0].text), "  … the message names the value");
-}
-{
-    const script = await scriptWith("show tables;", { output: "html" }, showTablesResponder);
-    eq(script.status, 1, "runScript rejects html (web-only, runStreaming's)");
-    check(script.segments.length === 1 && script.segments[0].text.startsWith("unknown output format: html"),
-        "  … with the CLI's message");
+    // runScript keeps the CLI's message (the shim parity and ifmt-bad-output pin it).
+    const cli = "(expected default, json, csv, table)\n";
+    const cases = [
+        [{ output: "xml" }, `unknown output format: xml ${cli}`],
+        [{ output: 5 }, `unknown output format: <number> ${cli}`],
+        [{ output: "html" }, `unknown output format: html ${cli}`],
+        [{ jsonFlavor: true }, "unknown JSON flavor: <boolean> (expected plain, dynamodb)\n"],
+    ];
+    for (const [options, message] of cases) {
+        const label = JSON.stringify(options);
+        const script = await scriptWith("show tables;", options, showTablesResponder);
+        eq(script.status, 1, `runScript ${label}: status 1`);
+        eq(script.segments, [{ stream: "stderr", text: message }], "  … the CLI's message in stderr");
+        eq(sends.length, 0, "  … and no request was sent");
+    }
     const upper = await streamWith("select * from t;", { output: "HTML" }, selectResponder);
     eq(upper.events.map((e) => e.type), ["rows", "rows", "end"], "runStreaming accepts HTML in any case, as the CLI ids");
 }

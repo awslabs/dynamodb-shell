@@ -80,9 +80,16 @@ empty `stdout`, `stderr` and `segments`, so nothing is delivered twice).
 | `output` | `default`, `json`, `csv`, `table` (as the CLI's `--output`), or `html` (web only) |
 | `jsonFlavor` | `plain` or `dynamodb` (as the CLI's `--json-flavor`); ignored by `default` |
 
-An unknown value runs nothing: `onEvent` receives the CLI's message as one
-`stderr` text event, and the status is 1. `runScript` takes the same options
-but rejects `html`, as the CLI does.
+An unknown value runs nothing: `onEvent` receives one `stderr` text event with
+the message, and the status is 1. A value that is not a string (for example
+`5` or `{}`) is an unknown value too; the message names it by its JavaScript
+type in angle brackets (`<number>`, `<object>`). For `output`, the message
+lists `html`:
+`unknown output format: xml (expected default, json, csv, table, html)`.
+An unknown `jsonFlavor` gets the CLI's message,
+`unknown JSON flavor: typed (expected plain, dynamodb)`. `runScript` takes the
+same options but rejects `html`, as the CLI does, and keeps the CLI's message
+for `output`, which does not list `html`.
 
 The events:
 

@@ -38,6 +38,33 @@ the native binary. The whole golden test suite runs through this path
   everything in it, Enter starts a new line, and the up and down arrows recall
   earlier statements.
 
+## Output formats
+
+Two dropdowns next to **Run** choose how rows are shown:
+
+- **Output**: Default (ddbsh's own output), JSON, CSV, Table (text), or
+  Table (HTML). The first four write the same text as the native binary's
+  `--output default|json|csv|table`.
+- **JSON**: Plain or DynamoDB, as `--json-flavor plain|dynamodb`. It sets how
+  JSON writes values, and how the CSV and table cells write maps, lists and
+  sets. It is disabled while Output is Default.
+
+**Table (HTML)** is the browser's own format. Each result set is an HTML table
+that grows as rows arrive; when a later page brings new attributes, the table
+gains columns, and the earlier rows get empty cells in them. Numbers are
+right-aligned, and a newline inside a value shows as a line break. A cell
+whose row has no such attribute is shaded, so an absent attribute looks
+different from an empty string. Status lines, `DESCRIBE`, `EXPLAIN` and errors
+stay text between the tables.
+
+The page reads both dropdowns when you run a statement, and does not save
+them: a reload starts at Default and Plain. The CLI's batch lines
+`set output`, `set json-flavor` and `set terminator` do not exist in the
+browser, where they are syntax errors; use the dropdowns instead.
+
+[Output formats](../reference/output-formats.md) describes each format, the
+column order, and the edge cases.
+
 ## Short-term credentials
 
 The page asks you to paste **short-term** AWS credentials: an access key id that
