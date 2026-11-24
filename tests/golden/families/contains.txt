@@ -63,7 +63,11 @@ add_test(NAME icont-explain-string COMMAND ddbshtest -q -T ${RD}/icont-explain-s
 add_test(NAME icont-explain-update COMMAND ddbshtest -q -T ${RD}/icont-explain-update.exp -c "explain update ddbsh_contains set hit = 1 where pk = 1 and contains(l, NULL);")
 add_test(NAME icont-explain-upsert-bulk COMMAND ddbshtest -q -T ${RD}/icont-explain-upsert-bulk.exp -c "explain upsert ddbsh_contains set hit = 1 where contains(ns, 7);")
 add_test(NAME icont-explain-delete COMMAND ddbshtest -q -T ${RD}/icont-explain-delete.exp -c "explain delete from ddbsh_contains where pk = 6 and contains(l, FALSE);")
-add_test(NAME icont-explain-txn COMMAND ddbshtest -q -T ${RD}/icont-explain-txn.exp -c "explain begin; update ddbsh_contains set tx = 1 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 1 and contains(l, NULL); commit;")
+# A TransactWriteItems EXPLAIN ends with a per-run ClientRequestToken, so
+# icont-explain-txn matches the two conditions and their operand types in
+# order with a regex instead of a byte-exact golden.
+add_test(NAME icont-explain-txn COMMAND ddbshtest -q -c "explain begin; update ddbsh_contains set tx = 1 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 1 and contains(l, NULL); commit;")
+set_property(TEST icont-explain-txn PROPERTY PASS_REGULAR_EXPRESSION "^TransactWriteItems[(][{].*\"Update\":.*\"ConditionExpression\":   \"attribute_exists[(]#aaaa2[)] AND contains[(]#aaaa3, :vaaa2[)]\".*\":vaaa2\":   [{][\r\n ]*\"BOOL\":   true.*\"ConditionCheck\":.*\"ConditionExpression\":   \"contains[(]#abaa1, :vbaa1[)] AND attribute_exists[(]#abaa2[)]\".*\":vbaa1\":   [{][\r\n ]*\"NULL\":   true.*\"ClientRequestToken\":   \"[0-9A-F-]+\"[\r\n]+[}][)][\r\n]*$")
 
 # --- UPDATE / UPSERT: single-item condition (full key) and bulk (Scan) ---
 add_test(NAME icont-update-single COMMAND ddbshtest -q -T ${RD}/icont-update-single.exp -c "update ddbsh_contains set hit = 1 where pk = 1 and contains(l, NULL);")
