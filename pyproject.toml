@@ -74,3 +74,43 @@ regex = 'project\(ddbsh\s+VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+
+# The wheels (T3(b), D-P13-8): .github/workflows/python.yml runs
+# cibuildwheel with this configuration on every pull request, and
+# .github/workflows/pypi.yml publishes what it builds. docs/PYTHON.md lists the
+# platforms; docs/CI.md describes the workflows.
+[tool.cibuildwheel]
+# CPython 3.9 to 3.13, the Python versions of the AWS Lambda runtimes.
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = "*-musllinux_*"
+# One architecture per runner: each job builds for the machine it runs on.
+archs = ["native"]
+build-frontend = "build"
+# glibc 2.28 and gcc-toolset-14 (C++23).
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+# Every wheel runs the offline suite (python/tests: the memory connection, a
+# fake transport, the EXPLAIN goldens, the alias) from outside the tree, so
+# `import ddbsh` is the installed wheel.
+test-requires = ["pytest>=7"]
+test-command = "pytest -p no:cacheprovider -q {project}/python/tests"
+
+[tool.cibuildwheel.linux]
+# AlmaLinux 8 ships bison 3.0; the grammar needs 3.7 (python/ci/before-all-linux.sh).
+before-all = "bash {project}/python/ci/before-all-linux.sh"
+environment-pass = ["CMAKE_BUILD_PARALLEL_LEVEL"]
+
+[tool.cibuildwheel.macos]
+# The system bison is 2.3; Homebrew's is keg-only, so it is put first on PATH.
+before-all = "brew install bison"
+# 13.3: Apple's libc++ marks some C++17/C++20 library parts (floating-point
+# to_chars, for one) unavailable before macOS 13.3, which would turn into
+# compile errors in a C++23 engine.
+environment = { PATH = "$(brew --prefix bison)/bin:$PATH", MACOSX_DEPLOYMENT_TARGET = "13.3" }
+
+[tool.cibuildwheel.windows]
+# win_flex and win_bison (D5).
+before-all = "choco install -y --no-progress winflexbison3"
+# TODO(portability): the engine's first MSVC build. /W4 warnings do not fail
+# the wheel until the Windows build is cleaned up (Step 3).
+config-settings = { "cmake.define.DDBSH_WARNINGS_AS_ERRORS" = "OFF" }
