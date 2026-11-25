@@ -38,6 +38,11 @@
 // Errc. python/ddbsh/_errors.py maps it to the PEP 249 hierarchy. An exception
 // the Python transport raised is kept and attached as the EngineError's
 // __cause__.
+//
+// Interrupts. A KeyboardInterrupt or SystemExit raised in the transport or a
+// callback is never swallowed: it stops the transport (PyTransport, below), so
+// the rest of a multi-statement run makes no DynamoDB call, and it is raised as
+// itself when the engine call returns.
 
 #include <atomic>
 #include <cmath>
@@ -334,6 +339,14 @@ ddbsh::Value from_py(nb::handle h) {
 // An exception the Python side raises becomes a transport-level Error and is
 // kept so the caller can attach it as __cause__ (or re-raise a
 // KeyboardInterrupt).
+//
+// Stopping. An exception that is not an Exception (KeyboardInterrupt,
+// SystemExit) stops the transport: it is kept (the first one wins; a later
+// failure never replaces it) and every later send() and on_connect() fails at
+// once without calling Python, so the rest of a multi-statement run drains
+// with no DynamoDB call. The engine also stops the transport when an output
+// or retry callback raises (stop()). take_pending() hands the stopping
+// exception back and restarts the transport.
 class PyTransport : public ddbsh::wire::Transport {
 public:
     explicit PyTransport(nb::object impl) : impl_(std::move(impl)) {}
@@ -346,6 +359,9 @@ public:
 
     ddbsh::Result<std::string> send(std::string_view operation, std::string_view body) override {
         nb::gil_scoped_acquire gil;
+        if (stop_.is_valid()) {
+            return not_sent();
+        }
         try {
             nb::object r = impl_.attr("send")(nb::str(operation.data(), operation.size()),
                                               nb::str(body.data(), body.size()));
@@ -361,6 +377,9 @@ public:
     ddbsh::Result<void> on_connect(const std::string& region,
                                    const std::string& endpoint) override {
         nb::gil_scoped_acquire gil;
+        if (stop_.is_valid()) {
+            return std::unexpected(not_sent().error());
+        }
         try {
             impl_.attr("on_connect")(to_str(region), to_str(endpoint));
             return {};
@@ -382,19 +401,44 @@ public:
         }
     }
 
-    /// The exception the last failing call raised, or an invalid object; the
-    /// slot is cleared. GIL held.
-    nb::object take_pending() { return std::exchange(pending_, nb::object()); }
+    /// The exception that stopped the transport, else the one the last
+    /// failing call raised, else an invalid object. Both slots are cleared, so
+    /// the transport sends again. GIL held.
+    nb::object take_pending() {
+        if (stop_.is_valid()) {
+            pending_.reset();
+            return std::exchange(stop_, nb::object());
+        }
+        return std::exchange(pending_, nb::object());
+    }
+
+    /// Stop the transport with `e` unless it is already stopped. GIL held.
+    void stop(nb::object e) {
+        if (!stop_.is_valid()) {
+            stop_ = std::move(e);
+        }
+    }
+
+    /// Whether the transport is stopped. GIL held.
+    bool stopped() const { return stop_.is_valid(); }
+
+    /// Whether the transport is stopped by a KeyboardInterrupt or SystemExit
+    /// (anything that is not an Exception). GIL held.
+    bool interrupted() const {
+        return stop_.is_valid() && !PyObject_IsInstance(stop_.ptr(), PyExc_Exception);
+    }
 
     /// Cyclic-GC support (see engine_tp_traverse). GIL held.
     int traverse(visitproc visit, void* arg) {
         Py_VISIT(impl_.ptr());
         Py_VISIT(pending_.ptr());
+        Py_VISIT(stop_.ptr());
         return 0;
     }
     void clear() {
         impl_ = nb::none();
         pending_.reset();
+        stop_.reset();
     }
 
 private:
@@ -403,14 +447,25 @@ private:
             ddbsh::Error{ddbsh::Errc::service_error, "wire transport: " + what, {}, {}});
     }
 
+    // The failure of a call made while the transport is stopped. GIL held.
+    ddbsh::Result<std::string> not_sent() const {
+        return failure("not sent: stopped by " + py_type_name(stop_));
+    }
+
     ddbsh::Result<std::string> keep(nb::python_error& e) {
         std::string what = describe_exception(e);
-        pending_ = nb::borrow(e.value());
+        nb::object value = nb::borrow(e.value());
+        if (PyObject_IsInstance(value.ptr(), PyExc_Exception)) {
+            pending_ = std::move(value);
+        } else {
+            stop(std::move(value));
+        }
         return failure(what);
     }
 
     nb::object impl_;
-    nb::object pending_;
+    nb::object pending_;  // the last ordinary exception (a __cause__)
+    nb::object stop_;     // the exception that stopped the transport
 };
 
 // ---- retry events ---------------------------------------------------------------
@@ -426,10 +481,13 @@ struct PyRetryEvent {
 };
 
 // Calls a Python callable with a RetryEvent before each retry. Its exceptions
-// go to sys.unraisablehook (the retry still happens, retry_event.hpp).
+// go to sys.unraisablehook (the retry still happens, retry_event.hpp), except
+// a KeyboardInterrupt or SystemExit, which stops the transport (the retry then
+// fails without a send) and is raised when the engine call returns.
 class PyRetryObserver : public ddbsh::RetryObserver {
 public:
-    explicit PyRetryObserver(nb::object fn) : fn_(std::move(fn)) {}
+    PyRetryObserver(nb::object fn, PyTransport* transport)
+        : fn_(std::move(fn)), transport_(transport) {}
     ~PyRetryObserver() override {
         nb::gil_scoped_acquire gil;
         fn_.reset();
@@ -445,6 +503,11 @@ public:
         try {
             fn_(nb::cast(ev));
         } catch (nb::python_error& e) {
+            nb::object value = nb::borrow(e.value());
+            if (transport_ != nullptr && !PyObject_IsInstance(value.ptr(), PyExc_Exception)) {
+                transport_->stop(std::move(value));
+                return;
+            }
             e.discard_as_unraisable("ddbsh retry callback");
         }
     }
@@ -458,6 +521,7 @@ public:
 
 private:
     nb::object fn_;
+    PyTransport* transport_;  // the engine's; outlives this observer (~Engine)
 };
 
 // ---- the engine ---------------------------------------------------------------------
@@ -536,8 +600,12 @@ public:
     /// same-stream text coalesced, stream "stdout" or "stderr", and the CLI's
     /// exit status. When `on_output` is not None it is also called as
     /// on_output(stream, text) for each piece as the engine emits it (timely
-    /// output, P12); the first exception it raises stops further calls and is
-    /// raised when the run ends.
+    /// output, P12). The first exception it raises stops further calls and the
+    /// transport (the rest of the run sends nothing to DynamoDB), and is raised
+    /// when the run ends. A KeyboardInterrupt or SystemExit from the transport
+    /// or the retry callback stops the run the same way and is raised as
+    /// itself. With the in-memory client there is no transport to stop: the
+    /// remaining statements still run in memory, but their output is dropped.
     nb::tuple run(const std::string& text, const std::string& output, const std::string& flavor,
                   bool abort_on_error, nb::object on_output) {
         ddbsh::render::FormatOptions options;
@@ -570,13 +638,16 @@ public:
             }
             if (has_callback) {
                 nb::gil_scoped_acquire gil;
-                if (callback_error.is_valid()) {
+                if (callback_error.is_valid() || (transport_ && transport_->stopped())) {
                     return;
                 }
                 try {
                     on_output(err ? "stderr" : "stdout", nb::str(piece.data(), piece.size()));
                 } catch (nb::python_error& e) {
                     callback_error = nb::borrow(e.value());
+                    if (transport_) {
+                        transport_->stop(callback_error);
+                    }
                 }
             }
         };
@@ -620,7 +691,7 @@ public:
     void set_retry_callback(nb::object fn) {
         std::unique_ptr<PyRetryObserver> next;
         if (!fn.is_none()) {
-            next = std::make_unique<PyRetryObserver>(std::move(fn));
+            next = std::make_unique<PyRetryObserver>(std::move(fn), transport_.get());
         }
         // Under the engine mutex, so no retry is running while the old observer
         // is destroyed.
@@ -641,6 +712,14 @@ public:
     /// and re-raise it when it is a KeyboardInterrupt or SystemExit (anything
     /// that is not an Exception), so Ctrl-C is never swallowed.
     void reraise_interrupt() { (void)take_cause(); }
+
+    /// Re-raise a KeyboardInterrupt or SystemExit that stopped the transport
+    /// (GIL held); an ordinary kept exception stays for the error it causes.
+    void reraise_if_interrupted() {
+        if (transport_ && transport_->interrupted()) {
+            (void)take_cause();
+        }
+    }
 
     /// Raise `error` (GIL held), with the transport's kept exception, if any,
     /// as its __cause__.
@@ -720,21 +799,41 @@ std::string kind_name(ddbsh::ResultKind k) {
     return "empty";
 }
 
+// A cursor holds a strong reference to its _Engine object (engine_obj_), not
+// a nanobind keep_alive, so the cyclic GC sees the cursor -> engine edge
+// (cursor_tp_traverse) and can collect a cycle such as a transport that keeps
+// a cursor of its own connection.
 class Cursor {
 public:
-    explicit Cursor(Engine& engine)
-        : engine_(engine),
-          conn_(std::make_unique<ddbsh::Connection>(engine.config(), engine.client())) {}
+    explicit Cursor(nb::handle_t<Engine> engine)
+        : engine_obj_(nb::borrow(engine)),
+          engine_(nb::inst_ptr<Engine>(engine)),
+          conn_(std::make_unique<ddbsh::Connection>(engine_->config(), engine_->client())) {}
 
-    ~Cursor() = default;
+    ~Cursor() { release(); }
     Cursor(const Cursor&) = delete;
     Cursor& operator=(const Cursor&) = delete;
+
+    /// Cyclic-GC support (see cursor_tp_traverse). GIL held.
+    int traverse(visitproc visit, void* arg) {
+        Py_VISIT(engine_obj_.ptr());
+        return 0;
+    }
+
+    /// Drop everything that borrows the engine, then the engine reference
+    /// (tp_clear, and the destructor). The cursor is unusable afterwards. GIL
+    /// held; the cursor is garbage, so no other thread is using it.
+    void clear() {
+        release();
+        engine_ = nullptr;
+        engine_obj_.reset();
+    }
 
     /// Execute a batch of one or more statements; positioned at the first
     /// result set. Raises when no statement could run (a parse error, or the
     /// first statement failed).
     void execute(const std::string& sql) {
-        auto r = locked(engine_.guard(), [&] {
+        auto r = locked(eng().guard(), [&] {
             results_.reset();
             return conn_->exec(sql);
         });
@@ -744,12 +843,14 @@ public:
     /// Prepare `sql` (one statement; cached while the text is unchanged),
     /// bind `params` to its `?` markers in order, and execute it.
     void execute_params(const std::string& sql, nb::sequence params) {
+        // Leave no result set current before converting, so an unbindable
+        // value leaves the cursor in the same state as the Python layer.
+        locked(eng().guard(), [&] { results_.reset(); });
         std::vector<ddbsh::Value> values;
         for (nb::handle p : params) {
             values.push_back(from_py(p));
         }
-        auto r = locked(engine_.guard(), [&]() -> ddbsh::Result<ddbsh::Results> {
-            results_.reset();
+        auto r = locked(eng().guard(), [&]() -> ddbsh::Result<ddbsh::Results> {
             if (!prepared_ || prepared_sql_ != sql) {
                 prepared_.reset();
                 auto p = conn_->prepare(sql);
@@ -779,7 +880,7 @@ public:
 
     /// The current result set's kind, or None before any execute().
     std::optional<std::string> kind() {
-        return locked(engine_.guard(), [&]() -> std::optional<std::string> {
+        return locked(eng().guard(), [&]() -> std::optional<std::string> {
             if (!results_) {
                 return std::nullopt;
             }
@@ -791,9 +892,13 @@ public:
     /// stopped the batch.
     bool next_result() {
         const bool more =
-            locked(engine_.guard(), [&] { return results_ && results_->next_result(); });
+            locked(eng().guard(), [&] { return results_ && results_->next_result(); });
         if (!more) {
             check_error();
+        } else {
+            // The next statement ran: a Ctrl-C in its transport call is raised
+            // now, not at the next fetch.
+            eng().reraise_if_interrupted();
         }
         return more;
     }
@@ -803,7 +908,7 @@ public:
     nb::list fetch(long n) {
         std::optional<std::string> wrong_kind;
         std::vector<ddbsh::ItemRow> rows;
-        locked(engine_.guard(), [&] {
+        locked(eng().guard(), [&] {
             if (!results_) {
                 wrong_kind = "no statement has been executed";
                 return;
@@ -831,7 +936,7 @@ public:
     }
 
     std::string status_token() {
-        return locked(engine_.guard(), [&] { return results_ ? results_->status_token() : ""; });
+        return locked(eng().guard(), [&] { return results_ ? results_->status_token() : ""; });
     }
 
     nb::tuple write_counts() {
@@ -839,7 +944,7 @@ public:
         long modified = 0;
         long ccf = 0;
         std::string verb;
-        locked(engine_.guard(), [&] {
+        locked(eng().guard(), [&] {
             if (results_ && results_->kind() == ddbsh::ResultKind::write) {
                 read = results_->read();
                 modified = results_->modified();
@@ -865,7 +970,7 @@ public:
 
     nb::list lines() {
         std::vector<std::string> copy;
-        locked(engine_.guard(), [&] {
+        locked(eng().guard(), [&] {
             if (results_) {
                 copy = results_->lines();
             }
@@ -879,7 +984,7 @@ public:
 
     nb::list diagnostics() {
         std::vector<std::string> copy;
-        locked(engine_.guard(), [&] {
+        locked(eng().guard(), [&] {
             if (results_) {
                 copy = results_->diagnostics();
             }
@@ -892,19 +997,19 @@ public:
     }
 
     std::string explain_text() {
-        return locked(engine_.guard(), [&] { return results_ ? results_->explain_text() : ""; });
+        return locked(eng().guard(), [&] { return results_ ? results_->explain_text() : ""; });
     }
 
     /// The current result set's exact CLI stdout bytes (drains a lazy SELECT).
     std::string render() {
         std::string out =
-            locked(engine_.guard(), [&] { return results_ ? results_->render() : std::string(); });
+            locked(eng().guard(), [&] { return results_ ? results_->render() : std::string(); });
         check_error();
         return out;
     }
 
     void close() {
-        locked(engine_.guard(), [&] {
+        locked(eng().guard(), [&] {
             results_.reset();
             prepared_.reset();
             conn_->close();
@@ -912,9 +1017,24 @@ public:
     }
 
 private:
+    /// The engine; raises InterfaceError when the GC has cleared the cursor.
+    Engine& eng() {
+        if (engine_ == nullptr) {
+            raise_engine_error("interface_error", "cursor is closed", std::nullopt);
+        }
+        return *engine_;
+    }
+
+    // Destroy the members that borrow the engine's client, newest first.
+    void release() {
+        results_.reset();
+        prepared_.reset();
+        conn_.reset();
+    }
+
     void adopt(ddbsh::Result<ddbsh::Results> r) {
         if (!r.has_value()) {
-            engine_.raise(r.error());
+            eng().raise(r.error());
         }
         results_.emplace(std::move(*r));
         error_raised_ = false;
@@ -925,21 +1045,21 @@ private:
     /// Raise the batch's error once (GIL held); otherwise re-raise a kept
     /// KeyboardInterrupt and drop any other kept transport exception.
     void check_error() {
-        std::optional<ddbsh::Error> e =
-            locked(engine_.guard(), [&]() -> std::optional<ddbsh::Error> {
-                if (!results_ || error_raised_) {
-                    return std::nullopt;
-                }
-                return results_->error();
-            });
+        std::optional<ddbsh::Error> e = locked(eng().guard(), [&]() -> std::optional<ddbsh::Error> {
+            if (!results_ || error_raised_) {
+                return std::nullopt;
+            }
+            return results_->error();
+        });
         if (e.has_value()) {
             error_raised_ = true;
-            engine_.raise(*e);
+            eng().raise(*e);
         }
-        engine_.reraise_interrupt();
+        eng().reraise_interrupt();
     }
 
-    Engine& engine_;
+    nb::object engine_obj_;  // keeps the engine (and its client) alive
+    Engine* engine_;         // engine_obj_'s C++ object; null once cleared
     std::unique_ptr<ddbsh::Connection> conn_;
     std::optional<ddbsh::Results> results_;
     std::optional<ddbsh::PreparedStatement> prepared_;
@@ -969,6 +1089,32 @@ int engine_tp_clear(PyObject* self) {
 PyType_Slot engine_slots[] = {
     {Py_tp_traverse, reinterpret_cast<void*>(engine_tp_traverse)},
     {Py_tp_clear, reinterpret_cast<void*>(engine_tp_clear)},
+    {0, nullptr},
+};
+
+// tp_traverse / tp_clear for _Cursor: the cursor -> engine reference, so a
+// cycle through a cursor (transport -> cursor -> engine -> transport) is
+// collectable.
+int cursor_tp_traverse(PyObject* self, visitproc visit, void* arg) {
+#if PY_VERSION_HEX >= 0x03090000
+    Py_VISIT(Py_TYPE(self));
+#endif
+    if (!nb::inst_ready(self)) {
+        return 0;
+    }
+    return nb::inst_ptr<Cursor>(self)->traverse(visit, arg);
+}
+
+int cursor_tp_clear(PyObject* self) {
+    if (nb::inst_ready(self)) {
+        nb::inst_ptr<Cursor>(self)->clear();
+    }
+    return 0;
+}
+
+PyType_Slot cursor_slots[] = {
+    {Py_tp_traverse, reinterpret_cast<void*>(cursor_tp_traverse)},
+    {Py_tp_clear, reinterpret_cast<void*>(cursor_tp_clear)},
     {0, nullptr},
 };
 
@@ -1009,10 +1155,10 @@ NB_MODULE(_core, m) {
         .def("close", &Engine::close)
         .def_prop_ro("closed", &Engine::closed)
         .def(
-            "cursor", [](Engine& e) { return new Cursor(e); }, nb::keep_alive<0, 1>(),
+            "cursor", [](nb::handle_t<Engine> self) { return new Cursor(self); },
             nb::rv_policy::take_ownership);
 
-    nb::class_<Cursor>(m, "_Cursor")
+    nb::class_<Cursor>(m, "_Cursor", nb::type_slots(cursor_slots))
         .def("execute", &Cursor::execute, "sql"_a)
         .def("execute_params", &Cursor::execute_params, "sql"_a, "params"_a)
         .def("kind", &Cursor::kind)

@@ -400,8 +400,14 @@ class Connection:
         self._check_open()
 
     def close(self) -> None:
-        """Close the connection. Further use raises InterfaceError."""
+        """Close the connection and, when the transport has a ``close()``
+        method, the transport. Further use raises InterfaceError."""
+        if self._engine.closed:
+            return
         self._engine.close()
+        close = getattr(self._transport, "close", None)
+        if callable(close):
+            close()
 
     def run(
         self,
@@ -424,7 +430,11 @@ class Connection:
             ``"stdout"`` or ``"stderr"``) for each piece of output as soon as
             the engine produces it, for example to print a long Scan while it
             runs. It must not use this connection. The first exception it
-            raises stops further calls and is raised when the run ends.
+            raises stops further calls and the run: the remaining statements
+            send nothing to DynamoDB, and the exception is raised when the
+            run ends. (With :func:`connect_memory` they still run in memory,
+            with their output dropped.) A ``KeyboardInterrupt`` during the
+            run stops it the same way and is raised as itself.
         :raises ValueError: an unknown format or flavor.
         """
         return self.run_result(sql, format, json_flavor, abort_on_error, on_output).output

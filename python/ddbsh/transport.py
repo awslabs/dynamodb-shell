@@ -124,7 +124,10 @@ class BotocoreTransport:
     :param endpoint_url: an endpoint override, e.g. ``http://localhost:8000``.
         When None, the endpoint is the one boto3 would use for DynamoDB in
         the region (``AWS_ENDPOINT_URL_DYNAMODB`` and a profile's
-        ``endpoint_url`` included).
+        ``endpoint_url`` included). Only an endpoint given here (or by
+        ``CONNECT ... WITH ENDPOINT``) counts as an override: one boto3
+        resolved from its configuration is reported as ``(default)`` by
+        ``SHOW CONNECTION``, and :attr:`endpoint_overridden` is False.
     :param verify: TLS verification: True, False, or a CA bundle path. When
         None, the session's ``ca_bundle`` (``AWS_CA_BUNDLE`` or the profile's
         ``ca_bundle``), else the default trust.
@@ -152,6 +155,7 @@ class BotocoreTransport:
         self.search_endpoint = ""
         self.endpoint_overridden = False
         self._http: Optional[URLLib3Session] = None
+        self._search_http: Optional[URLLib3Session] = None
         self._retarget(self.region, endpoint_url or "")
 
     # ---- the transport interface ------------------------------------------
@@ -162,9 +166,10 @@ class BotocoreTransport:
         if credentials is None:
             raise NoCredentialsError()
         frozen = credentials.get_frozen_credentials()
+        search = operation in SEARCH_OPERATIONS
         request = AWSRequest(
             method="POST",
-            url=self.search_endpoint if operation in SEARCH_OPERATIONS else self.endpoint,
+            url=self.search_endpoint if search else self.endpoint,
             data=body.encode("utf-8"),
             headers={
                 "Content-Type": "application/x-amz-json-1.0",
@@ -173,8 +178,10 @@ class BotocoreTransport:
             },
         )
         SigV4Auth(frozen, "dynamodb", self.region).add_auth(request)
-        assert self._http is not None
-        response = self._http.send(request.prepare())
+        http = self._search_http if search else self._http
+        if http is None:
+            raise TransportError("the transport is closed")
+        response = http.send(request.prepare())
         text = response.content.decode("utf-8", errors="replace")
         if response.status_code != 200 and not _is_service_error(text):
             raise TransportError(
@@ -186,6 +193,11 @@ class BotocoreTransport:
     def on_connect(self, region: str, endpoint: str) -> None:
         """Retarget after ``CONNECT``."""
         self._retarget(region, endpoint)
+
+    def close(self) -> None:
+        """Close the HTTP connection pools (``Connection.close`` calls this).
+        A later :meth:`send` raises :class:`TransportError`."""
+        self._close_http()
 
     def descriptor(self) -> str:
         """The ``SHOW CONNECTION`` backend text, e.g.
@@ -213,13 +225,30 @@ class BotocoreTransport:
         self.endpoint = url
         self.search_endpoint = url if overridden else search_endpoint(url)
         self.endpoint_overridden = overridden
-        if self._http is not None:
-            self._http.close()
-        self._http = URLLib3Session(
+        self._close_http()
+        self._http = self._new_http(url)
+        # The search endpoint is another host: NO_PROXY may treat it apart.
+        if self.search_endpoint == url or get_environ_proxies(
+            self.search_endpoint
+        ) == get_environ_proxies(url):
+            self._search_http = self._http
+        else:
+            self._search_http = self._new_http(self.search_endpoint)
+
+    def _new_http(self, url: str) -> URLLib3Session:
+        return URLLib3Session(
             verify=self._verify,
             timeout=self._timeout,
             proxies=get_environ_proxies(url),
         )
+
+    def _close_http(self) -> None:
+        if self._search_http is not None and self._search_http is not self._http:
+            self._search_http.close()
+        if self._http is not None:
+            self._http.close()
+        self._http = None
+        self._search_http = None
 
 
 def _is_service_error(text: str) -> bool:

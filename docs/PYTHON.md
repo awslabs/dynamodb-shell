@@ -58,7 +58,10 @@ temporary credentials refresh.
 
 `CONNECT <region> [WITH ENDPOINT <endpoint>]` in a statement retargets the
 connection, as in the command. `conn.region` and `conn.endpoint_overridden`
-report the current target, and `SHOW CONNECTION` prints it:
+report the current target, and `SHOW CONNECTION` prints it. Only an endpoint
+given as `endpoint_url` or by `CONNECT ... WITH ENDPOINT` counts as an override;
+an endpoint boto3 took from `AWS_ENDPOINT_URL_DYNAMODB` or a profile's
+`endpoint_url` is shown as `(default)`, and `endpoint_overridden` is False.
 
 ```
 ddbsh - version 0.12.6
@@ -71,6 +74,8 @@ The access key id is shown as its first and last four characters; the secret
 and the session token are never shown.
 
 A connection is a context manager; leaving the `with` block closes it.
+`close()` also closes the transport's HTTP connections (it calls the
+transport's `close()` method when it has one).
 
 ## Text, as the command prints it: `run`
 
@@ -93,7 +98,7 @@ print(conn.run("select * from movies;", format="table"))
 | `format` | `"default"`, `"json"`, `"csv"` or `"table"` ([output formats](reference/output-formats.md)). A `set output` line in `sql` changes it, as in the command. |
 | `json_flavor` | `"plain"` or `"dynamodb"`. |
 | `abort_on_error` | Stop at the first failing statement, like `ddbsh -e`. |
-| `on_output` | `on_output(stream, text)` is called for each piece of output as soon as the engine produces it (`stream` is `"stdout"` or `"stderr"`), for example to print a long Scan while it runs. It must not use the connection. |
+| `on_output` | `on_output(stream, text)` is called for each piece of output as soon as the engine produces it (`stream` is `"stdout"` or `"stderr"`), for example to print a long Scan while it runs. It must not use the connection. If it raises, the run stops: the remaining statements send nothing to DynamoDB, and the exception is raised when `run` returns. (With `connect_memory` the remaining statements still run in memory; their output is dropped.) |
 
 An unknown `format` or `json_flavor` raises `ValueError`.
 
@@ -189,7 +194,10 @@ Errors follow the PEP 249 hierarchy, and the classes are also attributes of
 the engine's error code (for example `"parse_error"`), and `exc.service_error`
 is DynamoDB's exception name, when there is one. When the transport failed
 (no network, no credentials), the original exception is `exc.__cause__`. A
-`KeyboardInterrupt` raised while a request is in flight is raised as itself.
+`KeyboardInterrupt` (or `SystemExit`) raised while a request is in flight, or
+in a retry or output callback, is raised as itself. In a multi-statement `run`
+it also stops the run: the statements after it send nothing to DynamoDB. On a
+cursor, a later statement's interrupt is raised by `nextset()`.
 
 ## Retries
 

@@ -249,7 +249,7 @@ def test_botocore_transport_signs_and_targets(session: botocore.session.Session)
     assert t.region == "eu-west-1"
     assert t.endpoint == "https://dynamodb.eu-west-1.amazonaws.com"
     http = _Http(200, '{"TableNames": []}')
-    t._http = http
+    t._http = t._search_http = http
     assert t.send("ListTables", '{"Limit":1}') == '{"TableNames": []}'
     req = http.sent[0]
     assert req.method == "POST"
@@ -268,9 +268,9 @@ def test_botocore_transport_signs_and_targets(session: botocore.session.Session)
 def test_botocore_transport_error_bodies(session: botocore.session.Session) -> None:
     t = BotocoreTransport(session)
     error = '{"__type":"x#ValidationException","message":"bad"}'
-    t._http = _Http(400, error)
+    t._http = t._search_http = _Http(400, error)
     assert t.send("Query", "{}") == error
-    t._http = _Http(502, "<html>bad gateway</html>")
+    t._http = t._search_http = _Http(502, "<html>bad gateway</html>")
     with pytest.raises(TransportError, match="HTTP 502"):
         t.send("Query", "{}")
 
@@ -312,7 +312,7 @@ def test_search_vectors_goes_to_the_search_endpoint(session: botocore.session.Se
     t = BotocoreTransport(session)
     assert t.search_endpoint == "https://search-dynamodb.eu-west-1.amazonaws.com"
     http = _Http(200, "{}")
-    t._http = http
+    t._http = t._search_http = http
     t.send("SearchVectors", "{}")
     t.send("Query", "{}")
     assert [r.url.rstrip("/") for r in http.sent] == [
@@ -350,3 +350,20 @@ def test_connect_with_session(session: botocore.session.Session) -> None:
     assert conn.region == "eu-west-1"
     assert conn.endpoint_overridden
     assert conn.transport.endpoint == "http://localhost:8000"
+
+
+def test_search_endpoint_proxy_follows_no_proxy(
+    session: botocore.session.Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    t = BotocoreTransport(session)
+    assert t._search_http is t._http  # same proxies: one connection pool
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "search-dynamodb.eu-west-1.amazonaws.com")
+    t = BotocoreTransport(session)
+    assert t._search_http is not t._http
+    t.close()
+    assert t._http is None and t._search_http is None
+    with pytest.raises(TransportError, match="closed"):
+        t.send("Query", "{}")
