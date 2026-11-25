@@ -3,8 +3,8 @@
 """The Python package against real DynamoDB (devtools/run-python-golden).
 
 WARNING: this talks to a real AWS account. It creates and drops the tables
-ddbsh_py_live and ddbsh_py_live_x (in the account of the AWS_PROFILE
-`cross-acct`), which costs money. The offline suite is python/tests; this
+ddbsh_py_live and, in the account of the AWS_PROFILE `cross-acct`,
+ddbsh_test_table_1, which costs money. The offline suite is python/tests; this
 directory is run only by the live gate, never by a plain `pytest`.
 """
 
@@ -18,7 +18,10 @@ import pytest
 import ddbsh
 
 TABLE = "ddbsh_py_live"
-CROSS_TABLE = "ddbsh_py_live_x"
+# The cross-account family's table: CI's cross-account role may use no other
+# table (docs/CI.md, the accounts and roles).
+# The golden suite's cleanup drops it too.
+CROSS_TABLE = "ddbsh_test_table_1"
 
 
 @pytest.fixture(scope="module")
