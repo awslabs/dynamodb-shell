@@ -367,3 +367,15 @@ def test_search_endpoint_proxy_follows_no_proxy(
     assert t._http is None and t._search_http is None
     with pytest.raises(TransportError, match="closed"):
         t.send("Query", "{}")
+
+
+def test_closed_transport_stays_closed(session: botocore.session.Session) -> None:
+    # CONNECT on a closed transport does not build new connection pools.
+    t = BotocoreTransport(session)
+    t.close()
+    with pytest.raises(TransportError, match="closed"):
+        t.on_connect("us-west-2", "")
+    assert t._http is None and t._search_http is None
+    assert t.region == "eu-west-1"
+    with pytest.raises(TransportError, match="closed"):
+        t.send("Query", "{}")

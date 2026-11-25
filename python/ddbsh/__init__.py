@@ -504,7 +504,9 @@ def connect(
     :param timeout: the per-request timeout, in seconds.
     :param transport: an object to send requests instead of the botocore
         transport (see :mod:`ddbsh.transport`); ``session``, ``verify`` and
-        ``timeout`` are then unused.
+        ``timeout`` are then unused. The connection takes ownership of the
+        transport: :meth:`Connection.close` calls its ``close()``, if it has
+        one, so do not share one transport between connections.
     :param retry_callback: see :meth:`Connection.set_retry_callback`.
     """
     if transport is None:

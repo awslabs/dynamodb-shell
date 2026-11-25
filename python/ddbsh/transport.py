@@ -17,8 +17,8 @@ tool. Credentials are read per request, so refreshable credentials refresh.
 Each ``send`` makes exactly one attempt (D-P13-7): the engine retries
 throttling and transient errors itself and raises the P12 retry event.
 
-A transport object is any object with these three methods; tests pass their
-own (see ``ddbsh.connect(transport=...)``):
+A transport object is any object with these three methods, and optionally
+``close()``; tests pass their own (see ``ddbsh.connect(transport=...)``):
 
 ``send(operation, body) -> str``
     POST ``body`` for ``operation`` (``"Query"``, ``"PutItem"``, ...) and
@@ -30,6 +30,10 @@ own (see ``ddbsh.connect(transport=...)``):
     endpoint means the default endpoint of ``region``.
 ``descriptor() -> str``
     The ``Backend:`` text of ``SHOW CONNECTION``.
+``close()`` (optional)
+    Release the transport's resources. The connection owns its transport:
+    ``Connection.close()`` calls ``close()`` once when the transport has it,
+    so give each connection its own transport object.
 """
 
 from __future__ import annotations
@@ -156,6 +160,7 @@ class BotocoreTransport:
         self.endpoint_overridden = False
         self._http: Optional[URLLib3Session] = None
         self._search_http: Optional[URLLib3Session] = None
+        self._closed = False
         self._retarget(self.region, endpoint_url or "")
 
     # ---- the transport interface ------------------------------------------
@@ -191,12 +196,17 @@ class BotocoreTransport:
         return text
 
     def on_connect(self, region: str, endpoint: str) -> None:
-        """Retarget after ``CONNECT``."""
+        """Retarget after ``CONNECT``. Raises :class:`TransportError` once the
+        transport is closed."""
+        if self._closed:
+            raise TransportError("the transport is closed")
         self._retarget(region, endpoint)
 
     def close(self) -> None:
         """Close the HTTP connection pools (``Connection.close`` calls this).
-        A later :meth:`send` raises :class:`TransportError`."""
+        A closed transport stays closed: a later :meth:`send` or
+        :meth:`on_connect` raises :class:`TransportError`."""
+        self._closed = True
         self._close_http()
 
     def descriptor(self) -> str:
