@@ -8,15 +8,22 @@
 #   check     before any upload: the version is the CMake project version (and
 #             on a tag, the tag names it, on main); the file set is complete;
 #             twine checks the metadata. Its output is the one set of files
-#             both publish jobs upload.
-#   testpypi  on a manual run: upload to TestPyPI through the GitHub
-#             environment `testpypi`.
-#   pypi      on a numbered release tag: upload to PyPI through the GitHub
-#             environment `pypi`, which accepts only tags matching v[0-9]*.
-# Each publish job uploads `ddbsh` first and then `libddbsh`, which depends on
-# it. Uploads use PyPI trusted publishing (OpenID Connect): no token is stored
-# on GitHub. A file already on the index is skipped, so a failed publish can
-# be re-run. docs/CI.md has the setup and the procedure.
+#             every publish job uploads.
+#   testpypi-ddbsh, testpypi-libddbsh
+#             on a manual run: upload to TestPyPI, `ddbsh` through the GitHub
+#             environment `testpypi` and `libddbsh` through
+#             `testpypi-libddbsh`.
+#   pypi-ddbsh, pypi-libddbsh
+#             on a numbered release tag: upload to PyPI, `ddbsh` through the
+#             GitHub environment `pypi` and `libddbsh` through `pypi-libddbsh`.
+#             Both environments accept only tags matching v[0-9]*.
+# Each project has its own environment on each index because PyPI allows one
+# pending trusted publisher per (owner, repository, workflow, environment); two
+# projects cannot share one (D-P13-20). The `libddbsh` job on each index runs
+# after the `ddbsh` job, because `libddbsh` depends on `ddbsh`. Uploads use
+# PyPI trusted publishing (OpenID Connect): no token is stored on GitHub. A
+# file already on the index is skipped, so a failed publish can be re-run.
+# docs/CI.md has the setup and the procedure.
 
 name: Publish to PyPI
 
@@ -139,8 +146,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  testpypi:
-    name: Publish to TestPyPI
+  testpypi-ddbsh:
+    name: Publish ddbsh to TestPyPI
     needs: check
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -161,29 +168,68 @@ jobs:
           name: pypi-dist
           path: dist
 
-      - name: Split the projects
+      - name: Select the ddbsh files
         run: |
-          mkdir -p upload/ddbsh upload/libddbsh
-          mv dist/libddbsh-* upload/libddbsh/
-          mv dist/ddbsh-* upload/ddbsh/
-          ls -l upload/*
+          mkdir -p upload
+          shopt -s nullglob
+          files=(dist/ddbsh-*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No ddbsh files in the checked set."
+            exit 1
+          fi
+          mv "${files[@]}" upload/
+          ls -l upload
 
       - name: Publish ddbsh
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
-          packages-dir: upload/ddbsh/
+          packages-dir: upload/
           skip-existing: true
+
+  testpypi-libddbsh:
+    name: Publish libddbsh to TestPyPI
+    needs: testpypi-ddbsh
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi-libddbsh
+      url: https://test.pypi.org/project/libddbsh/
+    concurrency:
+      group: testpypi-libddbsh-publish
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Download the checked set
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-dist
+          path: dist
+
+      - name: Select the libddbsh files
+        run: |
+          mkdir -p upload
+          shopt -s nullglob
+          files=(dist/libddbsh-*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No libddbsh files in the checked set."
+            exit 1
+          fi
+          mv "${files[@]}" upload/
+          ls -l upload
 
       - name: Publish libddbsh
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
-          packages-dir: upload/libddbsh/
+          packages-dir: upload/
           skip-existing: true
 
-  pypi:
-    name: Publish to PyPI
+  pypi-ddbsh:
+    name: Publish ddbsh to PyPI
     needs: check
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -204,21 +250,60 @@ jobs:
           name: pypi-dist
           path: dist
 
-      - name: Split the projects
+      - name: Select the ddbsh files
         run: |
-          mkdir -p upload/ddbsh upload/libddbsh
-          mv dist/libddbsh-* upload/libddbsh/
-          mv dist/ddbsh-* upload/ddbsh/
-          ls -l upload/*
+          mkdir -p upload
+          shopt -s nullglob
+          files=(dist/ddbsh-*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No ddbsh files in the checked set."
+            exit 1
+          fi
+          mv "${files[@]}" upload/
+          ls -l upload
 
       - name: Publish ddbsh
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
-          packages-dir: upload/ddbsh/
+          packages-dir: upload/
           skip-existing: true
+
+  pypi-libddbsh:
+    name: Publish libddbsh to PyPI
+    needs: pypi-ddbsh
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi-libddbsh
+      url: https://pypi.org/project/libddbsh/
+    concurrency:
+      group: pypi-libddbsh-publish
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Download the checked set
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-dist
+          path: dist
+
+      - name: Select the libddbsh files
+        run: |
+          mkdir -p upload
+          shopt -s nullglob
+          files=(dist/libddbsh-*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No libddbsh files in the checked set."
+            exit 1
+          fi
+          mv "${files[@]}" upload/
+          ls -l upload
 
       - name: Publish libddbsh
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
-          packages-dir: upload/libddbsh/
+          packages-dir: upload/
           skip-existing: true

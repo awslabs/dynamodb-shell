@@ -32,7 +32,7 @@ publish of the Python packages to PyPI.
 | `web-bundle.yml` | called by `build.yml` and `publish-site.yml` | builds the browser bundle, runs the offline web gates and uploads the artifact `ddbsh-web-bundle` | none |
 | `publish-site.yml` | every tag `vMAJOR.MINOR.PATCH`, on demand on a tag | `bundle` (the reusable workflow), then `publish` | `publish` only, environment `site` |
 | `python.yml` | every pull request, every push to `main`, on demand; called by `pypi.yml` | `sdist` builds the source distribution and a wheel from it; `wheels` builds and tests the wheels with cibuildwheel on five platforms; `alias` builds and tests `libddbsh` | none |
-| `pypi.yml` | every tag `vMAJOR.MINOR.PATCH` (PyPI), on demand (TestPyPI) | `build` (the reusable `python.yml`), `check`, then `pypi` or `testpypi` | none; the publish jobs sign in to the package index, environments `pypi` and `testpypi` |
+| `pypi.yml` | every tag `vMAJOR.MINOR.PATCH` (PyPI), on demand (TestPyPI) | `build` (the reusable `python.yml`), `check`, then `pypi-ddbsh` and `pypi-libddbsh`, or `testpypi-ddbsh` and `testpypi-libddbsh` | none; the publish jobs sign in to the package index, environments `pypi`, `pypi-libddbsh`, `testpypi` and `testpypi-libddbsh` |
 | `homebrew.yml` | a created release, on demand | updates the `aws/homebrew-tap` formula | none |
 
 The real-DynamoDB job waits for the `native` and `format` jobs, so a pull
@@ -62,10 +62,13 @@ accounts, so a local run and a CI run never delete each other's tables.
 |---|---|---|
 | `ci` | none, so pull requests, `main` and manual runs can use it | `CI_ROLE_ARN` (`arn:aws:iam::291751120739:role/ddbsh-ci-tests`), `CI_CROSS_ROLE_ARN` (`arn:aws:iam::457765142880:role/ddbsh-ci-cross`), `CI_REGION` (`us-east-1`) |
 | `site` | deployments only from tags matching `v[0-9]*`; no reviewers and no wait timer | `AWS_ROLE_ARN` (the publisher role), `SITE_BUCKET`, `SITE_DISTRIBUTION_ID`, `SITE_REGION` |
-| `pypi` | deployments only from tags matching `v[0-9]*`; no reviewers and no wait timer | none |
-| `testpypi` | deployments from the branches `main` and `dev/*` and from tags matching `v[0-9]*`; no reviewers and no wait timer | none |
+| `pypi`, `pypi-libddbsh` | deployments only from tags matching `v[0-9]*`; no reviewers and no wait timer | none |
+| `testpypi`, `testpypi-libddbsh` | deployments from the branches `main` and `dev/*` and from tags matching `v[0-9]*`; no reviewers and no wait timer | none |
 
-The maintainer creates `pypi` and `testpypi` with
+`ddbsh` publishes through `pypi` and `testpypi`, and `libddbsh` through
+`pypi-libddbsh` and `testpypi-libddbsh`; the reason is in
+[The Python packages](#the-python-packages). The maintainer creates the four
+environments with
 `devtools/github/setup-pypi-environment.sh` in the orchestration repository
 (`--check` only reads). PyPI and TestPyPI accept an upload from them through
 the projects' trusted publishers (see [The Python packages](#the-python-packages)).
@@ -299,13 +302,15 @@ the publish unless:
   equal the CMake version);
 - `twine check --strict` accepts them.
 
-The publish job then uploads `ddbsh`, and after it `libddbsh`, which depends on
-it. A file the index already has is skipped, so **Re-run failed jobs** repeats
+On each index, one job uploads `ddbsh`, and a second job, which waits for the
+first, uploads `libddbsh`, which depends on it. A file the index already has is skipped, so **Re-run failed jobs** repeats
 a publish that failed half way. PyPI never accepts a file name twice, so a
 version cannot be replaced; fix forward with the next patch version.
 
-- **A tag** `vMAJOR.MINOR.PATCH` publishes to PyPI, in the environment `pypi`.
-- **Run workflow** publishes to TestPyPI, in the environment `testpypi`, from
+- **A tag** `vMAJOR.MINOR.PATCH` publishes to PyPI, in the environments `pypi`
+  (`ddbsh`) and `pypi-libddbsh` (`libddbsh`).
+- **Run workflow** publishes to TestPyPI, in the environments `testpypi`
+  (`ddbsh`) and `testpypi-libddbsh` (`libddbsh`), from
   `main`, a `dev/*` branch or a tag. Use it to try a publish before a release;
   TestPyPI also keeps a version once uploaded, so a second run of one version
   uploads nothing. GitHub offers **Run workflow** (and `gh workflow run`) only
@@ -317,10 +322,19 @@ The uploads use [trusted publishing](https://docs.pypi.org/trusted-publishers/):
 the job's OpenID Connect token is exchanged for a short-lived upload token, and
 no PyPI token is stored on GitHub. Each project on each index needs a trusted
 publisher with owner `awslabs`, repository `dynamodb-shell`, workflow
-`pypi.yml`, and environment `pypi` (on pypi.org) or `testpypi` (on
-test.pypi.org). Before a project's first upload this is a *pending* publisher,
-added under the account's **Publishing** page; a pending publisher does not
-reserve the name, and the first upload creates the project.
+`pypi.yml`, and its own environment:
+
+| Project | pypi.org | test.pypi.org |
+|---|---|---|
+| `ddbsh` | `pypi` | `testpypi` |
+| `libddbsh` | `pypi-libddbsh` | `testpypi-libddbsh` |
+
+Before a project's first upload this is a *pending* publisher, added under the
+account's **Publishing** page; a pending publisher does not reserve the name,
+and the first upload creates the project. An index accepts only one pending
+publisher for each owner, repository, workflow and environment, so two new
+projects cannot share an environment. That is why `libddbsh` has environments
+of its own.
 `devtools/github/setup-pypi-environment.sh --check` prints the values and
 whether each project exists yet.
 

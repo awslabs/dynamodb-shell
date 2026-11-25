@@ -82,7 +82,7 @@ an endpoint boto3 took from `AWS_ENDPOINT_URL_DYNAMODB` or a profile's
 `endpoint_url` is shown as `(default)`, and `endpoint_overridden` is False.
 
 ```
-ddbsh - version 0.12.6
+ddbsh - version 0.12.7
 Region: us-east-1
 Endpoint: (default)
 Backend: wire/botocore 1.35.99 -> https://dynamodb.us-east-1.amazonaws.com (default); credentials ASIA…WXYZ
