@@ -61,6 +61,9 @@ LOG_FILE="$DISCUSSIONS_DIR/test-python-${HASH}.log"
 SUMMARY_FILE="$DISCUSSIONS_DIR/test-python-${HASH}.txt"
 GOLDEN_BUILD="${DDBSH_PYTHON_GOLDEN_BUILD_DIR:-$REPO_DIR/build-golden-python}"
 VENV="${DDBSH_PYTHON_VENV:-$REPO_DIR/build-python/venv-gate}"
+# A fresh CMake build for every gate run, so a cached compiler or option from
+# an earlier build never leaks in.
+WHEEL_BUILD="$REPO_DIR/build-python/gate"
 PYTHON="${DDBSH_PYTHON:-python3}"
 
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
@@ -104,8 +107,10 @@ set +e
 {
     "$PY" -m pip install --quiet --upgrade pip &&
     "$PY" -m pip install --quiet "scikit-build-core>=0.10" "nanobind>=2.0" "boto3>=1.26" "pytest>=7" &&
+    rm -rf "$WHEEL_BUILD" &&
     CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc 2>/dev/null || echo 4)}" \
-        "$PY" -m pip install --no-build-isolation --force-reinstall --no-deps "$REPO_DIR"
+        "$PY" -m pip install --no-build-isolation --force-reinstall --no-deps \
+        --config-settings=build-dir="$WHEEL_BUILD" "$REPO_DIR"
 } 2>&1 | tee -a "$LOG_FILE"
 RC_BUILD=${PIPESTATUS[0]}
 set -e
