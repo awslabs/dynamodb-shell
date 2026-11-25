@@ -44,6 +44,16 @@
 // the rest of a multi-statement run makes no DynamoDB call, and it is raised as
 // itself when the engine call returns.
 
+// Include order. Python's C API requires Python.h before any standard header
+// (https://docs.python.org/3/c-api/intro.html#include-files): pyconfig.h
+// defines _POSIX_C_SOURCE and _XOPEN_SOURCE, and a standard header included
+// first defines them differently (a -Werror "redefined" error with Ubuntu's
+// g++ 13). nanobind.h includes Python.h first, so the nanobind headers come
+// before every other include in this file.
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -56,10 +66,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#include <nanobind/nanobind.h>
-#include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
 
 #include "ddbsh/config.hpp"
 #include "ddbsh/connection.hpp"

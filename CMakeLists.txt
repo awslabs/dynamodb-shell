@@ -49,6 +49,17 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# MSVC reports __cplusplus as 199711L unless /Zc:__cplusplus is given. The
+# bison 3.7 C++ skeleton (winflexbison 2.5.24) tests `YY_CPLUSPLUS
+# __cplusplus`, so without the flag the generated parser takes its C++98 code
+# paths, which copy semantic values and fail on move-only types
+# (std::unique_ptr, error C2280). The flag only makes __cplusplus report the
+# real standard; it changes no output and no API. Set before the first target
+# so every target, including the generated parser, gets it.
+if(MSVC)
+    add_compile_options(/Zc:__cplusplus)
+endif()
+
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(DDBSH_BUILD_TESTS "Build the native unit tests" ON)
 option(DDBSH_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)

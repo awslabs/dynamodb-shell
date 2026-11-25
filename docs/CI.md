@@ -308,7 +308,10 @@ version cannot be replaced; fix forward with the next patch version.
 - **Run workflow** publishes to TestPyPI, in the environment `testpypi`, from
   `main`, a `dev/*` branch or a tag. Use it to try a publish before a release;
   TestPyPI also keeps a version once uploaded, so a second run of one version
-  uploads nothing.
+  uploads nothing. GitHub offers **Run workflow** (and `gh workflow run`) only
+  for a workflow that is on the default branch, so a change that adds or
+  renames `pypi.yml` cannot be dispatched from its own pull request: merge it
+  first, then run it from `main`.
 
 The uploads use [trusted publishing](https://docs.pypi.org/trusted-publishers/):
 the job's OpenID Connect token is exchanged for a short-lived upload token, and
