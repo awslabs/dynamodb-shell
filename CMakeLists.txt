@@ -122,10 +122,20 @@ BISON_TARGET(ddbsh_parser
              src/parser/grammar.yy
              "${GEN_DIR}/grammar.cpp"
              DEFINES_FILE "${GEN_DIR}/grammar.hpp")
+# On Windows the scanner must not include <unistd.h>: win_flex's --wincompat
+# makes the generated file use the MSVC runtime's <io.h> instead (D5). It is a
+# win_flex-only flag, so it is passed only when win_flex is the scanner
+# generator. TODO(portability): the Windows build is exercised only by the
+# Python wheel jobs (.github/workflows/python.yml).
+set(DDBSH_FLEX_ARGS "")
+if(WIN32 AND FLEX_EXECUTABLE MATCHES "win_flex")
+    set(DDBSH_FLEX_ARGS COMPILE_FLAGS "--wincompat")
+endif()
 FLEX_TARGET(ddbsh_scanner
             src/parser/lexer.l
             "${GEN_DIR}/lexer.cpp"
-            DEFINES_FILE "${GEN_DIR}/lexer.hpp")
+            DEFINES_FILE "${GEN_DIR}/lexer.hpp"
+            ${DDBSH_FLEX_ARGS})
 ADD_FLEX_BISON_DEPENDENCY(ddbsh_scanner ddbsh_parser)
 
 # --- engine library ----------------------------------------------------------
@@ -190,11 +200,16 @@ target_include_directories(ddbsh
 target_link_libraries(ddbsh PRIVATE $<BUILD_INTERFACE:ddbsh_warnings>)
 set_target_properties(ddbsh PROPERTIES OUTPUT_NAME ddbsh)
 
-# The generated flex/bison sources are not ours to lint; suppress -Werror on
-# just those translation units.
+# The generated flex/bison sources are not ours to lint; suppress
+# warnings-as-errors on just those translation units (/WX- for MSVC).
+if(MSVC)
+    set(DDBSH_GENERATED_NO_WERROR "/WX-")
+else()
+    set(DDBSH_GENERATED_NO_WERROR "-Wno-error")
+endif()
 set_source_files_properties(
     "${GEN_DIR}/grammar.cpp" "${GEN_DIR}/lexer.cpp"
-    PROPERTIES COMPILE_OPTIONS "-Wno-error")
+    PROPERTIES COMPILE_OPTIONS "${DDBSH_GENERATED_NO_WERROR}")
 
 # --- ddbsh-wire: SDK-free AWS JSON 1.0 codec (ddbsh::wire, P6 / D-P6-13) ------
 # The JSON-string transport counterpart to ddbsh-aws (the AWS SDK transport):
