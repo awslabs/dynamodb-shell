@@ -63,7 +63,7 @@ ddbsh then behaves exactly as it does against AWS — the `(*)` suffix on the pr
 indicates the non-standard endpoint:
 
 ```
-ddbsh - version 0.12.6
+ddbsh - version 0.12.7
 us-east-1 (*)>
 ```
 
