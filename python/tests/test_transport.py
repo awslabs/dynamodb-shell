@@ -15,7 +15,12 @@ import pytest
 from botocore.awsrequest import AWSResponse
 
 import ddbsh
-from ddbsh.transport import BotocoreTransport, TransportError, mask_access_key_id
+from ddbsh.transport import (
+    BotocoreTransport,
+    TransportError,
+    mask_access_key_id,
+    search_endpoint,
+)
 
 from conftest import GOLDEN_RESULTS, FakeTransport, describe_table
 
@@ -301,6 +306,38 @@ def test_botocore_transport_verify_from_session(session: botocore.session.Sessio
     session.set_config_variable("ca_bundle", "/tmp/ca.pem")
     assert BotocoreTransport(session)._verify == "/tmp/ca.pem"
     assert BotocoreTransport(session, verify=False)._verify is False
+
+
+def test_search_vectors_goes_to_the_search_endpoint(session: botocore.session.Session) -> None:
+    t = BotocoreTransport(session)
+    assert t.search_endpoint == "https://search-dynamodb.eu-west-1.amazonaws.com"
+    http = _Http(200, "{}")
+    t._http = http
+    t.send("SearchVectors", "{}")
+    t.send("Query", "{}")
+    assert [r.url.rstrip("/") for r in http.sent] == [
+        "https://search-dynamodb.eu-west-1.amazonaws.com",
+        "https://dynamodb.eu-west-1.amazonaws.com",
+    ]
+    # An override serves every operation.
+    t.on_connect("eu-west-1", "http://localhost:8000")
+    assert t.search_endpoint == "http://localhost:8000"
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://dynamodb.us-east-1.amazonaws.com", "https://search-dynamodb.us-east-1.amazonaws.com"),
+        ("https://dynamodb-fips.us-gov-west-1.amazonaws.com", "https://search-dynamodb-fips.us-gov-west-1.amazonaws.com"),
+        ("https://dynamodb.eu-west-1.api.aws", "https://search-dynamodb.eu-west-1.api.aws"),
+        ("https://dynamodb.cn-north-1.amazonaws.com.cn", "https://search-dynamodb.cn-north-1.amazonaws.com.cn"),
+        ("http://localhost:8000", "http://localhost:8000"),
+        ("https://dynamodb.us-east-1.amazonaws.com:443", "https://dynamodb.us-east-1.amazonaws.com:443"),
+        ("https://123456789012.ddb.us-east-1.amazonaws.com", "https://123456789012.ddb.us-east-1.amazonaws.com"),
+    ],
+)
+def test_search_endpoint_mapping(url: str, expected: str) -> None:
+    assert search_endpoint(url) == expected
 
 
 def test_mask_access_key_id() -> None:

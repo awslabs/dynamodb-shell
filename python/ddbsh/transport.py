@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional, Union
+from urllib.parse import urlsplit, urlunsplit
 
 import botocore
 import botocore.session
@@ -53,6 +55,13 @@ TARGET_PREFIX = "DynamoDB_20120810."
 
 #: The default request timeout, in seconds (botocore's default).
 DEFAULT_TIMEOUT = 60
+
+#: The operations DynamoDB serves from its search endpoint.
+SEARCH_OPERATIONS = frozenset({"SearchVectors"})
+
+# An AWS DynamoDB service host: dynamodb[-fips].<region>.<amazonaws.com|api.aws>
+# (and the .cn partition's amazonaws.com.cn).
+_SERVICE_HOST = re.compile(r"^(dynamodb(?:-fips)?)\.([a-z0-9-]+)\.(amazonaws\.com(?:\.cn)?|api\.aws)$")
 
 
 class TransportError(Exception):
@@ -85,6 +94,19 @@ def resolve_region(session: Any, region: Optional[str] = None) -> str:
         return region
     bc = _botocore_session(session)
     return bc.get_config_variable("region") or os.environ.get("AWS_REGION") or "us-east-1"
+
+
+def search_endpoint(url: str) -> str:
+    """The search endpoint that serves SearchVectors for the DynamoDB service
+    endpoint ``url``: ``https://dynamodb.us-east-1.amazonaws.com`` ->
+    ``https://search-dynamodb.us-east-1.amazonaws.com`` (the endpoint rules'
+    ``IsSearchOperation``; the AWS SDKs route it the same way). Any other
+    endpoint (an override, a local server) serves every operation itself and is
+    returned unchanged."""
+    parts = urlsplit(url)
+    if parts.port is None and _SERVICE_HOST.match(parts.hostname or ""):
+        return urlunsplit(parts._replace(netloc="search-" + parts.netloc))
+    return url
 
 
 def _with_scheme(endpoint: str) -> str:
@@ -127,6 +149,7 @@ class BotocoreTransport:
         )
         self.region = resolve_region(self._session, region)
         self.endpoint = ""
+        self.search_endpoint = ""
         self.endpoint_overridden = False
         self._http: Optional[URLLib3Session] = None
         self._retarget(self.region, endpoint_url or "")
@@ -141,7 +164,7 @@ class BotocoreTransport:
         frozen = credentials.get_frozen_credentials()
         request = AWSRequest(
             method="POST",
-            url=self.endpoint,
+            url=self.search_endpoint if operation in SEARCH_OPERATIONS else self.endpoint,
             data=body.encode("utf-8"),
             headers={
                 "Content-Type": "application/x-amz-json-1.0",
@@ -155,7 +178,7 @@ class BotocoreTransport:
         text = response.content.decode("utf-8", errors="replace")
         if response.status_code != 200 and not _is_service_error(text):
             raise TransportError(
-                f"HTTP {response.status_code} from {self.endpoint} without a DynamoDB error"
+                f"HTTP {response.status_code} from {request.url} without a DynamoDB error"
                 " document"
             )
         return text
@@ -188,6 +211,7 @@ class BotocoreTransport:
             overridden = False
         self.region = region
         self.endpoint = url
+        self.search_endpoint = url if overridden else search_endpoint(url)
         self.endpoint_overridden = overridden
         if self._http is not None:
             self._http.close()
