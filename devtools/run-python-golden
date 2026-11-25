@@ -38,6 +38,7 @@
 #                       its C headers (python3-devel) and Python >= 3.9.
 #   DDBSH_PYTHON_VENV   the virtualenv to build into (default build-python/venv-gate)
 #   DDBSH_PYTHON_GOLDEN_BUILD_DIR  the golden ctest build dir (default build-golden-python)
+#   CC, CXX             the C++23 compiler (default gcc14 where installed)
 #   AWS_REGION          default us-east-1
 #
 # Must not run concurrently with devtools/run-tests or devtools/run-web-golden
@@ -69,6 +70,13 @@ export AWS_REGION="$REGION"
 export AWS_DEFAULT_REGION="$REGION"
 export AWS_STS_REGIONAL_ENDPOINTS="${AWS_STS_REGIONAL_ENDPOINTS:-regional}"
 
+# The compiler: C++23 (std::expected, <format>). Like devtools/run-tests,
+# default to gcc14 where it is installed (Amazon Linux's c++ is too old);
+# CC/CXX override.
+if [ -z "${CXX:-}" ] && command -v gcc14-g++ >/dev/null 2>&1; then
+    export CC="${CC:-gcc14-gcc}" CXX=gcc14-g++
+fi
+
 web_golden_lock "$REPO_DIR"
 
 # The native CLI executes ~/.ddbsh_config at startup; `python -m ddbsh` never
@@ -86,6 +94,7 @@ fi
 {
     echo "=== Python gate: build ($HASH) ==="
     echo "  interpreter: $("$PYTHON" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+    echo "  compiler:    ${CXX:-c++} ($("${CXX:-c++}" --version | head -1))"
 } | tee "$LOG_FILE"
 if [ ! -x "$VENV/bin/python" ]; then
     "$PYTHON" -m venv "$VENV" 2>&1 | tee -a "$LOG_FILE"
