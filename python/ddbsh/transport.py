@@ -1,0 +1,206 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+"""The botocore transport: sign the engine's request and POST it (D-P13-5).
+
+The engine (with its ddbsh-wire codec) builds each DynamoDB request as an AWS
+JSON 1.0 body. :class:`BotocoreTransport` signs that exact body with SigV4
+(botocore's ``SigV4Auth``) and sends it with botocore's HTTP session. It
+returns the raw response body to the engine, including DynamoDB's ``__type``
+error documents, which the codec maps to ddbsh's error text. This is the
+model the browser edition uses with the AWS SDK for JavaScript.
+
+Credentials, region, endpoint and CA trust come from the boto3 session
+(D-P13-6), so profiles, AssumeRole, container and Lambda roles,
+``AWS_CA_BUNDLE`` and a profile's ``ca_bundle`` work as in any Python AWS
+tool. Credentials are read per request, so refreshable credentials refresh.
+
+Each ``send`` makes exactly one attempt (D-P13-7): the engine retries
+throttling and transient errors itself and raises the P12 retry event.
+
+A transport object is any object with these three methods; tests pass their
+own (see ``ddbsh.connect(transport=...)``):
+
+``send(operation, body) -> str``
+    POST ``body`` for ``operation`` (``"Query"``, ``"PutItem"``, ...) and
+    return the response body, for any HTTP status that carries a DynamoDB
+    response. Raise on a transport failure; the engine reports
+    ``wire transport: <TypeName>: <message>``.
+``on_connect(region, endpoint)``
+    ``CONNECT <region> [WITH ENDPOINT <endpoint>]`` ran; retarget. An empty
+    endpoint means the default endpoint of ``region``.
+``descriptor() -> str``
+    The ``Backend:`` text of ``SHOW CONNECTION``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Any, Optional, Union
+
+import botocore
+import botocore.session
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.exceptions import NoCredentialsError
+from botocore.httpsession import URLLib3Session
+from botocore.utils import get_environ_proxies
+
+from . import _core
+
+#: The JSON 1.0 target prefix of every DynamoDB operation.
+TARGET_PREFIX = "DynamoDB_20120810."
+
+#: The default request timeout, in seconds (botocore's default).
+DEFAULT_TIMEOUT = 60
+
+
+class TransportError(Exception):
+    """A request could not be sent, or the reply was not a DynamoDB response."""
+
+
+def mask_access_key_id(access_key_id: str) -> str:
+    """The first and last four characters of a key id, as the browser edition
+    shows it (``ASIA…WXYZ``); never the secret or the token."""
+    if len(access_key_id) <= 8:
+        return "…"
+    return f"{access_key_id[:4]}…{access_key_id[-4:]}"
+
+
+def _botocore_session(session: Any) -> botocore.session.Session:
+    # A boto3.Session wraps a botocore session as `_session` (boto3's own
+    # clients use it the same way); a botocore session is accepted as is.
+    if session is None:
+        import boto3
+
+        session = boto3.Session()
+    return getattr(session, "_session", session)
+
+
+def resolve_region(session: Any, region: Optional[str] = None) -> str:
+    """The region a connection starts in: ``region``, else the session's
+    (``AWS_DEFAULT_REGION`` or the profile's ``region``), else
+    ``AWS_REGION``, else ``us-east-1``, the ``ddbsh`` command's default."""
+    if region:
+        return region
+    bc = _botocore_session(session)
+    return bc.get_config_variable("region") or os.environ.get("AWS_REGION") or "us-east-1"
+
+
+def _with_scheme(endpoint: str) -> str:
+    # The ddbsh command's AWS SDK for C++ assumes https:// for an endpoint
+    # given without a scheme; do the same.
+    return endpoint if "://" in endpoint else "https://" + endpoint
+
+
+class BotocoreTransport:
+    """Sign each request with SigV4 and POST it with botocore's HTTP session.
+
+    :param session: a ``boto3.Session`` (or a botocore session); the default
+        session when None.
+    :param region: the initial region (see :func:`resolve_region`).
+    :param endpoint_url: an endpoint override, e.g. ``http://localhost:8000``.
+        When None, the endpoint is the one boto3 would use for DynamoDB in
+        the region (``AWS_ENDPOINT_URL_DYNAMODB`` and a profile's
+        ``endpoint_url`` included).
+    :param verify: TLS verification: True, False, or a CA bundle path. When
+        None, the session's ``ca_bundle`` (``AWS_CA_BUNDLE`` or the profile's
+        ``ca_bundle``), else the default trust.
+    :param timeout: the connect and read timeout per request, in seconds.
+    """
+
+    def __init__(
+        self,
+        session: Any = None,
+        region: Optional[str] = None,
+        endpoint_url: Optional[str] = None,
+        verify: Union[bool, str, None] = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
+        self._session = _botocore_session(session)
+        if verify is None:
+            verify = self._session.get_config_variable("ca_bundle") or True
+        self._verify = verify
+        self._timeout = timeout
+        self._user_agent = (
+            f"ddbsh/{_core.version()} (python) botocore/{botocore.__version__}"
+        )
+        self.region = resolve_region(self._session, region)
+        self.endpoint = ""
+        self.endpoint_overridden = False
+        self._http: Optional[URLLib3Session] = None
+        self._retarget(self.region, endpoint_url or "")
+
+    # ---- the transport interface ------------------------------------------
+
+    def send(self, operation: str, body: str) -> str:
+        """POST ``body`` for ``operation``; return the response body."""
+        credentials = self._session.get_credentials()
+        if credentials is None:
+            raise NoCredentialsError()
+        frozen = credentials.get_frozen_credentials()
+        request = AWSRequest(
+            method="POST",
+            url=self.endpoint,
+            data=body.encode("utf-8"),
+            headers={
+                "Content-Type": "application/x-amz-json-1.0",
+                "X-Amz-Target": TARGET_PREFIX + operation,
+                "User-Agent": self._user_agent,
+            },
+        )
+        SigV4Auth(frozen, "dynamodb", self.region).add_auth(request)
+        assert self._http is not None
+        response = self._http.send(request.prepare())
+        text = response.content.decode("utf-8", errors="replace")
+        if response.status_code != 200 and not _is_service_error(text):
+            raise TransportError(
+                f"HTTP {response.status_code} from {self.endpoint} without a DynamoDB error"
+                " document"
+            )
+        return text
+
+    def on_connect(self, region: str, endpoint: str) -> None:
+        """Retarget after ``CONNECT``."""
+        self._retarget(region, endpoint)
+
+    def descriptor(self) -> str:
+        """The ``SHOW CONNECTION`` backend text, e.g.
+        ``wire/botocore 1.35.0 -> https://dynamodb.us-east-1.amazonaws.com
+        (default); credentials ASIA…WXYZ``."""
+        target = self.endpoint if self.endpoint_overridden else f"{self.endpoint} (default)"
+        credentials = self._session.get_credentials()
+        if credentials is None:
+            cred = "credentials none"
+        else:
+            cred = f"credentials {mask_access_key_id(credentials.get_frozen_credentials().access_key)}"
+        return f"wire/botocore {botocore.__version__} -> {target}; {cred}"
+
+    # ---- helpers ----------------------------------------------------------
+
+    def _retarget(self, region: str, endpoint: str) -> None:
+        if endpoint:
+            url = _with_scheme(endpoint)
+            overridden = True
+        else:
+            client = self._session.create_client("dynamodb", region_name=region)
+            url = client.meta.endpoint_url
+            overridden = False
+        self.region = region
+        self.endpoint = url
+        self.endpoint_overridden = overridden
+        if self._http is not None:
+            self._http.close()
+        self._http = URLLib3Session(
+            verify=self._verify,
+            timeout=self._timeout,
+            proxies=get_environ_proxies(url),
+        )
+
+
+def _is_service_error(text: str) -> bool:
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and "__type" in doc

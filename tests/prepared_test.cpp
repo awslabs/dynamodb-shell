@@ -333,9 +333,9 @@ TEST(Prepared, ContainsOperandBindsLikeLiteral) {
         FakeDDBClient lit_client;
         lit_client.set_table(schema);
         Connection lit(SessionConfig{"us-east-1", ""}, lit_client);
-        ASSERT_TRUE(lit.exec(std::string("explain select * from t where contains(l, ") +
-                             c.literal + ");")
-                        .has_value());
+        ASSERT_TRUE(
+            lit.exec(std::string("explain select * from t where contains(l, ") + c.literal + ");")
+                .has_value());
 
         ASSERT_EQ(bound_client.explain_requests().size(), 1u);
         ASSERT_EQ(lit_client.explain_requests().size(), 1u);

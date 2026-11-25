@@ -1,0 +1,76 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The `ddbsh` Python package (P13 T3): `pip install .` from the repo root
+# builds the extension module python/src/bindings.cpp with CMake
+# (scikit-build-core, D-P13-8) and packages python/ddbsh/. The file lives at
+# the repo root, not in python/, because the wheel and the sdist are built
+# from the whole C++ tree (the engine, ddbsh-wire, cli/repl.cpp, the grammar).
+# See docs/PYTHON.md.
+
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "ddbsh"
+dynamic = ["version"]
+description = "ddbsh, the DynamoDB shell, as a Python library: SQL-like statements against Amazon DynamoDB"
+readme = "python/README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "ddbsh contributors" }]
+keywords = ["dynamodb", "aws", "sql", "shell", "dbapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database :: Front-Ends",
+]
+# The one runtime dependency (D-P13-6): credentials, region, endpoint and CA
+# trust come from boto3/botocore, and botocore signs each request (D-P13-5).
+dependencies = ["boto3>=1.26"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://www.ddbsh.org/"
+Source = "https://github.com/awslabs/dynamodb-shell"
+Documentation = "https://github.com/awslabs/dynamodb-shell/blob/main/docs/PYTHON.md"
+Issues = "https://github.com/awslabs/dynamodb-shell/issues"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.21"
+build-dir = "build-python/{wheel_tag}"
+wheel.packages = ["python/ddbsh"]
+# Only the extension module (install component `python`); the engine's own
+# install rules (headers, libraries, the CMake package) stay out of the wheel.
+install.components = ["python"]
+sdist.exclude = [
+    "build*",
+    "discussions",
+    ".github",
+    "web/vendor/aws-sdk/node_modules",
+]
+
+[tool.scikit-build.cmake.define]
+DDBSH_BUILD_PYTHON = "ON"
+DDBSH_BUILD_AWS = "OFF"
+DDBSH_BUILD_TESTS = "OFF"
+BUILD_SHARED_LIBS = "OFF"
+
+# One version: the CMake project version (CMakeLists.txt project(VERSION)).
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = 'project\(ddbsh\s+VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
