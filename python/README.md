@@ -24,7 +24,7 @@ pip install ddbsh
 import ddbsh
 
 conn = ddbsh.connect()                      # the default boto3 session
-print(conn.run("select * from movies where id = 'm1';"))
+print(conn.run('select * from movies where id = "m1";'))
 print(conn.run("select * from movies;", format="json"))
 ```
 
@@ -50,5 +50,10 @@ conn.run("create table t ( id string ) primary key ( id hash );")
 The full guide (connections, credentials, Lambda, the type mapping, errors,
 threads) is
 [docs/PYTHON.md](https://github.com/awslabs/dynamodb-shell/blob/main/docs/PYTHON.md).
+
+Wheels are published for CPython 3.9 to 3.13 on Linux (x86_64 and aarch64,
+glibc 2.28 or later), macOS 13.3 or later (arm64 and x86_64) and Windows x64.
+[`libddbsh`](https://pypi.org/project/libddbsh/) is another name for this
+package.
 
 Licensed under the Apache License 2.0.

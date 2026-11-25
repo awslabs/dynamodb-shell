@@ -123,8 +123,9 @@ runs, against real DynamoDB:
   (retries, transport failures, `CONNECT`), every `isel-*` EXPLAIN golden on
   `isel1` compared byte for byte, and the botocore transport's signing with a
   stubbed HTTP session;
-- the live pytest suite, `python/livetests`, on the tables `ddbsh_py_live` and
-  `ddbsh_py_live_x` (the second through the `cross-acct` profile);
+- the live pytest suite, `python/livetests`, on the table `ddbsh_py_live` and,
+  through the `cross-acct` profile, the cross-account family's
+  `ddbsh_test_table_1`;
 - the **whole golden suite** through `python -m ddbsh`, a CLI-shaped front end
   over `Connection.run_result`, diffed against the same `.exp` files as the
   native CLI. The only expectation that differs is the `ishow-connection`
@@ -134,6 +135,11 @@ It needs a Python 3.9 or later with its C headers (`DDBSH_PYTHON`, default
 `python3`; on Amazon Linux install `python3.11-devel`), and network access to
 PyPI for the build requirements. Credentials come from the standard AWS chain,
 as for the native suite. Artifacts: `discussions/test-python-<hash>.{log,txt}`.
+
+In CI, `python.yml` runs the offline suite against every wheel it builds (25
+wheels on five platforms), and the `real-dynamodb` job of `test.yml` runs the
+live suite after the golden suite ([CI](CI.md#the-python-packages)). The
+golden suite through `python -m ddbsh` runs only here.
 
 The native, web and Python golden suites create and drop the same
 `ddbsh_test_*` tables, so they must not run at the same time. Each takes a

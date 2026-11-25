@@ -32,6 +32,24 @@ pip install ddbsh
 
 The package needs Python 3.9 or later. Its one dependency is `boto3`.
 
+Wheels are published for CPython 3.9 to 3.13 on:
+
+| Platform | Wheel tag | Needs |
+|---|---|---|
+| Linux x86_64 | `manylinux_2_28_x86_64` | glibc 2.28 or later |
+| Linux aarch64 | `manylinux_2_28_aarch64` | glibc 2.28 or later |
+| macOS Apple silicon | `macosx_13_0_arm64` | macOS 13.3 or later |
+| macOS Intel | `macosx_13_0_x86_64` | macOS 13.3 or later |
+| Windows x64 | `win_amd64` | |
+
+Elsewhere (another Python, musl-based Linux such as Alpine, an older glibc),
+pip builds the package from its source distribution, which needs the
+[build toolchain](#building-from-source).
+
+`libddbsh` is another name for the same package: `pip install libddbsh`
+installs `ddbsh` at the same version, and `import libddbsh` gives the same
+objects as `import ddbsh`. New code should use `ddbsh`.
+
 ## Connect
 
 ```python
@@ -230,8 +248,13 @@ into its own connection gets a `ProgrammingError` instead of a deadlock.
 ## AWS Lambda
 
 The package is a regular wheel, so it goes in a Lambda deployment package or
-layer like any other dependency (build it for the function's architecture and
-Python version). `connect()` picks up the execution role and `AWS_REGION` from
+layer like any other dependency; install the wheel for the function's
+architecture and Python version, for example
+`pip install ddbsh --target package --platform manylinux_2_28_x86_64 --python-version 3.12 --only-binary=:all:`.
+The wheels need glibc 2.28, which the Lambda runtimes on Amazon Linux 2023
+have (python3.12 and later). The runtimes on Amazon Linux 2 (python3.9 to
+python3.11) have glibc 2.26 and cannot load them; use python3.12 or later, or
+a container image. `connect()` picks up the execution role and `AWS_REGION` from
 the Lambda environment. Open the connection outside the handler so warm
 invocations reuse it:
 

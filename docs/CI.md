@@ -6,7 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # Continuous integration
 
 This note is for maintainers. It covers the GitHub workflows, the AWS accounts
-they use, and the publish of the project's site, <https://www.ddbsh.org/>.
+they use, the publish of the project's site, <https://www.ddbsh.org/>, and the
+publish of the Python packages to PyPI.
 [TESTING](TESTING.md) describes the suites themselves.
 
 ## Contents
@@ -17,6 +18,7 @@ they use, and the publish of the project's site, <https://www.ddbsh.org/>.
 - [The golden suite in CI](#the-golden-suite-in-ci)
 - [Pull requests from forks](#pull-requests-from-forks)
 - [The site publish](#the-site-publish)
+- [The Python packages](#the-python-packages)
 - [Releasing a version](#releasing-a-version)
 - [Updating the pins](#updating-the-pins)
 - [Rules for workflow changes](#rules-for-workflow-changes)
@@ -25,10 +27,12 @@ they use, and the publish of the project's site, <https://www.ddbsh.org/>.
 
 | Workflow | When | Jobs | AWS |
 |---|---|---|---|
-| `test.yml` | every pull request, every push to `main`, on demand | `aws-sdk` builds and caches the pinned AWS SDK for C++; `native` runs the native unit tests; `sanitize` runs them under ASan, UBSan and LSan; `format` checks clang-format 15; `real-dynamodb` runs the golden suite (or, for a pull request from a fork, `real-dynamodb-fork-notice`) | `real-dynamodb` only, environment `ci` |
+| `test.yml` | every pull request, every push to `main`, on demand | `aws-sdk` builds and caches the pinned AWS SDK for C++; `native` runs the native unit tests; `sanitize` runs them under ASan, UBSan and LSan; `format` checks clang-format 15; `real-dynamodb` runs the golden suite and the live Python tests (or, for a pull request from a fork, `real-dynamodb-fork-notice`) | `real-dynamodb` only, environment `ci` |
 | `build.yml` | every pull request, a created release, on demand | `build-linux` builds the release binary; `build-wasm` builds, packages and checks the browser bundle | none |
 | `web-bundle.yml` | called by `build.yml` and `publish-site.yml` | builds the browser bundle, runs the offline web gates and uploads the artifact `ddbsh-web-bundle` | none |
 | `publish-site.yml` | every tag `vMAJOR.MINOR.PATCH`, on demand on a tag | `bundle` (the reusable workflow), then `publish` | `publish` only, environment `site` |
+| `python.yml` | every pull request, every push to `main`, on demand; called by `pypi.yml` | `sdist` builds the source distribution and a wheel from it; `wheels` builds and tests the wheels with cibuildwheel on five platforms; `alias` builds and tests `libddbsh` | none |
+| `pypi.yml` | every tag `vMAJOR.MINOR.PATCH` (PyPI), on demand (TestPyPI) | `build` (the reusable `python.yml`), `check`, then `pypi` or `testpypi` | none; the publish jobs sign in to the package index, environments `pypi` and `testpypi` |
 | `homebrew.yml` | a created release, on demand | updates the `aws/homebrew-tap` formula | none |
 
 The real-DynamoDB job waits for the `native` and `format` jobs, so a pull
@@ -58,6 +62,13 @@ accounts, so a local run and a CI run never delete each other's tables.
 |---|---|---|
 | `ci` | none, so pull requests, `main` and manual runs can use it | `CI_ROLE_ARN` (`arn:aws:iam::291751120739:role/ddbsh-ci-tests`), `CI_CROSS_ROLE_ARN` (`arn:aws:iam::457765142880:role/ddbsh-ci-cross`), `CI_REGION` (`us-east-1`) |
 | `site` | deployments only from tags matching `v[0-9]*`; no reviewers and no wait timer | `AWS_ROLE_ARN` (the publisher role), `SITE_BUCKET`, `SITE_DISTRIBUTION_ID`, `SITE_REGION` |
+| `pypi` | deployments only from tags matching `v[0-9]*`; no reviewers and no wait timer | none |
+| `testpypi` | deployments from the branches `main` and `dev/*` and from tags matching `v[0-9]*`; no reviewers and no wait timer | none |
+
+The maintainer creates `pypi` and `testpypi` with
+`devtools/github/setup-pypi-environment.sh` in the orchestration repository
+(`--check` only reads). PyPI and TestPyPI accept an upload from them through
+the projects' trusted publishers (see [The Python packages](#the-python-packages)).
 
 The workflows also fix the accounts themselves: the credentials step accepts
 only 291751120739 in `test.yml` and only 321345175056 in `publish-site.yml`,
@@ -70,8 +81,8 @@ reviewed change to the workflow.
 The `real-dynamodb` job:
 
 1. Builds `ddbsh` and configures the golden suite with
-   `devtools/run-tests --build-only`, before any credential exists on the
-   runner.
+   `devtools/run-tests --build-only`, and builds the Python package, before
+   any credential exists on the runner.
 2. Signs in as `ddbsh-ci-tests` with `aws-actions/configure-aws-credentials`,
    which writes the session to the `[default]` profile in `~/.aws`
    (`aws-profile: default`) and exports no `AWS_*` variable.
@@ -87,7 +98,12 @@ The `real-dynamodb` job:
      role in DynamoDB's access-denied message for a table the role may not
      read.
 5. Runs the golden suite with `devtools/run-tests` (90 minutes at most).
-6. Runs the cleanup tests afterwards (`ctest -R '^test-cleanup'`: the
+6. Runs the live Python tests (`python/livetests`) with the Python package it
+   built in step 1, through the same two profiles, whenever the target check
+   passed. They create and drop `ddbsh_py_live` in the main account and the
+   cross-account family's `ddbsh_test_table_1` in the cross account. The log
+   is `discussions/test-cipython-<hash>.log`.
+7. Runs the cleanup tests afterwards (`ctest -R '^test-cleanup'`: the
    `test-cleanup` and `test-cleanup-last` families) whenever the target check
    passed, even after a failure or a cancellation. They drop the suite's fixed
    tables in both accounts. A failed target check skips them, because the
@@ -96,7 +112,7 @@ The `real-dynamodb` job:
    `test-cleanup-last` waits up to 15 minutes for `icdwarmthroughput0`'s index
    to finish before it drops that table. A wait that runs out, or a refused
    drop, fails the step. The step's 20-minute limit leaves room for the wait.
-7. Uploads `discussions/test-*` as the artifact `real-dynamodb-<run>-<attempt>`
+8. Uploads `discussions/test-*` as the artifact `real-dynamodb-<run>-<attempt>`
    (kept 14 days) and adds the run's summary to the job summary. On a pull
    request, the checkout is GitHub's merge of the branch into `main`, so the
    file names carry that merge commit's short hash, not the branch head's.
@@ -252,12 +268,65 @@ next patch version. The workflow has no way to publish an older version. The
 by-hand procedure in [HOSTING](HOSTING.md#publish-a-new-version) still works
 for anyone with the deployer policy.
 
+## The Python packages
+
+`python.yml` builds every Python package on each pull request, without
+publishing anything:
+
+- `sdist`: the `ddbsh` source distribution, then a wheel built from it in a
+  fresh virtual environment outside the checkout, and a query on an in-memory
+  connection. A source file the sdist leaves out fails here.
+- `wheels`: [cibuildwheel](https://cibuildwheel.pypa.io/), configured in
+  `pyproject.toml` (`[tool.cibuildwheel]`), builds CPython 3.9 to 3.13 wheels
+  on five runners: Linux x86_64 and aarch64 (in the `manylinux_2_28`
+  container), macOS arm64 and x86_64, and Windows AMD64. Each wheel runs the
+  offline pytest suite, `python/tests`. The Linux container's bison is too
+  old for the grammar, so `python/ci/before-all-linux.sh` builds bison 3.8.2
+  from its release tarball, checked against a pinned SHA-256; macOS uses
+  Homebrew's bison and Windows `winflexbison3` from Chocolatey.
+- `alias`: builds `libddbsh` (`python/alias`) and tests it with the Linux
+  x86_64 `ddbsh` wheel.
+
+`pypi.yml` publishes them. Its `check` job runs before any upload and stops
+the publish unless:
+
+- on a tag, the tag is `v<version>`, where the version is the CMake project
+  version in `CMakeLists.txt`, and the tag's commit is on `main`;
+- the files are exactly the 25 wheels (five platforms, five Python versions),
+  the `ddbsh` sdist, and the `libddbsh` wheel and sdist, all of that version.
+  (`python/alias/pyproject.toml` writes its version and its `ddbsh==` pin out;
+  `python/tests/test_alias.py`, which every wheel job runs, checks that both
+  equal the CMake version);
+- `twine check --strict` accepts them.
+
+The publish job then uploads `ddbsh`, and after it `libddbsh`, which depends on
+it. A file the index already has is skipped, so **Re-run failed jobs** repeats
+a publish that failed half way. PyPI never accepts a file name twice, so a
+version cannot be replaced; fix forward with the next patch version.
+
+- **A tag** `vMAJOR.MINOR.PATCH` publishes to PyPI, in the environment `pypi`.
+- **Run workflow** publishes to TestPyPI, in the environment `testpypi`, from
+  `main`, a `dev/*` branch or a tag. Use it to try a publish before a release;
+  TestPyPI also keeps a version once uploaded, so a second run of one version
+  uploads nothing.
+
+The uploads use [trusted publishing](https://docs.pypi.org/trusted-publishers/):
+the job's OpenID Connect token is exchanged for a short-lived upload token, and
+no PyPI token is stored on GitHub. Each project on each index needs a trusted
+publisher with owner `awslabs`, repository `dynamodb-shell`, workflow
+`pypi.yml`, and environment `pypi` (on pypi.org) or `testpypi` (on
+test.pypi.org). Before a project's first upload this is a *pending* publisher,
+added under the account's **Publishing** page; a pending publisher does not
+reserve the name, and the first upload creates the project.
+`devtools/github/setup-pypi-environment.sh --check` prints the values and
+whether each project exists yet.
+
 ## Releasing a version
 
 1. Merge the pull request on GitHub.
 2. Tag the merge commit `vMAJOR.MINOR.PATCH` and push the tag. This runs the
-   site publish.
-3. When the publish is green, create the GitHub Release from the tag. Creating
+   site publish and the PyPI publish.
+3. When both publishes are green, create the GitHub Release from the tag. Creating
    a Release runs `build.yml` and `homebrew.yml`, which updates the
    `aws/homebrew-tap` formula, so create it deliberately and last.
 
@@ -268,6 +337,9 @@ for anyone with the deployer policy.
   release's commit (for an annotated tag, the commit it points to), replace
   the SHA and the comment in every workflow that uses the action, and run
   [actionlint](https://github.com/rhysd/actionlint) on the workflows.
+- **cibuildwheel** is an action pin like the others; the Python versions and
+  the manylinux image are in `pyproject.toml`. **bison** for the Linux wheels
+  is pinned by version and SHA-256 in `python/ci/before-all-linux.sh`.
 - **The AWS SDK for C++** is pinned in `test.yml` by `AWS_SDK_CPP_VERSION` and
   `AWS_SDK_CPP_COMMIT`; change both together. The `aws-sdk` job refuses a tag
   whose commit differs. The cache key contains the version, the runner image
@@ -285,8 +357,9 @@ for anyone with the deployer policy.
 ## Rules for workflow changes
 
 - Every workflow starts with `permissions: {}`, and each job asks only for
-  what it needs: `contents: read`, plus `id-token: write` for the two jobs
-  that sign in to AWS.
+  what it needs: `contents: read`, plus `id-token: write` for the jobs that
+  sign in to AWS (`real-dynamodb`, the site's `publish`) and the two PyPI
+  publish jobs, which have no other permission.
 - `actions/checkout` runs with `persist-credentials: false`.
 - Pull requests trigger workflows through `pull_request`, never
   `pull_request_target`, which would run a fork's code with this repository's
