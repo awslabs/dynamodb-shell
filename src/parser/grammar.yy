@@ -2008,7 +2008,11 @@ logical_expression_element:
  * literal, so `contains(list, NULL)`, `contains(numberset, 5)` and
  * `contains(list, TRUE)` parse. The string alternative is unchanged, so every
  * statement that parsed before renders byte-identically. List and map
- * literals stay out. DynamoDB validates the operand type against the path. */
+ * literals stay out. DynamoDB validates the operand type against the path.
+ * The `?` arm (D-P13-13) is a prepared-statement parameter marker, as in
+ * lee_rhs, so an embedder (the Python DB-API's Cursor.execute) can bind the
+ * operand. A `?` reaching execution unbound is the usual unbound_parameter
+ * error. */
 contains_operand:
       string                    { $$ = ddbsh::Value::string_value(std::move($1)); }
     | T_WHOLE_NUMBER            { $$ = ddbsh::Value::number_value(std::move($1)); }
@@ -2016,6 +2020,7 @@ contains_operand:
     | K_TRUE                    { $$ = ddbsh::Value::bool_value(true); }
     | K_FALSE                   { $$ = ddbsh::Value::bool_value(false); }
     | K_NULL                    { $$ = ddbsh::Value::null_value(); }
+    | '?'                       { $$ = ddbsh::Value::param_marker(drv.next_param_ordinal()); }
     ;
 
 /* lee_lhs is an attribute path: a bare name, a `[subscript]` index, or a dotted

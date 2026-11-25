@@ -302,6 +302,67 @@ TEST(Prepared, PreparedTransactionWithMarkers) {
     EXPECT_EQ(rows->size(), 2u);
 }
 
+// D-P13-13: `?` is a CONTAINS operand. Binding NULL, a number, a bool and a
+// string builds the same Scan request as the literal operand.
+TEST(Prepared, ContainsOperandBindsLikeLiteral) {
+    ddbsh::DescribeTableOut schema;
+    schema.table_name = "t";
+    schema.key_schema = ddbsh::test::make_key_schema("id");
+
+    struct Case {
+        Value bound;
+        const char* literal;
+    };
+    const Case cases[] = {
+        {Value::null_value(), "NULL"},
+        {Value::number_value("5"), "5"},
+        {Value::bool_value(true), "TRUE"},
+        {Value::string_value("x y"), "\"x y\""},
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.literal);
+        FakeDDBClient bound_client;
+        bound_client.set_table(schema);
+        Connection bound(SessionConfig{"us-east-1", ""}, bound_client);
+        auto prep = bound.prepare("explain select * from t where contains(l, ?);");
+        ASSERT_TRUE(prep.has_value());
+        EXPECT_EQ(prep->parameter_count(), 1);
+        prep->bind(1, c.bound);
+        ASSERT_TRUE(bound.exec(*prep).has_value());
+
+        FakeDDBClient lit_client;
+        lit_client.set_table(schema);
+        Connection lit(SessionConfig{"us-east-1", ""}, lit_client);
+        ASSERT_TRUE(lit.exec(std::string("explain select * from t where contains(l, ") +
+                             c.literal + ");")
+                        .has_value());
+
+        ASSERT_EQ(bound_client.explain_requests().size(), 1u);
+        ASSERT_EQ(lit_client.explain_requests().size(), 1u);
+        const auto* bs = std::get_if<ddbsh::ScanIn>(&bound_client.explain_requests()[0]);
+        const auto* ls = std::get_if<ddbsh::ScanIn>(&lit_client.explain_requests()[0]);
+        ASSERT_NE(bs, nullptr);
+        ASSERT_NE(ls, nullptr);
+        EXPECT_EQ(bs->filter_expression, ls->filter_expression);
+        EXPECT_TRUE(same_vmap(bs->expression_attribute_values, ls->expression_attribute_values));
+    }
+}
+
+// A `?` CONTAINS operand on the unprepared path is unbound, not a syntax error.
+TEST(Prepared, ContainsOperandUnboundOnExec) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    ASSERT_TRUE(db.exec("create table t ( id string ) primary key ( id hash );").has_value());
+    auto r = db.exec("select * from t where contains(l, ?);");
+    if (r.has_value()) {
+        r->render_all();
+        ASSERT_TRUE(r->error().has_value());
+        EXPECT_EQ(r->error()->code, ddbsh::Errc::unbound_parameter);
+    } else {
+        EXPECT_EQ(r.error().code, ddbsh::Errc::unbound_parameter);
+    }
+}
+
 TEST(Prepared, ParseErrorAtPrepare) {
     MemoryClient client;
     Connection db(SessionConfig{"us-east-1", ""}, client);
