@@ -303,8 +303,8 @@ the publish unless:
 - `twine check --strict` accepts them.
 
 On each index, one job uploads `ddbsh`, and a second job, which waits for the
-first, uploads `libddbsh`, which depends on it. A file the index already has is skipped, so **Re-run failed jobs** repeats
-a publish that failed half way. PyPI never accepts a file name twice, so a
+first, uploads `libddbsh`, which depends on it. A file the index already has
+is skipped, so **Re-run failed jobs** repeats a publish that failed half way. PyPI never accepts a file name twice, so a
 version cannot be replaced; fix forward with the next patch version.
 
 - **A tag** `vMAJOR.MINOR.PATCH` publishes to PyPI, in the environments `pypi`
