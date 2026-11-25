@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.12.5
+        VERSION 0.12.6
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -65,6 +65,17 @@ option(DDBSH_BUILD_AWS "Build the optional AWS-backed client component and the C
 # web/CMakeLists.txt FATAL_ERRORs on a non-Emscripten configure so a
 # misinvocation fails fast. See web/README.md.
 option(DDBSH_BUILD_WEB "Build the Emscripten/WASM web target" OFF)
+
+# The Python extension module `ddbsh._core` (P13 T3, python/). OFF by default;
+# the repo-root pyproject.toml turns it ON for scikit-build-core (with
+# DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_TESTS=OFF, BUILD_SHARED_LIBS=OFF), so
+# `pip install .` builds the wheel. It needs Python >= 3.9 and nanobind at
+# configure time. Every static library the module links must be
+# position-independent, so the option turns that on for the whole build.
+option(DDBSH_BUILD_PYTHON "Build the Python extension module (ddbsh._core)" OFF)
+if(DDBSH_BUILD_PYTHON)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 # Warnings-as-errors, narrowly scoped to our own targets (not third-party).
 add_library(ddbsh_warnings INTERFACE)
@@ -296,6 +307,13 @@ endif()
 # wasm-release preset sets exactly that). See web/CMakeLists.txt.
 if(DDBSH_BUILD_WEB)
     add_subdirectory(web)
+endif()
+
+# --- Python extension module (P13 T3) ----------------------------------------
+# The SDK-free engine + ddbsh-wire + cli-core behind nanobind, driven by a
+# Python transport (botocore SigV4 + raw HTTP). See python/CMakeLists.txt.
+if(DDBSH_BUILD_PYTHON)
+    add_subdirectory(python)
 endif()
 
 # --- tests -------------------------------------------------------------------

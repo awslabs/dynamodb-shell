@@ -9,7 +9,7 @@ ddbsh presents the user with a simple command line interface. Here the user can 
 It is also an embeddable **C++23 library** with an SDK-free, terminal-free engine
 (lexer, parser, command model, expression engine, SQL→API planner, execution,
 and output/EXPLAIN formatting), a thin `ddbsh` command that wraps it, and a
-browser/WebAssembly build with a web UI. Current version: **0.12.5**. The engine
+browser/WebAssembly build with a web UI. Current version: **0.12.6**. The engine
 drives the full standard `ddbsh` command surface, including global tables, end
 to end against real DynamoDB.
 
@@ -45,7 +45,7 @@ Or start the interactive shell and type SQL-like statements terminated by `;`:
 
 ```
 $ ddbsh
-ddbsh - version 0.12.5
+ddbsh - version 0.12.6
 us-east-1> show tables;
 ```
 
@@ -96,6 +96,9 @@ another host), see [docs/HOSTING.md](docs/HOSTING.md).
   direction.
 - **[Embedding the library](docs/EMBEDDING.md)** — the `Connection`/`Database`
   API, `ddbsh::aws::open`, the offline `MemoryClient`, and `find_package(ddbsh)`.
+- **[Python](docs/PYTHON.md)** — the `ddbsh` Python package: `Connection.run`
+  for the command's exact text, a DB-API 2.0 cursor with `?` parameters, and
+  credentials from boto3 (AWS Lambda included).
 - **[Running ddbsh: configurations](docs/configurations/README.md)** — the three
   run configurations, one page each.
 - **[Hosting the browser edition](docs/HOSTING.md)** — publish the page on its

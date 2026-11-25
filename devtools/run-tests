@@ -42,6 +42,10 @@
 #                                          # browser edition (devtools/run-web-golden)
 #   devtools/run-tests --web-smoke         # the browser edition's quick gates
 #                                          # (devtools/run-web-smoke)
+#   devtools/run-tests --python            # the Python package's gates: offline
+#                                          # and live pytest, and the golden
+#                                          # suite through `python -m ddbsh`
+#                                          # (devtools/run-python-golden)
 #   devtools/run-tests --live-sample       # also build + run the live embedding
 #                                          # tests (opt-in; creates a real table)
 #   devtools/run-tests --build-only        # build build-engine/ddbsh and
@@ -115,6 +119,12 @@ WEB_GOLDEN=0
 # devtools/run-web-smoke. Takes no further args. Its artifact is
 # discussions/test-websmoke-<hash>.log.
 WEB_SMOKE=0
+# --python: run the Python package's gates instead (P13 T3): build the wheel
+# into a virtualenv, run the offline and live pytest suites, and the whole
+# golden suite through `python -m ddbsh`, via devtools/run-python-golden.
+# Remaining args go to ctest. Its artifacts are
+# discussions/test-python-<hash>.{log,txt}.
+PYTHON_GATE=0
 # --build-only (D-P11-28): build the CLI and configure the golden project, then
 # stop before the target echo. Takes no further args.
 BUILD_ONLY=0
@@ -139,6 +149,10 @@ while [ $# -gt 0 ]; do
             ;;
         --web-smoke)
             WEB_SMOKE=1
+            shift
+            ;;
+        --python)
+            PYTHON_GATE=1
             shift
             ;;
         --build-only)
@@ -168,15 +182,19 @@ fi
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
     if [ "${#CTEST_ARGS[@]}" -gt 0 ] || [ -n "$SUITE" ] || [ "$FULL_ENGINE" -eq 1 ] ||
-       [ "$LIVE_SAMPLE" -eq 1 ] || [ "$WEB_GOLDEN" -eq 1 ] || [ "$WEB_SMOKE" -eq 1 ]; then
+       [ "$LIVE_SAMPLE" -eq 1 ] || [ "$WEB_GOLDEN" -eq 1 ] || [ "$WEB_SMOKE" -eq 1 ] ||
+       [ "$PYTHON_GATE" -eq 1 ]; then
         echo "error: --build-only takes no further arguments." >&2
         exit 2
     fi
 fi
 
-if [ "$WEB_GOLDEN" -eq 1 ] && [ "$WEB_SMOKE" -eq 1 ]; then
-    echo "error: --web-golden and --web-smoke are separate runs; pass one." >&2
+if [ $((WEB_GOLDEN + WEB_SMOKE + PYTHON_GATE)) -gt 1 ]; then
+    echo "error: --web-golden, --web-smoke and --python are separate runs; pass one." >&2
     exit 2
+fi
+if [ "$PYTHON_GATE" -eq 1 ]; then
+    exec "$REPO_DIR/devtools/run-python-golden" ${CTEST_ARGS[@]+"${CTEST_ARGS[@]}"}
 fi
 if [ "$WEB_SMOKE" -eq 1 ]; then
     if [ "${#CTEST_ARGS[@]}" -gt 0 ]; then

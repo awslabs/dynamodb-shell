@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# devtools/run-python-golden — the Python package's gates (P13 T3).
+#
+# Builds the `ddbsh` Python package from this tree, then runs, against REAL
+# DynamoDB:
+#   1. the offline pytest suite (python/tests: the in-memory connection, a
+#      fake transport, EXPLAIN parity with the select goldens, the botocore
+#      transport's signing);
+#   2. the live pytest suite (python/livetests: the DB-API cursor, the type
+#      mapping, a transaction and a cross-account profile on real tables);
+#   3. the WHOLE golden suite (tests/golden, every family) through the Python
+#      edition — the engine and ddbsh-wire in the extension module, botocore
+#      signing and sending — driven by `python -m ddbsh`, diffed against the
+#      same .exp files the native CLI is held to. The golden runner is
+#      unchanged; only DDBSH_SHELL_BIN differs.
+#
+# The one golden whose expectation is backend-specific, ishow-connection (the
+# SHOW CONNECTION Backend line), is configured with the Python edition's
+# descriptor pattern via DDBSH_GOLDEN_BACKEND_REGEX.
+#
+# Credentials, region and profiles come from the standard AWS chain, as for
+# the native suite (the cross-account family uses the `cross-acct` profile).
+#
+# Artifacts (discussions/, named by HEAD short hash; the orchestration repo's
+# devtools/run-tests copies them back):
+#   test-python-<hash>.log   build + pytest + full ctest output
+#   test-python-<hash>.txt   target echo + counts
+#
+# Usage:
+#   devtools/run-python-golden [ctest args, e.g. -R isel]
+#   devtools/run-tests --python [ctest args]          (same, via the gate entry)
+#
+# Env:
+#   DDBSH_PYTHON        the interpreter to build with (default python3); it needs
+#                       its C headers (python3-devel) and Python >= 3.9.
+#   DDBSH_PYTHON_VENV   the virtualenv to build into (default build-python/venv-gate)
+#   DDBSH_PYTHON_GOLDEN_BUILD_DIR  the golden ctest build dir (default build-golden-python)
+#   AWS_REGION          default us-east-1
+#
+# Must not run concurrently with devtools/run-tests or devtools/run-web-golden
+# (shared lock): every suite creates and drops the same ddbsh_test_* tables.
+#
+# WARNING: this talks to a real AWS account. create/insert/update/delete/drop
+# operate on real tables and data, incur real cost, and are irreversible. Use a
+# dedicated test account/region.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=devtools/lib-web.sh
+. "$REPO_DIR/devtools/lib-web.sh"
+
+HASH="$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DISCUSSIONS_DIR="$REPO_DIR/discussions"
+mkdir -p "$DISCUSSIONS_DIR"
+LOG_FILE="$DISCUSSIONS_DIR/test-python-${HASH}.log"
+SUMMARY_FILE="$DISCUSSIONS_DIR/test-python-${HASH}.txt"
+GOLDEN_BUILD="${DDBSH_PYTHON_GOLDEN_BUILD_DIR:-$REPO_DIR/build-golden-python}"
+VENV="${DDBSH_PYTHON_VENV:-$REPO_DIR/build-python/venv-gate}"
+PYTHON="${DDBSH_PYTHON:-python3}"
+
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+# Both: botocore reads AWS_DEFAULT_REGION, the native CLI AWS_REGION. Setting
+# both keeps a profile's own `region` from moving the Python edition elsewhere.
+export AWS_REGION="$REGION"
+export AWS_DEFAULT_REGION="$REGION"
+export AWS_STS_REGIONAL_ENDPOINTS="${AWS_STS_REGIONAL_ENDPOINTS:-regional}"
+
+web_golden_lock "$REPO_DIR"
+
+# The native CLI executes ~/.ddbsh_config at startup; `python -m ddbsh` never
+# does, so a config file would make the suites differ.
+if [ -n "${DDBSH_CONFIG_FILE:-}" ] || [ -e "$HOME/.ddbsh_config" ]; then
+    echo "error: DDBSH_CONFIG_FILE is set or ~/.ddbsh_config exists; the golden suites assume no config file." >&2
+    exit 1
+fi
+if [ -n "${DDBSH_ENDPOINT_OVERRIDE:-}" ]; then
+    echo "error: DDBSH_ENDPOINT_OVERRIDE is set; the Python golden gate targets real DynamoDB only." >&2
+    exit 1
+fi
+
+# --- 1. build the package ------------------------------------------------------
+{
+    echo "=== Python gate: build ($HASH) ==="
+    echo "  interpreter: $("$PYTHON" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+} | tee "$LOG_FILE"
+if [ ! -x "$VENV/bin/python" ]; then
+    "$PYTHON" -m venv "$VENV" 2>&1 | tee -a "$LOG_FILE"
+fi
+PY="$VENV/bin/python"
+set +e
+{
+    "$PY" -m pip install --quiet --upgrade pip &&
+    "$PY" -m pip install --quiet "scikit-build-core>=0.10" "nanobind>=2.0" "boto3>=1.26" "pytest>=7" &&
+    CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc 2>/dev/null || echo 4)}" \
+        "$PY" -m pip install --no-build-isolation --force-reinstall --no-deps "$REPO_DIR"
+} 2>&1 | tee -a "$LOG_FILE"
+RC_BUILD=${PIPESTATUS[0]}
+set -e
+if [ "$RC_BUILD" -ne 0 ]; then
+    echo "error: building the Python package failed (see $LOG_FILE)." | tee -a "$LOG_FILE" >&2
+    exit 1
+fi
+echo "  package: ddbsh $("$PY" -c 'import ddbsh; print(ddbsh.__version__)'), boto3 $("$PY" -c 'import boto3; print(boto3.__version__)'), botocore $("$PY" -c 'import botocore; print(botocore.__version__)')" | tee -a "$LOG_FILE"
+
+# Run pytest from outside the tree so `import ddbsh` is the installed package,
+# not python/ddbsh without its extension module.
+PYTEST_CWD="$(mktemp -d)"
+trap 'rm -rf "$PYTEST_CWD"' EXIT
+
+# --- 2. offline pytest ---------------------------------------------------------
+echo "=== Offline pytest (python/tests) ===" | tee -a "$LOG_FILE"
+set +e
+(cd "$PYTEST_CWD" && "$PY" -m pytest -p no:cacheprovider -q "$REPO_DIR/python/tests") 2>&1 | tee "$PYTEST_CWD/offline.log"
+RC_OFFLINE=${PIPESTATUS[0]}
+set -e
+cat "$PYTEST_CWD/offline.log" >>"$LOG_FILE"
+
+# --- 3. target echo + verification ---------------------------------------------
+"$PY" - "$REGION" >"$PYTEST_CWD/target.txt" 2>&1 <<'EOF' || true
+import sys
+import boto3
+region = sys.argv[1]
+for profile in ("default", "cross-acct"):
+    try:
+        session = boto3.Session(profile_name=None if profile == "default" else profile)
+        creds = session.get_credentials()
+        key = creds.get_frozen_credentials().access_key if creds else "(none)"
+        arn = session.client("sts", region_name=region).get_caller_identity()["Arn"]
+        endpoint = session.client("dynamodb", region_name=region).meta.endpoint_url
+    except Exception as e:  # reported, then refused below
+        key, arn = "(unresolved)", f"(sts unavailable: {type(e).__name__})"
+        endpoint = "(unresolved)"
+    print(f"  profile {profile}:")
+    print(f"    endpoint:      {endpoint}")
+    print(f"    access key id: {key}")
+    print(f"    caller arn:    {arn}")
+EOF
+{
+    echo "ddbsh Python gate (python -m ddbsh: the engine + ddbsh-wire, botocore SigV4)"
+    echo "  commit:        $HASH"
+    echo "  suite:         python"
+    echo "  timestamp:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "  region:        $REGION"
+    echo "  package:       ddbsh $("$PY" -c 'import ddbsh; print(ddbsh.__version__)') (botocore $("$PY" -c 'import botocore; print(botocore.__version__)'), $("$PY" -c 'import sys; print("CPython", sys.version.split()[0])'))"
+    cat "$PYTEST_CWD/target.txt"
+} | tee "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+if grep -q "sts unavailable\|(unresolved)\|(none)" "$PYTEST_CWD/target.txt"; then
+    echo "error: a profile's credentials could not be resolved and verified with sts get-caller-identity." | tee -a "$SUMMARY_FILE" >&2
+    exit 1
+fi
+if ! grep -q "endpoint:      https://dynamodb\.$REGION\.amazonaws\.com" "$PYTEST_CWD/target.txt"; then
+    echo "error: the DynamoDB endpoint is not the real service endpoint for $REGION." | tee -a "$SUMMARY_FILE" >&2
+    exit 1
+fi
+
+# --- 4. live pytest ------------------------------------------------------------
+echo "=== Live pytest (python/livetests, real DynamoDB) ===" | tee -a "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+set +e
+(cd "$PYTEST_CWD" && "$PY" -m pytest -p no:cacheprovider -q "$REPO_DIR/python/livetests") 2>&1 | tee "$PYTEST_CWD/live.log"
+RC_LIVE=${PIPESTATUS[0]}
+set -e
+cat "$PYTEST_CWD/live.log" >>"$LOG_FILE"
+
+# --- 5. golden suite through the Python edition ---------------------------------
+SHELL_WRAPPER="$PYTEST_CWD/ddbsh-python"
+# -I (isolated): the current directory is not on sys.path, so `import ddbsh`
+# is the installed package wherever the runner starts it.
+cat >"$SHELL_WRAPPER" <<EOF
+#!/usr/bin/env bash
+exec "$PY" -I -m ddbsh "\$@"
+EOF
+chmod 700 "$SHELL_WRAPPER"
+
+echo "=== Configuring golden project (shell = Python edition) ===" | tee -a "$LOG_FILE"
+cmake -S "$REPO_DIR/tests/golden" -B "$GOLDEN_BUILD" \
+    -DDDBSH_SHELL_BIN="$SHELL_WRAPPER" \
+    -DDDBSH_SDK_LIB="" \
+    -DGOLDEN_DIR="$REPO_DIR/tests/golden" \
+    "-DDDBSH_GOLDEN_BACKEND_REGEX=Backend: wire/botocore [0-9.]+ -> https://dynamodb[.][a-z0-9-]+[.]amazonaws[.]com [(]default[)]; credentials [A-Z0-9]{4}…[A-Z0-9]{4}" \
+    2>&1 | tee -a "$LOG_FILE"
+
+echo "=== Running golden families through the Python edition ===" | tee -a "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+CTEST_LOG="$PYTEST_CWD/ctest.log"
+set +e
+ctest --test-dir "$GOLDEN_BUILD" --output-on-failure "$@" 2>&1 | tee "$CTEST_LOG"
+RC_GOLDEN=${PIPESTATUS[0]}
+set -e
+cat "$CTEST_LOG" >>"$LOG_FILE"
+
+counts() {  # <pytest log> -> "P passed, F failed"
+    grep -E "[0-9]+ (passed|failed)" "$1" | tail -1 || echo "(no summary)"
+}
+line="$(grep -E "tests passed|tests failed" "$CTEST_LOG" | tail -1 || true)"
+total="$(grep -oE "out of [0-9]+" <<<"$line" | grep -oE "[0-9]+" || echo 0)"
+failed="$(grep -oE "[0-9]+ tests failed" <<<"$line" | grep -oE "[0-9]+" || echo 0)"
+total=${total:-0}
+failed=${failed:-0}
+
+RC=0
+[ "$RC_GOLDEN" -eq 0 ] || RC=$RC_GOLDEN
+[ "$RC_OFFLINE" -eq 0 ] || RC=1
+[ "$RC_LIVE" -eq 0 ] || RC=1
+{
+    echo ""
+    echo "=== summary ==="
+    echo "  offline pytest:                 $(counts "$PYTEST_CWD/offline.log")"
+    echo "  live pytest:                    $(counts "$PYTEST_CWD/live.log")"
+    echo "  golden (Python edition):        $((total - failed))/${total} passed"
+    grep -E "Total Test time" "$CTEST_LOG" || true
+    echo "  exit codes: golden=$RC_GOLDEN offline=$RC_OFFLINE live=$RC_LIVE (combined=$RC)"
+} | tee -a "$SUMMARY_FILE" | tee -a "$LOG_FILE"
+
+echo "=== Artifacts ==="
+echo "  $LOG_FILE"
+echo "  $SUMMARY_FILE"
+exit $RC
