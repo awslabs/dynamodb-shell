@@ -1,0 +1,41 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# `libddbsh`, a pure-Python alias of the `ddbsh` package (P13 T3, D-P13-4).
+# `pip install libddbsh` installs `ddbsh` at the same version, and
+# `import libddbsh` re-exports it. The two projects are published from the
+# same tag by .github/workflows/pypi.yml, `ddbsh` first.
+#
+# The version and the `ddbsh==` pin are written out here, not read at build
+# time, so the alias's sdist builds on its own. They must equal the project
+# version in the repo-root CMakeLists.txt: python/tests/test_alias.py checks
+# that, and so does the publish workflow. Bump them with the other version
+# strings.
+
+[build-system]
+requires = ["flit_core>=3.9,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "libddbsh"
+version = "0.12.6"
+description = "An alias of ddbsh, the DynamoDB shell as a Python library: pip install ddbsh"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "ddbsh contributors" }]
+keywords = ["dynamodb", "aws", "sql", "shell", "dbapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database :: Front-Ends",
+]
+dependencies = ["ddbsh==0.12.6"]
+
+[project.urls]
+Homepage = "https://www.ddbsh.org/"
+Source = "https://github.com/awslabs/dynamodb-shell"
+Documentation = "https://github.com/awslabs/dynamodb-shell/blob/main/docs/PYTHON.md"
+Issues = "https://github.com/awslabs/dynamodb-shell/issues"

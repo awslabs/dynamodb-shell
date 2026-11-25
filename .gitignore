@@ -56,3 +56,8 @@ build*
 /examples/*/Makefile
 # Vendored AWS SDK for JS build inputs install here (devtools/vendor-aws-sdk-js uses a temp dir).
 /web/vendor/aws-sdk/node_modules/
+
+# Python build and test litter (the package builds into build-python/)
+__pycache__/
+*.egg-info/
+.pytest_cache/

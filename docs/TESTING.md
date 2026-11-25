@@ -112,7 +112,36 @@ the `default` profile, plus `cross-acct` for the golden suite; lifetime
 is removed on exit, and echo the minted access key id and the caller ARN. A
 minting failure fails the run; nothing is skipped.
 
-The native and web golden suites create and drop the same `ddbsh_test_*` tables,
-so they must not run at the same time. Both take a shared lock
-(`build-golden.lock`, via `flock` where available) and refuse to start while the
-other runs.
+## Python package gates
+
+**`devtools/run-tests --python`** (or `devtools/run-python-golden`) builds the
+[Python package](PYTHON.md) into a virtualenv (`build-python/venv-gate`) and
+runs, against real DynamoDB:
+
+- the offline pytest suite, `python/tests`: the DB-API cursor and the type
+  mapping over the in-memory connection, `Connection.run`, a fake transport
+  (retries, transport failures, `CONNECT`), every `isel-*` EXPLAIN golden on
+  `isel1` compared byte for byte, and the botocore transport's signing with a
+  stubbed HTTP session;
+- the live pytest suite, `python/livetests`, on the table `ddbsh_py_live` and,
+  through the `cross-acct` profile, the cross-account family's
+  `ddbsh_test_table_1`;
+- the **whole golden suite** through `python -m ddbsh`, a CLI-shaped front end
+  over `Connection.run_result`, diffed against the same `.exp` files as the
+  native CLI. The only expectation that differs is the `ishow-connection`
+  `Backend:` pattern.
+
+It needs a Python 3.9 or later with its C headers (`DDBSH_PYTHON`, default
+`python3`; on Amazon Linux install `python3.11-devel`), and network access to
+PyPI for the build requirements. Credentials come from the standard AWS chain,
+as for the native suite. Artifacts: `discussions/test-python-<hash>.{log,txt}`.
+
+In CI, `python.yml` runs the offline suite against every wheel it builds (25
+wheels on five platforms), and the `real-dynamodb` job of `test.yml` runs the
+live suite after the golden suite ([CI](CI.md#the-python-packages)). The
+golden suite through `python -m ddbsh` runs only here.
+
+The native, web and Python golden suites create and drop the same
+`ddbsh_test_*` tables, so they must not run at the same time. Each takes a
+shared lock (`build-golden.lock`, via `flock` where available) and refuses to
+start while another runs.

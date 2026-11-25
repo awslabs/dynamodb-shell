@@ -36,7 +36,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ddbsh
-        VERSION 0.12.5
+        VERSION 0.12.6
         DESCRIPTION "A DynamoDB interactive shell (reimplementation)"
         HOMEPAGE_URL "https://www.ddbsh.org/"
         LANGUAGES CXX)
@@ -48,6 +48,17 @@ endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# MSVC reports __cplusplus as 199711L unless /Zc:__cplusplus is given. The
+# bison 3.7 C++ skeleton (winflexbison 2.5.24) tests `YY_CPLUSPLUS
+# __cplusplus`, so without the flag the generated parser takes its C++98 code
+# paths, which copy semantic values and fail on move-only types
+# (std::unique_ptr, error C2280). The flag only makes __cplusplus report the
+# real standard; it changes no output and no API. Set before the first target
+# so every target, including the generated parser, gets it.
+if(MSVC)
+    add_compile_options(/Zc:__cplusplus)
+endif()
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(DDBSH_BUILD_TESTS "Build the native unit tests" ON)
@@ -65,6 +76,17 @@ option(DDBSH_BUILD_AWS "Build the optional AWS-backed client component and the C
 # web/CMakeLists.txt FATAL_ERRORs on a non-Emscripten configure so a
 # misinvocation fails fast. See web/README.md.
 option(DDBSH_BUILD_WEB "Build the Emscripten/WASM web target" OFF)
+
+# The Python extension module `ddbsh._core` (P13 T3, python/). OFF by default;
+# the repo-root pyproject.toml turns it ON for scikit-build-core (with
+# DDBSH_BUILD_AWS=OFF, DDBSH_BUILD_TESTS=OFF, BUILD_SHARED_LIBS=OFF), so
+# `pip install .` builds the wheel. It needs Python >= 3.9 and nanobind at
+# configure time. Every static library the module links must be
+# position-independent, so the option turns that on for the whole build.
+option(DDBSH_BUILD_PYTHON "Build the Python extension module (ddbsh._core)" OFF)
+if(DDBSH_BUILD_PYTHON)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 # Warnings-as-errors, narrowly scoped to our own targets (not third-party).
 add_library(ddbsh_warnings INTERFACE)
@@ -111,10 +133,20 @@ BISON_TARGET(ddbsh_parser
              src/parser/grammar.yy
              "${GEN_DIR}/grammar.cpp"
              DEFINES_FILE "${GEN_DIR}/grammar.hpp")
+# On Windows the scanner must not include <unistd.h>: win_flex's --wincompat
+# makes the generated file use the MSVC runtime's <io.h> instead (D5). It is a
+# win_flex-only flag, so it is passed only when win_flex is the scanner
+# generator. TODO(portability): the Windows build is exercised only by the
+# Python wheel jobs (.github/workflows/python.yml).
+set(DDBSH_FLEX_ARGS "")
+if(WIN32 AND FLEX_EXECUTABLE MATCHES "win_flex")
+    set(DDBSH_FLEX_ARGS COMPILE_FLAGS "--wincompat")
+endif()
 FLEX_TARGET(ddbsh_scanner
             src/parser/lexer.l
             "${GEN_DIR}/lexer.cpp"
-            DEFINES_FILE "${GEN_DIR}/lexer.hpp")
+            DEFINES_FILE "${GEN_DIR}/lexer.hpp"
+            ${DDBSH_FLEX_ARGS})
 ADD_FLEX_BISON_DEPENDENCY(ddbsh_scanner ddbsh_parser)
 
 # --- engine library ----------------------------------------------------------
@@ -179,11 +211,16 @@ target_include_directories(ddbsh
 target_link_libraries(ddbsh PRIVATE $<BUILD_INTERFACE:ddbsh_warnings>)
 set_target_properties(ddbsh PROPERTIES OUTPUT_NAME ddbsh)
 
-# The generated flex/bison sources are not ours to lint; suppress -Werror on
-# just those translation units.
+# The generated flex/bison sources are not ours to lint; suppress
+# warnings-as-errors on just those translation units (/WX- for MSVC).
+if(MSVC)
+    set(DDBSH_GENERATED_NO_WERROR "/WX-")
+else()
+    set(DDBSH_GENERATED_NO_WERROR "-Wno-error")
+endif()
 set_source_files_properties(
     "${GEN_DIR}/grammar.cpp" "${GEN_DIR}/lexer.cpp"
-    PROPERTIES COMPILE_OPTIONS "-Wno-error")
+    PROPERTIES COMPILE_OPTIONS "${DDBSH_GENERATED_NO_WERROR}")
 
 # --- ddbsh-wire: SDK-free AWS JSON 1.0 codec (ddbsh::wire, P6 / D-P6-13) ------
 # The JSON-string transport counterpart to ddbsh-aws (the AWS SDK transport):
@@ -296,6 +333,13 @@ endif()
 # wasm-release preset sets exactly that). See web/CMakeLists.txt.
 if(DDBSH_BUILD_WEB)
     add_subdirectory(web)
+endif()
+
+# --- Python extension module (P13 T3) ----------------------------------------
+# The SDK-free engine + ddbsh-wire + cli-core behind nanobind, driven by a
+# Python transport (botocore SigV4 + raw HTTP). See python/CMakeLists.txt.
+if(DDBSH_BUILD_PYTHON)
+    add_subdirectory(python)
 endif()
 
 # --- tests -------------------------------------------------------------------

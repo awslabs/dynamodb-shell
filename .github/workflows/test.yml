@@ -11,9 +11,11 @@
 #                  wire differential gate, the offline samples). No AWS.
 #   sanitize       the same suite under ASan, UBSan and LSan. No AWS.
 #   format         clang-format 15 on every tracked C/C++ file.
-#   real-dynamodb  the golden suite against real DynamoDB in the CI accounts,
-#                  through the GitHub environment `ci` and OIDC. One run at a
-#                  time, because the suite's table names are fixed.
+#   real-dynamodb  the golden suite and the live Python tests
+#                  (python/livetests) against real DynamoDB in the CI
+#                  accounts, through the GitHub environment `ci` and OIDC. One
+#                  run at a time, because the suite's table names are fixed.
+# The Python wheels and their offline tests are python.yml.
 # Pull requests from forks get no OIDC token, so instead of real-dynamodb
 # they get real-dynamodb-fork-notice, which fails with an explanation.
 #
@@ -271,6 +273,19 @@ jobs:
       - name: Build ddbsh and configure the golden suite
         run: devtools/run-tests --build-only
 
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # The Python package for the live Python tests, also built before any
+      # credential exists on the runner.
+      - name: Build the Python package
+        run: |
+          python -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/python" -m pip install --quiet . pytest
+          echo "DDBSH_PY=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
+
       # Credentials reach the runner only as the [default] profile, never as
       # environment variables: credentials in the environment take precedence
       # over the cross-acct profile in ddbsh, and the cross-account family
@@ -325,6 +340,17 @@ jobs:
       - name: Golden suite
         timeout-minutes: 90
         run: devtools/run-tests
+
+      # boto3 reads the same [default] and cross-acct profiles. Run from
+      # outside the checkout, so `import ddbsh` is the installed package.
+      - name: Live Python tests
+        if: ${{ !cancelled() && steps.target.outcome == 'success' }}
+        timeout-minutes: 20
+        run: |
+          hash="$(git rev-parse --short HEAD)"
+          log="$GITHUB_WORKSPACE/discussions/test-cipython-$hash.log"
+          cd "$RUNNER_TEMP"
+          "$DDBSH_PY" -m pytest -p no:cacheprovider -q "$GITHUB_WORKSPACE/python/livetests" 2>&1 | tee "$log"
 
       # Drops the suite's fixed tables in both accounts after a pass, a
       # failure or a cancellation. It runs only against a verified target: the

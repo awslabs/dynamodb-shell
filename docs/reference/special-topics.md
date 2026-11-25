@@ -16,7 +16,7 @@ The following logical expressions are supported.
 * begins_with(attr, prefix) which evaluates to true if the attr begins with prefix
 * attr between value and value which evaluates to true if attr is between the two values provided
 * attribute_type (attr, type) which evaluates to true if attr is of the specified type.
-* contains(attr, operand) which evaluates to true if attr is a string that contains the substring operand, or a set or list that contains the element operand. The operand is a scalar literal: a string (quoted or bare), a number, TRUE, FALSE or NULL. A list or map literal is not accepted. An operand whose type cannot appear in attr (for example `contains(s, 5)` on a string attribute) is not an error; the condition is false and the item does not match.
+* contains(attr, operand) which evaluates to true if attr is a string that contains the substring operand, or a set or list that contains the element operand. The operand is a scalar literal: a string (quoted or bare), a number, TRUE, FALSE or NULL. A list or map literal is not accepted. In a prepared statement (the embedding API, or the Python package's `Cursor.execute(sql, params)`) the operand may be a `?` parameter marker. An operand whose type cannot appear in attr (for example `contains(s, 5)` on a string attribute) is not an error; the condition is false and the item does not match.
 
 Examples: First some sample data
 
@@ -83,10 +83,10 @@ or NULL, so you can look for a NULL or boolean element of a list, or a number
 in a number set (`ns` below holds the number set {5, 6}).
 
 ```
-us-east-1 (*)> select * from conttest;
+us-east-1 (*)> select pk, l from conttest;
 {l: [1, NULL, x], pk: 1}
 {l: [TRUE, 2], pk: 3}
-{ns: Unknown Type, pk: 4}
+{pk: 4}
 us-east-1 (*)> select * from conttest where contains(l, NULL);
 {l: [1, NULL, x], pk: 1}
 us-east-1 (*)> select * from conttest where contains(l, TRUE);
