@@ -1,0 +1,1 @@
+SearchConditionExpression must not contain any attributes that is not in SearchSchema. Invalid attribute: color

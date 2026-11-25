@@ -1,0 +1,16 @@
+Scan({
+   "TableName":   "ddbsh_contains",
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#aaaa1",
+   "FilterExpression":   "contains(#aaaa2, :vaaa1)",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk",
+      "#aaaa2":   "l"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "BOOL":   true
+      }
+   },
+   "ConsistentRead":   false
+})

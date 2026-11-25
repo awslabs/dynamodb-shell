@@ -1,0 +1,36 @@
+SearchVectors({
+   "TableName":   "ddbsh_vec_f",
+   "IndexName":   "fidx",
+   "ReturnConsumedCapacity":   "NONE",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "id",
+      "#aaaa2":   "tenant",
+      "#aaaa3":   "brand",
+      "#aaaa4":   "rating"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "S":   "t2"
+      },
+      ":vaaa2":   {
+         "S":   "acme"
+      },
+      ":vaaa3":   {
+         "S":   "cirque"
+      },
+      ":vaaa4":   {
+         "N":   "1"
+      },
+      ":vaaa5":   {
+         "N":   "2"
+      }
+   },
+   "ProjectionExpression":   "#aaaa1",
+   "SearchVector":   [{
+         "N":   "0"
+      }, {
+         "N":   "0"
+      }],
+   "SearchConditionExpression":   "#aaaa2 = :vaaa1 AND (#aaaa3 IN (:vaaa2, :vaaa3) OR NOT (#aaaa4 BETWEEN :vaaa4 AND :vaaa5))",
+   "TopK":   3
+})

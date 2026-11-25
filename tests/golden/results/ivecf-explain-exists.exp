@@ -1,0 +1,17 @@
+SearchVectors({
+   "TableName":   "ddbsh_vec_f",
+   "IndexName":   "widx",
+   "ReturnConsumedCapacity":   "NONE",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "id",
+      "#aaaa2":   "brand"
+   },
+   "ProjectionExpression":   "#aaaa1",
+   "SearchVector":   [{
+         "N":   "0"
+      }, {
+         "N":   "0"
+      }],
+   "SearchConditionExpression":   "attribute_exists(#aaaa2)",
+   "TopK":   3
+})

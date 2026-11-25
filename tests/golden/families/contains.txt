@@ -1,0 +1,95 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# contains.txt — golden family for CONTAINS with a scalar operand (P13 T2,
+# D-P13-3, issue #20).
+#
+# v0.8.1 accepted only a string as the second argument of CONTAINS, so
+# `contains(l, NULL)` was a syntax error. D-P13-3 widens the operand to any
+# scalar literal: string (unchanged), number, TRUE/FALSE and NULL. These
+# goldens cover every place a WHERE is accepted: SELECT (Query filter and
+# Scan), UPDATE and UPSERT (single-item condition and bulk), DELETE (single and
+# bulk) and a write transaction (Update and ConditionCheck), plus the EXPLAIN
+# shape of each.
+#
+# An operand whose type cannot be in the path (`contains(s, NULL)` on a string
+# attribute, `contains(s, 5)`, `contains(ns, "5")` on a number set) is not an
+# error: DynamoDB evaluates the condition as false and returns no rows. The
+# icont-mismatch-* goldens pin that (empty output).
+#
+# Self-contained: it drops ddbsh_contains if present, creates and seeds it, and
+# drops it at the end. test-cleanup also drops it (if exists nowait). The write
+# cases run in order and change the table; icont-after-writes and
+# icont-after-deletes read the state they leave. Number sets are never
+# projected, so no golden depends on how the default format renders a set.
+#
+# AUTHORED goldens (the operand set postdates v0.8.1), recorded against real
+# DynamoDB (632195519165, us-east-1) and checked by eye against the seed.
+#
+# WARNING: creates and drops a REAL DynamoDB table (ddbsh_contains) per run.
+
+add_test(NAME icont-setup-drop COMMAND ddbshtest -c "drop table if exists ddbsh_contains;")
+add_test(NAME icont-setup-load COMMAND ddbshtest -e -f ${DATA}/ddbsh-contains.sql)
+add_test(NAME icont-setup-sets COMMAND ${GOLDEN_DIR}/ddbsh-put-item ddbsh_contains
+    "{\"pk\": {\"N\": \"4\"}, \"ns\": {\"NS\": [\"5\", \"6\"]}, \"s\": {\"S\": \"five\"}}"
+    "{\"pk\": {\"N\": \"5\"}, \"ns\": {\"NS\": [\"7\", \"8\"]}, \"s\": {\"S\": \"seven\"}}")
+
+# --- SELECT: Scan (the whole predicate is the FilterExpression) ---
+add_test(NAME icont-scan-null COMMAND ddbshtest -q -s -T ${RD}/icont-scan-null.exp -c "select pk from ddbsh_contains where contains(l, NULL);")
+add_test(NAME icont-scan-not-null COMMAND ddbshtest -q -s -T ${RD}/icont-scan-not-null.exp -c "select pk from ddbsh_contains where not contains(l, NULL);")
+add_test(NAME icont-scan-true COMMAND ddbshtest -q -s -T ${RD}/icont-scan-true.exp -c "select pk from ddbsh_contains where contains(l, TRUE);")
+add_test(NAME icont-scan-false COMMAND ddbshtest -q -s -T ${RD}/icont-scan-false.exp -c "select pk from ddbsh_contains where contains(l, FALSE);")
+add_test(NAME icont-scan-number-list COMMAND ddbshtest -q -s -T ${RD}/icont-scan-number-list.exp -c "select pk from ddbsh_contains where contains(l, 2);")
+add_test(NAME icont-scan-float COMMAND ddbshtest -q -s -T ${RD}/icont-scan-float.exp -c "select pk from ddbsh_contains where contains(l, 3.5);")
+add_test(NAME icont-scan-number-set COMMAND ddbshtest -q -s -T ${RD}/icont-scan-number-set.exp -c "select pk from ddbsh_contains where contains(ns, 5);")
+add_test(NAME icont-scan-string COMMAND ddbshtest -q -s -T ${RD}/icont-scan-string.exp -c "select pk from ddbsh_contains where contains(s, \"ell\");")
+add_test(NAME icont-scan-bare-string COMMAND ddbshtest -q -s -T ${RD}/icont-scan-bare-string.exp -c "select pk from ddbsh_contains where contains(l, x);")
+
+# --- SELECT: Query (hash key =, CONTAINS is the FilterExpression) ---
+add_test(NAME icont-query-null-match COMMAND ddbshtest -q -T ${RD}/icont-query-null-match.exp -c "select pk, s from ddbsh_contains where pk = 1 and contains(l, NULL);")
+add_test(NAME icont-query-null-nomatch COMMAND ddbshtest -q -T ${RD}/icont-query-null-nomatch.exp -c "select pk, s from ddbsh_contains where pk = 2 and contains(l, NULL);")
+
+# --- An operand type that cannot be in the path: no error, no rows ---
+add_test(NAME icont-mismatch-null COMMAND ddbshtest -q -T ${RD}/icont-mismatch-null.exp -c "select pk from ddbsh_contains where contains(s, NULL);")
+add_test(NAME icont-mismatch-number COMMAND ddbshtest -q -T ${RD}/icont-mismatch-number.exp -c "select pk from ddbsh_contains where contains(s, 5);")
+add_test(NAME icont-mismatch-string-set COMMAND ddbshtest -q -T ${RD}/icont-mismatch-string-set.exp -c "select pk from ddbsh_contains where contains(ns, \"5\");")
+
+# --- EXPLAIN: the operand's AttributeValue type in ExpressionAttributeValues ---
+add_test(NAME icont-explain-scan-null COMMAND ddbshtest -q -T ${RD}/icont-explain-scan-null.exp -c "explain select pk from ddbsh_contains where contains(l, NULL);")
+add_test(NAME icont-explain-query-null COMMAND ddbshtest -q -T ${RD}/icont-explain-query-null.exp -c "explain select pk from ddbsh_contains where pk = 1 and contains(l, NULL);")
+add_test(NAME icont-explain-number COMMAND ddbshtest -q -T ${RD}/icont-explain-number.exp -c "explain select pk from ddbsh_contains where contains(ns, 5);")
+add_test(NAME icont-explain-true COMMAND ddbshtest -q -T ${RD}/icont-explain-true.exp -c "explain select pk from ddbsh_contains where contains(l, TRUE);")
+add_test(NAME icont-explain-string COMMAND ddbshtest -q -T ${RD}/icont-explain-string.exp -c "explain select pk from ddbsh_contains where contains(s, \"ell\");")
+add_test(NAME icont-explain-update COMMAND ddbshtest -q -T ${RD}/icont-explain-update.exp -c "explain update ddbsh_contains set hit = 1 where pk = 1 and contains(l, NULL);")
+add_test(NAME icont-explain-upsert-bulk COMMAND ddbshtest -q -T ${RD}/icont-explain-upsert-bulk.exp -c "explain upsert ddbsh_contains set hit = 1 where contains(ns, 7);")
+add_test(NAME icont-explain-delete COMMAND ddbshtest -q -T ${RD}/icont-explain-delete.exp -c "explain delete from ddbsh_contains where pk = 6 and contains(l, FALSE);")
+# A TransactWriteItems EXPLAIN ends with a per-run ClientRequestToken in the
+# native edition (the AWS SDK for C++ fills it in; the browser edition sends
+# none), so icont-explain-txn matches the two conditions and their operand
+# types in order with a regex instead of a byte-exact golden.
+add_test(NAME icont-explain-txn COMMAND ddbshtest -q -c "explain begin; update ddbsh_contains set tx = 1 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 1 and contains(l, NULL); commit;")
+set_property(TEST icont-explain-txn PROPERTY PASS_REGULAR_EXPRESSION "^TransactWriteItems[(][{].*\"Update\":.*\"ConditionExpression\":   \"attribute_exists[(]#aaaa2[)] AND contains[(]#aaaa3, :vaaa2[)]\".*\":vaaa2\":   [{][\r\n ]*\"BOOL\":   true.*\"ConditionCheck\":.*\"ConditionExpression\":   \"contains[(]#abaa1, :vbaa1[)] AND attribute_exists[(]#abaa2[)]\".*\":vbaa1\":   [{][\r\n ]*\"NULL\":   true.*[}][)][\r\n]*$")
+
+# --- UPDATE / UPSERT: single-item condition (full key) and bulk (Scan) ---
+add_test(NAME icont-update-single COMMAND ddbshtest -q -T ${RD}/icont-update-single.exp -c "update ddbsh_contains set hit = 1 where pk = 1 and contains(l, NULL);")
+add_test(NAME icont-update-single-ccf COMMAND ddbshtest -q -T ${RD}/icont-update-single-ccf.exp -c "update ddbsh_contains set hit = 1 where pk = 2 and contains(l, NULL);")
+add_test(NAME icont-update-bulk COMMAND ddbshtest -q -T ${RD}/icont-update-bulk.exp -c "update ddbsh_contains set hit2 = 2 where contains(l, TRUE);")
+add_test(NAME icont-upsert-single COMMAND ddbshtest -q -T ${RD}/icont-upsert-single.exp -c "upsert ddbsh_contains set hit3 = 3 where pk = 4 and contains(ns, 5);")
+add_test(NAME icont-upsert-bulk COMMAND ddbshtest -q -T ${RD}/icont-upsert-bulk.exp -c "upsert ddbsh_contains set hit4 = 4 where contains(ns, 7);")
+
+# --- Write transaction: Update with a CONTAINS condition plus a ConditionCheck ---
+add_test(NAME icont-txn-commit COMMAND ddbshtest -q -T ${RD}/icont-txn-commit.exp -c "begin; update ddbsh_contains set tx = 1 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 1 and contains(l, NULL); commit;")
+# The cancellation message carries a per-request id (empty in the browser
+# edition), so icont-txn-abort matches a regex (as itxt-11 does) instead of a
+# byte-exact golden.
+add_test(NAME icont-txn-abort COMMAND ddbshtest -q -c "begin; update ddbsh_contains set tx = 2 where pk = 3 and contains(l, TRUE); exists select * from ddbsh_contains where pk = 2 and contains(l, NULL); commit;")
+set_property(TEST icont-txn-abort PROPERTY PASS_REGULAR_EXPRESSION "ABORT[\r\n]+Transaction failed\\. TransactionCanceledException\\. [A-Z0-9]*\\. Transaction cancelled, please refer cancellation reasons for specific reasons \\[None, ConditionalCheckFailed\\]")
+add_test(NAME icont-after-writes COMMAND ddbshtest -q -s -T ${RD}/icont-after-writes.exp -c "select pk, hit, hit2, hit3, hit4, tx from ddbsh_contains;")
+
+# --- DELETE: single-item condition (mismatch, then match) and bulk (Scan) ---
+add_test(NAME icont-delete-single-ccf COMMAND ddbshtest -q -T ${RD}/icont-delete-single-ccf.exp -c "delete from ddbsh_contains where pk = 2 and contains(l, NULL);")
+add_test(NAME icont-delete-single COMMAND ddbshtest -q -T ${RD}/icont-delete-single.exp -c "delete from ddbsh_contains where pk = 1 and contains(l, NULL);")
+add_test(NAME icont-delete-bulk COMMAND ddbshtest -q -T ${RD}/icont-delete-bulk.exp -c "delete from ddbsh_contains where contains(l, FALSE);")
+add_test(NAME icont-after-deletes COMMAND ddbshtest -q -s -T ${RD}/icont-after-deletes.exp -c "select pk from ddbsh_contains;")
+
+add_test(NAME icont-drop COMMAND ddbshtest -c "drop table ddbsh_contains;")

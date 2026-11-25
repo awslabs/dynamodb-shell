@@ -1,0 +1,25 @@
+SearchVectors({
+   "TableName":   "ddbsh_vec_f",
+   "IndexName":   "widx",
+   "ReturnConsumedCapacity":   "NONE",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "id",
+      "#aaaa2":   "price"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "20"
+      },
+      ":vaaa2":   {
+         "N":   "40"
+      }
+   },
+   "ProjectionExpression":   "#aaaa1",
+   "SearchVector":   [{
+         "N":   "0"
+      }, {
+         "N":   "0"
+      }],
+   "SearchConditionExpression":   "#aaaa2 BETWEEN :vaaa1 AND :vaaa2",
+   "TopK":   3
+})

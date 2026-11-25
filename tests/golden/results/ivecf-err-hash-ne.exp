@@ -1,0 +1,1 @@
+SearchConditionExpression must use = on the HASH attribute, not inside OR or NOT; HASH attribute: tenant

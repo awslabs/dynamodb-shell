@@ -192,6 +192,22 @@ The engine drives this command set end to end against real DynamoDB:
   SELECT * FROM docs.embidx WHERE category = "news" NEAREST 5 TO [0.1, 0.2, 0.3];
   ```
 
+  ddbsh sends the `WHERE` clause to the service as the request's
+  `SearchConditionExpression` and leaves validation to DynamoDB. On a FILTER
+  attribute the service accepts `=`, `<>`/`!=` and `IN (...)` on any type;
+  `<`, `<=`, `>`, `>=` and `BETWEEN` on Number attributes only;
+  `attribute_exists`/`attribute_not_exists`; and `AND`, `OR`, `NOT` and
+  parentheses. A HASH attribute takes exactly one top-level `=`, joined to the
+  rest with `AND` (never inside `OR` or `NOT`). `<>`, `!=` and `NOT` also match
+  items that do not have the attribute. Other functions (`begins_with`,
+  `contains`, `size`, `attribute_type`) and nested paths are rejected, and the
+  service's error message is printed:
+
+  ```sql
+  SELECT * FROM docs.embidx WHERE category = "news" AND year BETWEEN 2020 AND 2024
+    AND ( lang IN ("en", "fr") OR NOT ( rating < 3 ) ) NEAREST 5 TO [0.1, 0.2, 0.3];
+  ```
+
   **What a result row contains.** Each match carries the attributes named in the
   SELECT projection plus a trailing similarity ` score <n>`. The stored vector
   is treated like any other attribute: `SELECT *` omits it by default (no

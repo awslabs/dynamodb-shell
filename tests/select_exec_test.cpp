@@ -296,11 +296,95 @@ TEST(SelectExec, SearchVectorsFilterAndProjectionAliased) {
     ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
     const auto& req = client.search_vectors_requests()[0];
     EXPECT_EQ(req.topk, 10);
-    ASSERT_TRUE(req.search_condition_expression.has_value());
+    // Projection aliased before filter (house convention): id and category
+    // take #aaaa1/#aaaa2, and the filter reuses #aaaa2 (names dedupe, arch §6).
     ASSERT_TRUE(req.projection_expression.has_value());
-    // projection aliased before filter (house convention): id, category first.
-    EXPECT_FALSE(req.expression_attribute_names.empty());
-    EXPECT_FALSE(req.expression_attribute_values.empty());
+    EXPECT_EQ(*req.projection_expression, "#aaaa1, #aaaa2");
+    ASSERT_TRUE(req.search_condition_expression.has_value());
+    EXPECT_EQ(*req.search_condition_expression, "#aaaa2 = :vaaa1");
+    const ddbsh::ExpressionAttributeNames want_names{{"#aaaa1", "id"}, {"#aaaa2", "category"}};
+    EXPECT_EQ(req.expression_attribute_names, want_names);
+    ASSERT_EQ(req.expression_attribute_values.size(), 1u);
+    EXPECT_EQ(req.expression_attribute_values[0].first, ":vaaa1");
+    EXPECT_EQ(req.expression_attribute_values[0].second.type, Value::Type::S);
+    EXPECT_EQ(req.expression_attribute_values[0].second.s, "news");
+}
+
+// P13 T1: every SearchConditionExpression form the service documents for
+// vector-index inline filters (=, <>, !=, IN, <, <=, >, >=, BETWEEN,
+// attribute_exists, attribute_not_exists, AND, OR, NOT, parentheses) and a HASH
+// condition joined with AND. The planner passes the WHERE tree through
+// unvalidated; these pin the exact text and aliases it sends. The live goldens
+// (vector-filters family) pin what the service does with each.
+TEST(SelectExec, SearchVectorsConditionOperators) {
+    struct Case {
+        const char* where;
+        const char* condition;
+        ddbsh::ExpressionAttributeNames names;
+        std::vector<std::pair<Value::Type, std::string>> values;  // in token order
+    };
+    const Value::Type N = Value::Type::N;
+    const Value::Type S = Value::Type::S;
+    const std::vector<Case> cases = {
+        {"price < 30", "#aaaa1 < :vaaa1", {{"#aaaa1", "price"}}, {{N, "30"}}},
+        {"price <= 30", "#aaaa1 <= :vaaa1", {{"#aaaa1", "price"}}, {{N, "30"}}},
+        {"price > 40", "#aaaa1 > :vaaa1", {{"#aaaa1", "price"}}, {{N, "40"}}},
+        {"price >= 40", "#aaaa1 >= :vaaa1", {{"#aaaa1", "price"}}, {{N, "40"}}},
+        {"price between 20 and 40",
+         "#aaaa1 BETWEEN :vaaa1 AND :vaaa2",
+         {{"#aaaa1", "price"}},
+         {{N, "20"}, {N, "40"}}},
+        // v0.8.1 passes `<>` through and desugars only `!=` to NOT (=).
+        {"brand <> \"acme\"", "#aaaa1 <> :vaaa1", {{"#aaaa1", "brand"}}, {{S, "acme"}}},
+        {"brand != \"acme\"", "NOT (#aaaa1 = :vaaa1)", {{"#aaaa1", "brand"}}, {{S, "acme"}}},
+        {"price in (10, 20, 60)",
+         "#aaaa1 IN (:vaaa1, :vaaa2, :vaaa3)",
+         {{"#aaaa1", "price"}},
+         {{N, "10"}, {N, "20"}, {N, "60"}}},
+        {"brand = \"bravo\"", "#aaaa1 = :vaaa1", {{"#aaaa1", "brand"}}, {{S, "bravo"}}},
+        {"attribute_exists(brand)", "attribute_exists(#aaaa1)", {{"#aaaa1", "brand"}}, {}},
+        {"attribute_not_exists(brand)",
+         "NOT (attribute_exists(#aaaa1))",
+         {{"#aaaa1", "brand"}},
+         {}},
+        {"not (brand = \"acme\")", "NOT (#aaaa1 = :vaaa1)", {{"#aaaa1", "brand"}}, {{S, "acme"}}},
+        {"price > 20 and rating >= 3",
+         "#aaaa1 > :vaaa1 AND #aaaa2 >= :vaaa2",
+         {{"#aaaa1", "price"}, {"#aaaa2", "rating"}},
+         {{N, "20"}, {N, "3"}}},
+        {"brand = \"acme\" or price > 50",
+         "#aaaa1 = :vaaa1 OR #aaaa2 > :vaaa2",
+         {{"#aaaa1", "brand"}, {"#aaaa2", "price"}},
+         {{S, "acme"}, {N, "50"}}},
+        {"tenant = \"t2\" and (brand in (\"acme\", \"cirque\") or not (rating between 1 and 2))",
+         "#aaaa1 = :vaaa1 AND (#aaaa2 IN (:vaaa2, :vaaa3) OR NOT (#aaaa3 BETWEEN :vaaa4 AND "
+         ":vaaa5))",
+         {{"#aaaa1", "tenant"}, {"#aaaa2", "brand"}, {"#aaaa3", "rating"}},
+         {{S, "t2"}, {S, "acme"}, {S, "cirque"}, {N, "1"}, {N, "2"}}},
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.where);
+        ddbsh::test::FakeDDBClient client;
+        client.set_table(table_with_vector("docs", "embidx", 2));
+        client.set_search_vectors_results({});
+        ddbsh::Session session = make_session(client);
+
+        auto out = session.run(std::string("select * from docs.embidx where ") + c.where +
+                               " nearest 3 to [0, 0];");
+        ASSERT_TRUE(out.has_value()) << (out.has_value() ? "" : out.error().message);
+        ASSERT_EQ(client.search_vectors_requests().size(), 1u);
+        const auto& req = client.search_vectors_requests()[0];
+        EXPECT_FALSE(req.projection_expression.has_value());
+        ASSERT_TRUE(req.search_condition_expression.has_value());
+        EXPECT_EQ(*req.search_condition_expression, c.condition);
+        EXPECT_EQ(req.expression_attribute_names, c.names);
+        ASSERT_EQ(req.expression_attribute_values.size(), c.values.size());
+        for (std::size_t i = 0; i < c.values.size(); ++i) {
+            EXPECT_EQ(req.expression_attribute_values[i].first, ":vaaa" + std::to_string(i + 1));
+            EXPECT_EQ(req.expression_attribute_values[i].second.type, c.values[i].first);
+            EXPECT_EQ(req.expression_attribute_values[i].second.s, c.values[i].second);
+        }
+    }
 }
 
 TEST(SelectExec, SearchVectorsDimensionMismatchErrors) {

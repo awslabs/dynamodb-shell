@@ -1,0 +1,20 @@
+Query({
+   "TableName":   "ddbsh_contains",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#aaaa1",
+   "FilterExpression":   "contains(#aaaa2, :vaaa2)",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk",
+      "#aaaa2":   "l"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "NULL":   true
+      }
+   }
+})

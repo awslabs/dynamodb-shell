@@ -221,7 +221,7 @@ session never keeps talking to the previous target by mistake.
 
 ```
 us-east-1> show connection;
-ddbsh - version 0.12.4
+ddbsh - version 0.12.5
 Region: us-east-1
 Endpoint: (default)
 Backend: wire/aws-sdk-js 3.1174.0 -> https://dynamodb.us-east-1.amazonaws.com (default); credentials ASIA…WXYZ expires 2026-11-20T23:03:00.000Z
