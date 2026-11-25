@@ -1,0 +1,224 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# pypi.yml — publish the Python packages `ddbsh` and its alias `libddbsh`
+# (P13 T3(c), D-P13-4, D-P13-9).
+#
+#   build     the reusable python.yml: the sdist, every wheel, the alias.
+#   check     before any upload: the version is the CMake project version (and
+#             on a tag, the tag names it, on main); the file set is complete;
+#             twine checks the metadata. Its output is the one set of files
+#             both publish jobs upload.
+#   testpypi  on a manual run: upload to TestPyPI through the GitHub
+#             environment `testpypi`.
+#   pypi      on a numbered release tag: upload to PyPI through the GitHub
+#             environment `pypi`, which accepts only tags matching v[0-9]*.
+# Each publish job uploads `ddbsh` first and then `libddbsh`, which depends on
+# it. Uploads use PyPI trusted publishing (OpenID Connect): no token is stored
+# on GitHub. A file already on the index is skipped, so a failed publish can
+# be re-run. docs/CI.md has the setup and the procedure.
+
+name: Publish to PyPI
+
+on:
+  push:
+    # Numbered versions only, as for the site.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  # TestPyPI, from any branch or tag the environment testpypi accepts.
+  workflow_dispatch: {}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    uses: ./.github/workflows/python.yml
+    permissions:
+      contents: read
+
+  check:
+    name: Check the packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the code, with the tags and main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Guards: the version, and on a tag, the tag on main"
+        id: version
+        run: |
+          # The regex pyproject.toml reads the version with.
+          version="$(python3 -c 'import re; m = re.search(r"project\(ddbsh\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", open("CMakeLists.txt").read()); print(m.group(1) if m else "")')"
+          if [ -z "$version" ]; then
+            echo "::error::No project version in CMakeLists.txt."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            tag="$GITHUB_REF_NAME"
+            if [ "$GITHUB_REF_TYPE" != "tag" ] || [ "$tag" != "v$version" ]; then
+              echo "::error::Tag $tag does not name the project version $version (CMakeLists.txt)."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Tag $tag is not on main."
+              exit 1
+            fi
+          fi
+          echo "version $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download the packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+
+      # 5 platforms x 5 CPython versions, the sdist, and the alias's wheel and
+      # sdist. A missing platform or version stops the publish.
+      - name: Check the file set
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd dist
+          ls -l
+          shopt -s nullglob
+          fail=0
+          need() {
+            if [ ! -e "$1" ]; then
+              echo "::error::Missing $1."
+              fail=1
+            fi
+          }
+          need "ddbsh-$VERSION.tar.gz"
+          need "libddbsh-$VERSION.tar.gz"
+          need "libddbsh-$VERSION-py3-none-any.whl"
+          for py in 39 310 311 312 313; do
+            wheels=(ddbsh-"$VERSION"-cp"$py"-cp"$py"-*.whl)
+            for platform in manylinux_2_28_x86_64 manylinux_2_28_aarch64 "macosx_*_arm64" "macosx_*_x86_64" win_amd64; do
+              n=0
+              for w in "${wheels[@]}"; do
+                if [[ "$w" == *$platform.whl || "$w" == *$platform.* ]]; then
+                  n=$((n + 1))
+                fi
+              done
+              if [ "$n" -ne 1 ]; then
+                echo "::error::Expected one ddbsh $VERSION wheel for cp$py $platform, found $n."
+                fail=1
+              fi
+            done
+          done
+          all=(*)
+          if [ "${#all[@]}" -ne 28 ]; then
+            echo "::error::Expected 28 files, found ${#all[@]}."
+            fail=1
+          fi
+          exit "$fail"
+
+      - name: Check the metadata
+        run: |
+          python3 -m venv "$RUNNER_TEMP/twine"
+          "$RUNNER_TEMP/twine/bin/python" -m pip install --quiet twine
+          "$RUNNER_TEMP/twine/bin/twine" check --strict dist/*
+
+      - name: Upload the checked set
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pypi-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  testpypi:
+    name: Publish to TestPyPI
+    needs: check
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/ddbsh/
+    concurrency:
+      group: testpypi-publish
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Download the checked set
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-dist
+          path: dist
+
+      - name: Split the projects
+        run: |
+          mkdir -p upload/ddbsh upload/libddbsh
+          mv dist/libddbsh-* upload/libddbsh/
+          mv dist/ddbsh-* upload/ddbsh/
+          ls -l upload/*
+
+      - name: Publish ddbsh
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: upload/ddbsh/
+          skip-existing: true
+
+      - name: Publish libddbsh
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: upload/libddbsh/
+          skip-existing: true
+
+  pypi:
+    name: Publish to PyPI
+    needs: check
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ddbsh/
+    concurrency:
+      group: pypi-publish
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Download the checked set
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-dist
+          path: dist
+
+      - name: Split the projects
+        run: |
+          mkdir -p upload/ddbsh upload/libddbsh
+          mv dist/libddbsh-* upload/libddbsh/
+          mv dist/ddbsh-* upload/ddbsh/
+          ls -l upload/*
+
+      - name: Publish ddbsh
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: upload/ddbsh/
+          skip-existing: true
+
+      - name: Publish libddbsh
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: upload/libddbsh/
+          skip-existing: true
