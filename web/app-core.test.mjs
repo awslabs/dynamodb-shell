@@ -20,7 +20,9 @@
 // throttling-code list (isThrottlingError, D-P12-18) and the busy indicator's
 // throttled / retrying states (setRetrying, D-P12-19), the HTML result
 // table's column growth (createTableModel and the appender's rows/end
-// handling, D-P12-25), and the output dropdowns (outputOptions, D-P12-26).
+// handling, D-P12-25), and the output dropdowns (outputOptions, D-P12-26);
+// and the P14 "experimental software" notice (createCredentialNotice and the
+// index.html / app.js wiring, B9; D-P14-2..4).
 // streamSubmission and the engine's rows events are tested against the built
 // engine in streaming.test.mjs.
 
@@ -34,6 +36,7 @@ import {
     busyRetryAnnouncement,
     busyText,
     createBusyClock,
+    createCredentialNotice,
     createTableModel,
     createTranscriptAppender,
     guardedEventSink,
@@ -926,6 +929,125 @@ console.log("output dropdowns");
     check(html.indexOf('id="run-btn"') < html.indexOf('id="output-select"') &&
         html.indexOf('id="output-select"') < html.indexOf('id="flavor-select"'),
         "the dropdowns follow the Run button, Output first");
+}
+
+// ---- the "experimental software" notice (P14, B9; D-P14-2..4) -----------------
+console.log("credentials notice");
+{
+    // Trap every storage and cookie surface while the notice runs: nothing may
+    // touch them (D-P14-2: no flag, no cookie, no local storage).
+    const touched = [];
+    const saved = {};
+    for (const name of ["localStorage", "sessionStorage", "indexedDB", "document"]) {
+        saved[name] = Object.getOwnPropertyDescriptor(globalThis, name);
+        Object.defineProperty(globalThis, name, {
+            configurable: true,
+            get() {
+                touched.push(name);
+                return undefined;
+            },
+        });
+    }
+
+    let shown = 0;
+    const applied = [];
+    const n = createCredentialNotice({
+        show: () => { shown += 1; },
+        apply: (c) => { applied.push(c); return "applied"; },
+    });
+    const c1 = { accessKeyId: "ASIAAAAAAAAAAAAAAAAA", secretAccessKey: "s1", sessionToken: "t1" };
+    const c2 = { accessKeyId: "ASIABBBBBBBBBBBBBBBB", secretAccessKey: "s2", sessionToken: "t2" };
+    eq(n.pending, false, "nothing held at first");
+    eq(n.accept(), undefined, "accept with nothing held applies nothing");
+    n.request(c1);
+    eq(shown, 1, "the notice shows on the first submission");
+    eq(applied.length, 0, "the credentials are not used before Accept");
+    eq(n.pending, true, "the credentials are held until Accept");
+    eq(n.accept(), "applied", "accept returns apply's result");
+    check(applied.length === 1 && applied[0] === c1, "Accept applies the held credentials");
+    eq(n.pending, false, "nothing held after Accept");
+    eq(n.accept(), undefined, "a second Accept applies nothing");
+    eq(applied.length, 1, "the credentials are applied once");
+    n.request(c2);
+    eq(shown, 2, "the notice shows again on the next submission (nothing records it was seen)");
+    eq(applied.length, 1, "the second credentials are not used before Accept");
+    n.request(c1);
+    eq(shown, 3, "the notice shows on every submission");
+    n.accept();
+    check(applied.length === 2 && applied[1] === c1, "a newer submission replaces the held one");
+    n.request(c2);
+    n.discard();
+    eq(n.pending, false, "discard drops the held credentials");
+    eq(n.accept(), undefined, "Accept after discard applies nothing");
+    eq(applied.length, 2, "discarded credentials are never applied");
+    eq(touched, [], "the notice touches no storage and no cookie");
+
+    for (const [name, desc] of Object.entries(saved)) {
+        if (desc === undefined) {
+            delete globalThis[name];
+        } else {
+            Object.defineProperty(globalThis, name, desc);
+        }
+    }
+
+    // The notice markup: the D-P14-4 text, word for word, and one button.
+    const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+    const m = html.match(/<dialog id="notice"[^>]*>([\s\S]*?)<\/dialog>/);
+    check(m !== null, "index.html has the <dialog id=\"notice\">");
+    const inner = m ? m[1] : "";
+    const rendered = inner.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
+        .replace(/ ([.,])/g, "$1");
+    const expected = [
+        "dynamodb-shell (ddbsh) is experimental software. Use it at your own risk.",
+        "Credentials. Your credentials are kept in this tab's memory only. ddbsh never saves them " +
+            "to local storage or anywhere else, and never logs them. It uses them only to sign requests to " +
+            "AWS. They are wiped when you close or leave this page.",
+        "Command history. ddbsh sets no cookies. It saves the statements you type in the editor " +
+            "(the last 500, in full, including any values in them) in your browser's local storage for " +
+            "this site, so they are still there the next time you open the page. Statements run from an " +
+            "uploaded file are not saved. Each open tab keeps its own history while it is open, and the tab " +
+            "that saved last is the one stored. \"Clear history\" deletes the stored history and clears every " +
+            "open ddbsh tab.",
+        "No warranty. ddbsh is open-source software under the Apache License 2.0. It is provided " +
+            "\"as is\", without warranties or conditions of any kind. The source code is at " +
+            "https://github.com/awslabs/dynamodb-shell.",
+        "Accept",
+    ].join(" ");
+    eq(rendered, expected, "the notice text is D-P14-4, word for word");
+    check(!/&[a-z#0-9]+;/i.test(inner), "the notice text uses no character references");
+    for (const lead of ["dynamodb-shell (ddbsh) is experimental software.", "Credentials.",
+        "Command history.", "No warranty."]) {
+        check(inner.includes(`>${lead}</strong>`), `"${lead}" is bold`);
+    }
+    check(/<a href="https:\/\/github\.com\/awslabs\/dynamodb-shell" target="_blank"\s+rel="noopener noreferrer">https:\/\/github\.com\/awslabs\/dynamodb-shell<\/a>/.test(inner),
+        "the source-code link is a live link (new tab, noopener)");
+    eq((inner.match(/<button\b/g) || []).length, 1, "the notice has one button");
+    check(/<button id="notice-accept-btn" type="button" autofocus>Accept<\/button>/.test(inner),
+        "the button is Accept, and focus moves to it");
+    check(!/<form\b/.test(inner), "the notice has no form (no submission, CSP form-action 'none')");
+    check(/aria-labelledby="notice-title"/.test(m ? m[0] : "") &&
+        /aria-describedby="notice-body"/.test(m ? m[0] : ""), "the dialog is labelled and described for screen readers");
+
+    // app.js: the checks run first, the notice holds the credentials, and
+    // only Accept reaches the bridge.
+    const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+    const use = app.slice(app.indexOf("function onUseCredentials()"), app.indexOf("function applyCredentials("));
+    check(use.indexOf("credentialEnvironmentProblem") !== -1 &&
+        use.indexOf("parseCredentials") < use.indexOf("notice.request(") &&
+        use.indexOf("credentialEnvironmentProblem") < use.indexOf("notice.request("),
+        "Use credentials runs the existing checks before the notice");
+    check(!use.includes("setCredentials"), "Use credentials does not apply the credentials itself");
+    eq((app.match(/bridge\.setCredentials\(/g) || []).length, 1, "the bridge gets credentials in one place");
+    check(app.slice(app.indexOf("function applyCredentials(")).startsWith(
+        "function applyCredentials(credentials) {\n    const set = bridge.setCredentials(credentials);"),
+        "that place is applyCredentials, the notice's apply");
+    check(/apply: \(credentials\) => applyCredentials\(credentials\)/.test(app), "the notice applies through applyCredentials");
+    check(/els\.notice\.showModal\(\)/.test(app), "the notice is a modal dialog");
+    check(/function onNoticeCancel\(ev\) \{\s*ev\.preventDefault\(\);/.test(app), "Escape does not dismiss the notice");
+    check(/els\.notice\.addEventListener\("cancel", onNoticeCancel\)/.test(app), "the cancel handler is wired");
+    check(/notice\.discard\(\)/.test(app.slice(app.indexOf("function onPageHide()"))), "pagehide drops held credentials");
+    const wiring = app.slice(app.indexOf("const notice = createCredentialNotice"), app.indexOf("function onForgetCredentials"));
+    check(!/localStorage|sessionStorage|indexedDB|cookie/.test(wiring), "the notice wiring touches no storage and no cookie");
 }
 
 // ---- summary ---------------------------------------------------------------

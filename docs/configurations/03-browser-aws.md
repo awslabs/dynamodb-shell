@@ -123,6 +123,18 @@ browser keeps the page in its back/forward cache. The panel shows the masked key
 id and the expiry time; when DynamoDB reports the token expired or invalid, the
 panel opens again so you can paste new credentials.
 
+### The notice
+
+Every time you press **Use credentials**, and the credentials pass the checks
+above, the page shows a notice before it uses them. The notice says that ddbsh
+is experimental software, how the page handles credentials and command history,
+and that ddbsh comes with no warranty. It has one button, **Accept**; Escape
+does not close it. The credentials take effect only when you press **Accept**.
+If you do not want to accept, close the tab: the credentials are held in the
+tab's memory only and go with it. The page does not record that you accepted,
+so the notice appears again the next time you press **Use credentials**.
+Credentials that fail a check are refused with the reason, without the notice.
+
 ## Command history
 
 The page saves the statements you run from the editor (up to 500) in the
@@ -221,7 +233,7 @@ session never keeps talking to the previous target by mistake.
 
 ```
 us-east-1> show connection;
-ddbsh - version 0.12.7
+ddbsh - version 0.12.8
 Region: us-east-1
 Endpoint: (default)
 Backend: wire/aws-sdk-js 3.1174.0 -> https://dynamodb.us-east-1.amazonaws.com (default); credentials ASIA…WXYZ expires 2026-11-20T23:03:00.000Z

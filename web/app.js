@@ -42,6 +42,11 @@
 //     this window (P10, G1; app-core credentialEnvironmentProblem).
 //     "Use credentials" checks again and fails closed;
 //   * wiped on pagehide, so the back/forward cache never restores them (P10).
+//   * held, after the checks pass, until the user accepts the "experimental
+//     software" notice (P14, B9; D-P14-2 / D-P14-3): a modal <dialog> shown on
+//     every "Use credentials", with one Accept button and no other way out.
+//     Nothing records that it was seen. Credentials that fail a check are
+//     refused as before, without the notice.
 // The only localStorage use is the command history (editor submissions only),
 // which the "Clear history" button removes, in this tab and, through the
 // storage event, in the page's other open tabs (P10, D-P10-6).
@@ -57,6 +62,7 @@ import {
     OUTPUT_CHOICES,
     buildPrompt,
     createBusyClock,
+    createCredentialNotice,
     credentialEnvironmentProblem,
     credentialStatus,
     fileToSubmission,
@@ -102,6 +108,8 @@ const els = {
     clearBtn: document.getElementById("clear-btn"),
     clearHistoryBtn: document.getElementById("clear-history-btn"),
     toolbarStatus: document.getElementById("toolbar-status"),
+    notice: document.getElementById("notice"),
+    noticeAcceptBtn: document.getElementById("notice-accept-btn"),
 };
 
 const HISTORY_KEY = "ddbsh.history";
@@ -330,6 +338,38 @@ function setCredMessage(text, isError) {
     els.credMessage.className = isError ? "cred-message error" : "cred-message";
 }
 
+// The notice (P14, B9). request() holds the checked credentials and opens
+// the dialog; Accept applies them (applyCredentials). The dialog is modal, so
+// the rest of the page is inert while it is open.
+const notice = createCredentialNotice({
+    show: () => {
+        if (!els.notice.open) {
+            els.notice.showModal(); // focus moves to Accept (autofocus).
+        }
+    },
+    apply: (credentials) => applyCredentials(credentials),
+});
+
+function onNoticeAccept() {
+    els.notice.close("accept");
+    notice.accept();
+}
+
+// Escape asks the dialog to close (the "cancel" event). The notice has no
+// way out but Accept, so refuse it.
+function onNoticeCancel(ev) {
+    ev.preventDefault();
+}
+
+// A browser may close a modal dialog anyway (some close a dialog on a second
+// Escape even when "cancel" is refused). If credentials are still held, the
+// user has not accepted: open the notice again.
+function onNoticeClose() {
+    if (notice.pending) {
+        els.notice.showModal();
+    }
+}
+
 function onUseCredentials() {
     const text = els.credInput.value;
     // Clear the secret from the DOM whatever happens next, so it is not kept in
@@ -345,7 +385,13 @@ function onUseCredentials() {
         setCredMessage(parsed.message, true);
         return;
     }
-    const set = bridge.setCredentials(parsed.credentials);
+    // Checked: hold them and show the notice. They take effect on Accept.
+    notice.request(parsed.credentials);
+}
+
+// The rest of the old "Use credentials" path, run on Accept.
+function applyCredentials(credentials) {
+    const set = bridge.setCredentials(credentials);
     if (!set.ok) {
         setCredMessage(set.message, true);
         return;
@@ -369,6 +415,10 @@ function onForgetCredentials() {
 // them; the message tells the user why on return.
 function onPageHide() {
     els.credInput.value = "";
+    notice.discard(); // credentials held behind the notice go too.
+    if (els.notice.open) {
+        els.notice.close();
+    }
     if (bridge.credentialSummary() !== null) {
         bridge.clearCredentials();
         refreshCredStatus();
@@ -600,6 +650,9 @@ async function start() {
     els.fileInput.addEventListener("change", onFileChosen);
     els.credUseBtn.addEventListener("click", onUseCredentials);
     els.credForgetBtn.addEventListener("click", onForgetCredentials);
+    els.noticeAcceptBtn.addEventListener("click", onNoticeAccept);
+    els.notice.addEventListener("cancel", onNoticeCancel);
+    els.notice.addEventListener("close", onNoticeClose);
     els.regionSelect.addEventListener("change", refreshRegion);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("storage", onStorageChanged);

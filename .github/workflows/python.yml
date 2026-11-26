@@ -125,7 +125,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # A step limit well under the job's 120 minutes (P14, B8; D-P14-5), so
+      # a stalled runner (main's run 45674041047: macos-x86_64 hung on a
+      # python.org download until the job limit) fails in 40 minutes. The
+      # slowest healthy run of this step took 20 minutes (macos-x86_64, run
+      # 45667718977); 40 is twice that.
       - name: Build and test the wheels
+        timeout-minutes: 40
         uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
         with:
           output-dir: wheelhouse
