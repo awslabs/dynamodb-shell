@@ -33,7 +33,8 @@
 //   - promptEntry / createTranscriptAppender / guardedEventSink /
 //     streamSubmission:       the streaming transcript (P12, D-P12-17): the
 //                             prompt echo first, then each engine text event
-//                             appended as it arrives.
+//                             appended as it arrives, then a completion
+//                             prompt (completionPromptText; B10, D-P15-1).
 //   - createTableModel:       the HTML result table's column growth (P12,
 //                             D-P12-25): rows events -> DOM-free plans.
 //   - OUTPUT_CHOICES / JSON_FLAVOR_CHOICES / jsonFlavorApplies /
@@ -209,11 +210,13 @@ export function promptEntry(prompt, input) {
  */
 export function createTranscriptAppender({ createBlock, appendText, isAttached, createTable, applyTablePlan }) {
     let current = null; // {kind, block, model?} of the block the next same-kind output joins.
+    let idle = null; // {block, text} of the completion prompt painted last (B10), until anything follows it.
 
     function write(kind, text) {
         if (typeof text !== "string" || text.length === 0) {
             return;
         }
+        idle = null;
         if (current === null || current.kind !== kind || !isAttached(current.block)) {
             current = { kind, block: createBlock(kind) };
         }
@@ -224,6 +227,7 @@ export function createTranscriptAppender({ createBlock, appendText, isAttached, 
         if (typeof createTable !== "function" || typeof applyTablePlan !== "function") {
             return;
         }
+        idle = null;
         if (current === null || current.kind !== "table" || !isAttached(current.block)) {
             current = { kind: "table", block: createTable(), model: createTableModel() };
         }
@@ -234,13 +238,44 @@ export function createTranscriptAppender({ createBlock, appendText, isAttached, 
         /** Append `text` as `kind` ("stdout" or "stderr"). */
         write,
 
-        /** Start the submission with its prompt echo (see promptEntry). */
+        /**
+         * Start the submission with its prompt echo (see promptEntry). When
+         * the last thing painted is a completion prompt (idlePrompt) that is
+         * still attached and reads exactly `promptText`, the echo is typed
+         * onto that line, as in the CLI, so the prompt is not shown twice.
+         * Otherwise the echo opens its own block.
+         */
         prompt(promptText, input) {
             const echo = promptEntry(promptText, input);
-            if (echo !== null) {
-                current = null; // the echo always opens its own block.
-                write(echo.kind, echo.text);
+            if (echo === null) {
+                return;
             }
+            const pending = idle;
+            idle = null;
+            if (pending !== null && pending.text === promptText && isAttached(pending.block)) {
+                appendText(pending.block, echo.text.slice(promptText.length));
+                current = { kind: echo.kind, block: pending.block };
+                return;
+            }
+            current = null; // the echo opens its own block.
+            write(echo.kind, echo.text);
+        },
+
+        /**
+         * Paint the completion prompt that ends a submission (B10, D-P15-1):
+         * a new "prompt" block holding exactly `text` (for example
+         * "us-east-1> ", no newline). It always opens its own block, and the
+         * next submission's echo joins it (see prompt). Empty text paints
+         * nothing.
+         */
+        idlePrompt(text) {
+            if (typeof text !== "string" || text.length === 0) {
+                return;
+            }
+            const block = createBlock("prompt");
+            appendText(block, text);
+            current = null; // nothing else joins the completion prompt.
+            idle = { block, text };
         },
 
         /**
@@ -399,26 +434,51 @@ function errorMessage(e) {
 }
 
 /**
+ * The completion prompt's text (B10, D-P15-1): what `nextPrompt` returns, or
+ * `fallback` when it is missing, throws or returns no string. Never throws.
+ *
+ * @param {(() => string) | undefined} nextPrompt
+ * @param {string} fallback  the submission's echo prompt.
+ * @returns {string}
+ */
+export function completionPromptText(nextPrompt, fallback) {
+    if (typeof nextPrompt !== "function") {
+        return fallback;
+    }
+    try {
+        const text = nextPrompt();
+        return typeof text === "string" && text.length > 0 ? text : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+/**
  * Run one submission through the engine's streaming entry point and write its
  * transcript as the output arrives (P12, D-P12-17):
  *   1. the prompt echo, before the engine runs;
  *   2. each `text` event, appended through `appender` while the next request
  *      is in flight;
  *   3. an `internal error: …` block after the run when the event callback
- *      threw (guardedEventSink) or runStreaming itself failed.
+ *      threw (guardedEventSink) or runStreaming itself failed;
+ *   4. when `nextPrompt` is given, a completion prompt last, on every path
+ *      (B10, D-P15-1). It is read after the run has ended, so it shows the
+ *      region a CONNECT in the submission switched to; if `nextPrompt`
+ *      throws, the echo's prompt is used.
  * The event callback touches only `appender` (the DOM in the page), never the
  * module or the session, which are busy on the stack (D-P6e-2).
  *
  * @param {{session: {runStreaming: Function}, prompt: string, text: string,
  *          appender: ReturnType<typeof createTranscriptAppender>,
- *          options?: object}} args
+ *          options?: object, nextPrompt?: () => string}} args
  * @returns {Promise<{ok: boolean, status: number} | null>} the run's status,
  *          or null when runStreaming threw.
  */
-export async function streamSubmission({ session, prompt, text, appender, options = {} }) {
+export async function streamSubmission({ session, prompt, text, appender, options = {}, nextPrompt }) {
     appender.prompt(prompt, text);
     const sink = guardedEventSink((ev) => appender.event(ev));
     let result;
+    let threw = false;
     try {
         result = session.runStreaming(text, options, sink.emit);
         if (result && typeof result.then === "function") {
@@ -426,10 +486,14 @@ export async function streamSubmission({ session, prompt, text, appender, option
         }
     } catch (e) {
         appender.write("stderr", `internal error: ${errorMessage(e)}\n`);
-        return null;
+        threw = true;
+        result = null;
     }
-    if (sink.error !== null) {
+    if (!threw && sink.error !== null) {
         appender.write("stderr", `internal error: ${errorMessage(sink.error)}\n`);
+    }
+    if (typeof nextPrompt === "function") {
+        appender.idlePrompt(completionPromptText(nextPrompt, prompt));
     }
     return result ? { ok: result.ok, status: result.status } : null;
 }

@@ -22,9 +22,10 @@
 // table's column growth (createTableModel and the appender's rows/end
 // handling, D-P12-25), and the output dropdowns (outputOptions, D-P12-26);
 // and the P14 "experimental software" notice (createCredentialNotice and the
-// index.html / app.js wiring, B9; D-P14-2..4).
-// streamSubmission and the engine's rows events are tested against the built
-// engine in streaming.test.mjs.
+// index.html / app.js wiring, B9; D-P14-2..4); and the P15 completion prompt
+// (idlePrompt, completionPromptText and streamSubmission's nextPrompt, with a
+// fake session; B10, D-P15-1). streamSubmission and the engine's rows events
+// are also tested against the built engine in streaming.test.mjs.
 
 import { readFileSync } from "node:fs";
 
@@ -32,6 +33,7 @@ import { ALLOWED_HOSTS } from "./vendor/aws-sdk/allowed-hosts.mjs";
 import {
     buildPrompt,
     buildTranscriptEntries,
+    completionPromptText,
     busyFinishedText,
     busyRetryAnnouncement,
     busyText,
@@ -46,6 +48,7 @@ import {
     outputOptions,
     isThrottlingError,
     promptEntry,
+    streamSubmission,
     THROTTLING_ERROR_CODES,
     credentialEnvironmentProblem,
     credentialStatus,
@@ -762,6 +765,162 @@ eq(promptEntry("p> ", ""), null, "promptEntry: nothing for an empty input");
     g2.emit({});
     check(g2.error === undefined, "a thrown undefined is kept as thrown (not mistaken for none)");
     eq(guardedEventSink(() => {}).error, null, "a callback that never throws leaves error null");
+}
+
+// ---- completion prompt (B10, D-P15-1) ---------------------------------------
+console.log("completion prompt");
+{
+    // A plain-object transcript and a fake session: runStreaming emits the
+    // scripted events, and a CONNECT changes the region it reports after.
+    function transcript() {
+        const blocks = [];
+        const appender = createTranscriptAppender({
+            createBlock: (kind) => {
+                const b = { kind, text: "", attached: true };
+                blocks.push(b);
+                return b;
+            },
+            appendText: (b, t) => {
+                b.text += t;
+            },
+            isAttached: (b) => b.attached,
+        });
+        const view = () => blocks.filter((b) => b.attached).map((b) => [b.kind, b.text]);
+        return { blocks, appender, view };
+    }
+    function fakeSession({ region = "us-east-1", events = [], after = {}, throws = null, async = false } = {}) {
+        const s = { reg: region, ep: false };
+        s.region = () => s.reg;
+        s.endpointOverridden = () => s.ep;
+        s.runStreaming = (text, options, emit) => {
+            if (throws !== null) {
+                throw throws;
+            }
+            for (const ev of events) {
+                emit(ev);
+            }
+            if (after.region) {
+                s.reg = after.region;
+            }
+            if (after.endpoint) {
+                s.ep = true;
+            }
+            const result = { ok: true, status: 0 };
+            return async ? Promise.resolve(result) : result;
+        };
+        return s;
+    }
+    const out = (text) => ({ type: "text", stream: "stdout", text });
+    const err = (text) => ({ type: "text", stream: "stderr", text });
+    async function run(t, session, text, extra = {}) {
+        const prompt = buildPrompt(session.region(), session.endpointOverridden());
+        const nextPrompt = () => buildPrompt(session.region(), session.endpointOverridden());
+        return streamSubmission({ session, prompt, text, appender: t.appender, nextPrompt, ...extra });
+    }
+
+    {
+        const t = transcript();
+        await run(t, fakeSession({ events: [out("{a: 1}\n")], async: true }), "select * from t;");
+        eq(t.view(), [["prompt", "us-east-1> select * from t;"], ["stdout", "{a: 1}\n"], ["prompt", "us-east-1> "]],
+            "success: echo, output, then a completion prompt");
+    }
+    {
+        const t = transcript();
+        await run(t, fakeSession({ events: [err("Table: x not found\n")] }), "select * from x;");
+        eq(t.view(), [["prompt", "us-east-1> select * from x;"], ["stderr", "Table: x not found\n"],
+            ["prompt", "us-east-1> "]], "statement error: echo, stderr, then a completion prompt");
+    }
+    {
+        const t = transcript();
+        await run(t, fakeSession({ events: [out("INSERT\n"), out("INSERT\n")] }), "insert a;\ninsert b;");
+        eq(t.view(), [["prompt", "us-east-1> insert a;\nus-east-1> insert b;"], ["stdout", "INSERT\nINSERT\n"],
+            ["prompt", "us-east-1> "]], "multi-statement: one completion prompt for the whole submission");
+    }
+    {
+        const t = transcript();
+        await run(t, fakeSession({ events: [out("CONNECT\n")], after: { region: "us-west-2" } }), "connect us-west-2;");
+        eq(t.view(), [["prompt", "us-east-1> connect us-west-2;"], ["stdout", "CONNECT\n"], ["prompt", "us-west-2> "]],
+            "CONNECT: the completion prompt shows the new region");
+    }
+    {
+        const t = transcript();
+        await run(t, fakeSession({ events: [out("CONNECT\n")], after: { region: "us-west-2", endpoint: true } }),
+            "connect us-west-2 with endpoint \"https://localhost:8000\";");
+        eq(t.view().at(-1), ["prompt", "us-west-2(*)> "], "CONNECT WITH ENDPOINT: the completion prompt has (*)");
+    }
+    {
+        const t = transcript();
+        const status = await run(t, fakeSession({ throws: new Error("boom") }), "x;");
+        eq(status, null, "runStreaming throwing still returns null");
+        eq(t.view(), [["prompt", "us-east-1> x;"], ["stderr", "internal error: boom\n"], ["prompt", "us-east-1> "]],
+            "runStreaming throws: echo, internal error, then a completion prompt");
+    }
+    {
+        const t = transcript();
+        await streamSubmission({ session: fakeSession({ events: [out("ok\n")] }), prompt: "us-east-1> ", text: "x;",
+            appender: t.appender, nextPrompt: () => { throw new Error("gone"); } });
+        eq(t.view().at(-1), ["prompt", "us-east-1> "], "nextPrompt throwing falls back to the echo's prompt");
+    }
+    {
+        const t = transcript();
+        await streamSubmission({ session: fakeSession({ events: [out("ok\n")] }), prompt: "p> ", text: "x;",
+            appender: t.appender });
+        eq(t.view(), [["prompt", "p> x;"], ["stdout", "ok\n"]], "without nextPrompt, no completion prompt (the P12 shape)");
+    }
+    {
+        const t = transcript();
+        const session = fakeSession({ events: [out("ok\n")] });
+        await run(t, session, "a;");
+        await run(t, session, "b;\nc;");
+        eq(t.view(), [["prompt", "us-east-1> a;"], ["stdout", "ok\n"], ["prompt", "us-east-1> b;\nus-east-1> c;"],
+            ["stdout", "ok\n"], ["prompt", "us-east-1> "]],
+            "the next submission's echo is typed onto the completion prompt: no doubled prompt");
+    }
+    {
+        const t = transcript();
+        const session = fakeSession({ events: [out("CONNECT\n")], after: { region: "us-west-2" } });
+        await run(t, session, "connect us-west-2;");
+        await run(t, session, "show tables;");
+        eq(t.view().slice(2, 3), [["prompt", "us-west-2> show tables;"]],
+            "after a CONNECT the next echo joins the new-region completion prompt");
+    }
+    {
+        const t = transcript();
+        const session = fakeSession({ events: [out("ok\n")] });
+        await run(t, session, "a;");
+        for (const b of t.blocks) {
+            b.attached = false; // the user pressed Clear.
+        }
+        await run(t, session, "b;");
+        eq(t.view(), [["prompt", "us-east-1> b;"], ["stdout", "ok\n"], ["prompt", "us-east-1> "]],
+            "after Clear the echo opens a new block");
+    }
+    {
+        const t = transcript();
+        t.appender.idlePrompt("us-east-1> ");
+        t.appender.prompt("us-west-2> ", "x;");
+        eq(t.view(), [["prompt", "us-east-1> "], ["prompt", "us-west-2> x;"]],
+            "a completion prompt with different text is not joined");
+        t.appender.idlePrompt("us-east-1> ");
+        t.appender.write("stderr", "internal error: late\n");
+        t.appender.prompt("us-east-1> ", "y;");
+        eq(t.view().slice(-1), [["prompt", "us-east-1> y;"]], "output after a completion prompt stops the next echo joining it");
+        eq(t.view().at(-3), ["prompt", "us-east-1> "], "the earlier completion prompt stays as painted");
+        const before = t.blocks.length;
+        t.appender.idlePrompt("");
+        eq(t.blocks.length, before, "an empty completion prompt paints nothing");
+    }
+    eq(completionPromptText(undefined, "p> "), "p> ", "completionPromptText: no function, the fallback");
+    eq(completionPromptText(() => 42, "p> "), "p> ", "completionPromptText: a non-string, the fallback");
+    eq(completionPromptText(() => "q> ", "p> "), "q> ", "completionPromptText: the function's text");
+    // app.js wiring: one appender for the page, the completion prompt read after the run.
+    const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+    check(/appender: pageTranscript\(\), nextPrompt \}\)/.test(app), "app.js passes the page appender and nextPrompt");
+    check(/const nextPrompt = \(\) => buildPrompt\(session\.region\(\), session\.endpointOverridden\(\)\);/.test(app),
+        "app.js builds the completion prompt from the session's live region and endpoint");
+    check(/appender\.idlePrompt\(completionPromptText\(nextPrompt, ""\)\)/.test(app),
+        "app.js ends an outer internal error with a completion prompt too");
+    eq((app.match(/createDomTranscriptAppender\(\)/g) || []).length, 2, "app.js defines the DOM appender and creates it once");
 }
 
 // ---- throttling codes (P12, D-P12-18) -----------------------------------------

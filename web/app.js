@@ -61,6 +61,7 @@ import {
     JSON_FLAVOR_CHOICES,
     OUTPUT_CHOICES,
     buildPrompt,
+    completionPromptText,
     createBusyClock,
     createCredentialNotice,
     credentialEnvironmentProblem,
@@ -256,6 +257,17 @@ function createDomTranscriptAppender() {
         }),
         applyTablePlan: (t, plan) => paintTranscript(() => applyTablePlan(t, plan)),
     });
+}
+
+// One appender for the page, not one per submission: it remembers the
+// completion prompt the last submission painted, so the next submission's echo
+// is typed onto that line instead of under it (B10, D-P15-1).
+let transcript = null;
+function pageTranscript() {
+    if (transcript === null) {
+        transcript = createDomTranscriptAppender();
+    }
+    return transcript;
 }
 
 // Apply one createTableModel plan (app-core) to a result table.
@@ -482,14 +494,17 @@ async function submit(text, { addToHistory }) {
         return; // a submission is already in flight; ignore this one.
     }
     setBusy(true);
+    const nextPrompt = () => buildPrompt(session.region(), session.endpointOverridden());
     try {
         // Capture the prompt BEFORE running: a CONNECT inside the submission
         // may change the region, but the echo reflects the region as typed.
         // streamSubmission paints the echo first, then each piece of output
         // as it arrives, then any internal error (P12, D-P12-17).
+        // The completion prompt (B10, D-P15-1) is read after the run, so it
+        // shows the region a CONNECT in the submission switched to.
         const prompt = buildPrompt(session.region(), session.endpointOverridden());
         const options = outputOptions(els.outputSelect.value, els.flavorSelect.value);
-        await streamSubmission({ session, prompt, text, options, appender: createDomTranscriptAppender() });
+        await streamSubmission({ session, prompt, text, options, appender: pageTranscript(), nextPrompt });
         // History keeps the input even when runStreaming itself threw
         // (streamSubmission reported it and returned null): the user typed
         // it, and recalling it to retry is the useful behavior (P12 N9).
@@ -501,8 +516,10 @@ async function submit(text, { addToHistory }) {
         // An unexpected JS failure outside the run (engine errors arrive as
         // stderr events; streamSubmission reports a failure of the run
         // itself). Surface it rather than losing it.
-        appendEntries([{ text: `internal error: ${e && e.message ? e.message : e}\n`,
-                         kind: "stderr" }]);
+        // The submission still ends with a completion prompt (B10).
+        const appender = pageTranscript();
+        appender.write("stderr", `internal error: ${e && e.message ? e.message : e}\n`);
+        appender.idlePrompt(completionPromptText(nextPrompt, ""));
     } finally {
         guard.end();
         setBusy(false); // first, so the busy indicator clears even if a refresh below throws.
