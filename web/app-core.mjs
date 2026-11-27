@@ -240,10 +240,13 @@ export function createTranscriptAppender({ createBlock, appendText, isAttached, 
 
         /**
          * Start the submission with its prompt echo (see promptEntry). When
-         * the last thing painted is a completion prompt (idlePrompt) that is
-         * still attached and reads exactly `promptText`, the echo is typed
-         * onto that line, as in the CLI, so the prompt is not shown twice.
-         * Otherwise the echo opens its own block.
+         * the last thing this appender painted is a completion prompt
+         * (idlePrompt; any write or rows clears it) that is still attached
+         * and reads exactly `promptText`, the echo is typed onto that line,
+         * as in the CLI, so the prompt is not shown twice. The page paints
+         * the result pane only through this appender after init, so that is
+         * also the last thing in the pane. Otherwise the echo opens its own
+         * block.
          */
         prompt(promptText, input) {
             const echo = promptEntry(promptText, input);

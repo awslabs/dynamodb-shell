@@ -1104,6 +1104,37 @@ TEST(TimelyOutput, SplitExplainBulkUpdatePrintsEachLegsBlocksInOrder) {
     EXPECT_EQ(log, expected);
 }
 
+TEST(TimelyOutput, SplitExplainBulkDeletePrintsBothQueryBlocksAndRunsNothing) {
+    // EXPLAIN DELETE via QUERY prints the Query blocks only and runs nothing
+    // (the v0.8.1 asymmetry, §8.3). A sort-key not-equal split runs two
+    // Queries, so both blocks print: lower leg, then upper leg (D-P15-8).
+    Log log;
+    RecordingClient client(log);
+    client.set_table(table("t", TableKeySchema{{"pk"}, {"sk"}}));
+    client.set_explain_body("{}");
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(
+        stream(session, "explain delete from t where pk = 1 and sk <> 5;", sink).has_value());
+    const Log expected{
+        "call:DescribeTable:t",
+        "emit:Query({})|",
+        "emit:Query({})|",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+    EXPECT_TRUE(client.query_requests().empty());
+    EXPECT_TRUE(client.delete_item_requests().empty());
+    const auto& explained = client.explain_requests();
+    ASSERT_EQ(explained.size(), 2u);
+    const auto* lower = std::get_if<ddbsh::QueryIn>(&explained[0]);
+    const auto* upper = std::get_if<ddbsh::QueryIn>(&explained[1]);
+    ASSERT_NE(lower, nullptr);
+    ASSERT_NE(upper, nullptr);
+    EXPECT_EQ(lower->key_condition_expression, "#abaa1 = :vbaa1 AND #abaa2 < :vbaa2");
+    EXPECT_EQ(upper->key_condition_expression, "#abaa1 = :vbaa1 AND #abaa2 > :vbaa2");
+}
+
 // ---- Buffered shapes (D-P12-15) ---------------------------------------------
 
 TEST(TimelyOutput, BufferedReportsKeepTheirSingleOutcomeShape) {

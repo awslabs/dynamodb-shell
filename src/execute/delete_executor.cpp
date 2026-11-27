@@ -143,13 +143,22 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
 
     // EXPLAIN DELETE via QUERY: emit the Query block ONLY and do not run it
     // (delete.cpp do_query guards the loop behind !explaining()). This is the
-    // reproduced asymmetry (§8.3).
+    // reproduced asymmetry (§8.3). A sort-key not-equal split (D-P15-8) runs
+    // two Queries, so EXPLAIN prints both Query blocks, lower leg first, and
+    // still no DeleteItem blocks.
     if (explain && read.api == WriteReadApi::query) {
         auto body = client.explain_request(read.query);
         if (!body.has_value()) {
             return fail(body.error());
         }
         emit_explain_block(sink, "Query", std::move(*body));
+        if (read.query_upper.has_value()) {
+            auto upper = client.explain_request(*read.query_upper);
+            if (!upper.has_value()) {
+                return fail(upper.error());
+            }
+            emit_explain_block(sink, "Query", std::move(*upper));
+        }
         return {};
     }
 

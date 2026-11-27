@@ -44,6 +44,7 @@
 #   ine-ne-lsi-rows                            l <> 5: sk 1 2 3 4 6 7 8 9
 #   ine-ne-gsi-rows, ine-ne-cgsi-rows          h <> 5: sk 1 2 3 4 6 7 8 9
 #   ine-ne-cgsi-last-rows                      h = 5 and r <> 5: none
+#   ine-ne-cgsi-last-hit-rows                  h = 5 and r <> 4: sk 5
 #   ine-ne-string-rows                         apple, cherry
 #   ine-ne-type-rows                           pk 2: sk 3 (a Scan)
 #   ine-ne-order, ine-ne-json                  sk 1 2 3 4 6 7 8 9, in that order
@@ -98,7 +99,10 @@ add_test(NAME ine-explain-ne-type COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-t
 add_test(NAME ine-explain-ne-cgsi-mid COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-cgsi-mid.exp -c "explain select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5 and r = 5;")
 add_test(NAME ine-explain-ne-cgsi-partial COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-cgsi-partial.exp -c "explain select * from ddbsh_ne.ne_cgsi where g = \"a\" and h <> 5;")
 
-# --- EXPLAIN: bulk writes enumerate both legs (per leg: Query, then its writes) ---
+# --- EXPLAIN: bulk writes show both legs ---------------------------------------------
+# UPDATE prints per leg the Query block, then that leg's UpdateItem blocks.
+# DELETE prints both Query blocks (lower leg, then upper) and no DeleteItem
+# blocks: v0.8.1's EXPLAIN DELETE via QUERY prints the Query and runs nothing.
 add_test(NAME ine-explain-update COMMAND ddbshtest -q -T ${RD}/ine-explain-update.exp -c "explain update ddbsh_ne_w set u = 1 where pk = 1 and sk <> 5;")
 add_test(NAME ine-explain-delete COMMAND ddbshtest -q -T ${RD}/ine-explain-delete.exp -c "explain delete from ddbsh_ne_w where pk = 1 and sk != 5;")
 
@@ -117,6 +121,7 @@ add_test(NAME ine-ne-lsi-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-lsi-rows.e
 add_test(NAME ine-ne-gsi-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-gsi-rows.exp -c "select sk from ddbsh_ne.ne_gsi where g = \"a\" and h <> 5;")
 add_test(NAME ine-ne-cgsi-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-gsi-rows.exp -c "select sk from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5;")
 add_test(NAME ine-ne-cgsi-last-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-cgsi-last-rows.exp -c "select sk from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h = 5 and r <> 5;")
+add_test(NAME ine-ne-cgsi-last-hit-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-cgsi-last-hit-rows.exp -c "select sk from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h = 5 and r <> 4;")
 add_test(NAME ine-ne-string-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-string-rows.exp -c "select sk from ddbsh_ne_s where pk = 1 and sk <> \"banana\";")
 add_test(NAME ine-ne-type-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-type-rows.exp -c "select sk from ddbsh_ne where pk = 2 and sk <> \"x\";")
 add_test(NAME ine-ne-order COMMAND ddbshtest -q -T ${RD}/ine-ne-order.exp -c "select sk from ddbsh_ne where pk = 1 and sk <> 5;")
