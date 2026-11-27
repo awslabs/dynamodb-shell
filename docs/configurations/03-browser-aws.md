@@ -33,6 +33,11 @@ the native binary. The whole golden test suite runs through this path
 - **Output appears as it arrives.** Each result row or line is added to the
   transcript as soon as the response that completes it arrives, so a
   `show tables;` over many tables, or a long scan, fills in while it runs.
+- **A fresh prompt marks the end of each run.** When a submission finishes,
+  on success or on an error, the transcript shows a new prompt line such as
+  `us-east-1> `, as the CLI does. It shows the region a `CONNECT` in the
+  submission switched to, with `(*)` after a `CONNECT ... WITH ENDPOINT`. The
+  next submission's text is echoed onto that line.
 - **The editor** at the bottom opens at a fifth of the window's height; drag
   its corner to make it taller, up to 40%. Ctrl-Enter (⌘-Enter on a Mac) runs
   everything in it, Enter starts a new line, and the up and down arrows recall
@@ -233,7 +238,7 @@ session never keeps talking to the previous target by mistake.
 
 ```
 us-east-1> show connection;
-ddbsh - version 0.12.8
+ddbsh - version 0.12.9
 Region: us-east-1
 Endpoint: (default)
 Backend: wire/aws-sdk-js 3.1174.0 -> https://dynamodb.us-east-1.amazonaws.com (default); credentials ASIA…WXYZ expires 2026-11-20T23:03:00.000Z

@@ -1,0 +1,36 @@
+Query({
+   "TableName":   "ddbsh_ne",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk",
+      "#aaaa2":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+Query({
+   "TableName":   "ddbsh_ne",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk",
+      "#aaaa2":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})

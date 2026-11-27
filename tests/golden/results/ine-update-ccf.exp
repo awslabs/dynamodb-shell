@@ -1,0 +1,3 @@
+REPLACE
+UPDATE (0 read, 0 modified, 1 ccf)
+{pk: 1, sk: 2}

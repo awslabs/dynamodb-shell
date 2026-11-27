@@ -1,17 +1,17 @@
 Scan({
-   "TableName":   "isel1",
+   "TableName":   "ddbsh_ne",
    "ReturnConsumedCapacity":   "NONE",
-   "FilterExpression":   "#aaaa1 = :vaaa1 AND NOT (#aaaa2 = :vaaa2)",
+   "FilterExpression":   "NOT ((#aaaa1 = :vaaa1 AND #aaaa2 <> :vaaa2))",
    "ExpressionAttributeNames":   {
-      "#aaaa1":   "a",
-      "#aaaa2":   "b"
+      "#aaaa1":   "pk",
+      "#aaaa2":   "sk"
    },
    "ExpressionAttributeValues":   {
       ":vaaa1":   {
-         "N":   "2"
+         "N":   "1"
       },
       ":vaaa2":   {
-         "N":   "3"
+         "N":   "5"
       }
    },
    "ConsistentRead":   false

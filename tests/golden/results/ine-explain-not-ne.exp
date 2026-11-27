@@ -1,0 +1,13 @@
+GetItem({
+   "TableName":   "ddbsh_ne",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "5"
+      }
+   },
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE"
+})

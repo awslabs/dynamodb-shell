@@ -284,6 +284,24 @@ us-east-1>
 
 SELECT will execute either a GetItem(), Query() or Scan() depending on whether the request specifies a complete primary key (or not) and whether the request targets a table or index.
 
+A not-equal on the sort key (`<>`, `!=` or `NOT sk = value`) is not allowed in a DynamoDB key condition. When the partition key is given with `=` and the not-equal is the only condition on the sort key, SELECT runs two Queries instead of a Scan: one for the items below the value, then one for the items above it, each with the same filter for the other conditions. Rows come back in sort-key order, as from one Query, and EXPLAIN prints both Query() requests. The same applies to a `table.index` and the index's sort key (for a composite-key GSI, the last sort-key attribute given). UPDATE, UPSERT and DELETE find the items to change the same way.
+
+The statement stays a Scan when the split cannot be written as two key conditions: the sort key also has another condition (for example `sk <> 5 and sk > 2`), the not-equal is under OR or a negated group, the value is not of the sort key's type, or the not-equal is on the partition key or on a composite sort-key attribute other than the last one given.
+
+```
+us-east-1> explain select * from t where pk = 1 and sk <> 5;
+Query({
+   ...
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2",
+   ...
+})
+Query({
+   ...
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2",
+   ...
+})
+```
+
 ## UPDATE
 
 **Purpose:** Update items in a table.

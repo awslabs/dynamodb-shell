@@ -11,7 +11,7 @@ You can use a WHERE clause with SELECT, UPDATE, DELETE and UPSERT.  In the WHERE
 
 The following logical expressions are supported.
 
-* Logical comparison of the form attribute op value where attribute is a table attribute, op is one of <, >, <=, >=, = or !=
+* Logical comparison of the form attribute op value where attribute is a table attribute, op is one of <, >, <=, >=, =, != or <>. `!=` and `<>` are the same operator; a filter or condition keeps the spelling you typed (`#a <> :v` for `<>`, `NOT (#a = :v)` for `!=`), and both plan the same way (see [SELECT](dml.md#select) for a not-equal on the sort key)
 * attribute_exists(attr) which evaluates to true if attr exists in an item
 * begins_with(attr, prefix) which evaluates to true if the attr begins with prefix
 * attr between value and value which evaluates to true if attr is between the two values provided

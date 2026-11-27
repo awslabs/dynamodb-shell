@@ -1,0 +1,246 @@
+Query({
+   "TableName":   "ddbsh_ne_w",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1, #abaa2",
+   "KeyConditionExpression":   "#abaa1 = :vbaa1 AND #abaa2 < :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "1"
+      },
+      ":vbaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "1"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "2"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "3"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "4"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+Query({
+   "TableName":   "ddbsh_ne_w",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1, #abaa2",
+   "KeyConditionExpression":   "#abaa1 = :vbaa1 AND #abaa2 > :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "1"
+      },
+      ":vbaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "6"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "7"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "8"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+UpdateItem({
+   "TableName":   "ddbsh_ne_w",
+   "Key":   {
+      "pk":   {
+         "N":   "1"
+      },
+      "sk":   {
+         "N":   "9"
+      }
+   },
+   "UpdateExpression":   "SET #aaaa1 = :vaaa1",
+   "ConditionExpression":   "attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "u",
+      "#aaaa2":   "pk",
+      "#aaaa3":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
