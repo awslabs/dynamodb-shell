@@ -224,18 +224,30 @@ public:
 
     Result<QueryOut> query(const QueryIn& in) override {
         ++read_calls_;
+        query_requests_.push_back(in);
         QueryOut out;
         std::size_t page = page_index(in.exclusive_start_key);
         if (read_error_.has_value() && page == read_error_at_page_) {
             return fail(*read_error_);
         }
-        if (page < pages_.size()) {
-            out.items = pages_[page];
+        const auto& pages = query_pages_for(in.key_condition_expression);
+        if (page < pages.size()) {
+            out.items = pages[page];
         }
-        out.last_evaluated_key = next_cursor(page);
+        out.last_evaluated_key = next_cursor(page, pages.size());
         out.consumed_capacity = consumed_capacity_;
         return out;
     }
+
+    /// Pages served to a query whose KeyConditionExpression is exactly `kc`,
+    /// in place of set_pages/set_items (the two legs of a not-equal split
+    /// read different pages; P15, D-P15-8).
+    void set_query_pages(std::string kc, std::vector<std::vector<ItemRow>> pages) {
+        query_pages_[std::move(kc)] = std::move(pages);
+    }
+
+    /// Every query request, in order.
+    const std::vector<QueryIn>& query_requests() const { return query_requests_; }
 
     Result<ScanOut> scan(const ScanIn& in) override {
         ++read_calls_;
@@ -687,8 +699,17 @@ private:
         return 0;
     }
 
+    const std::vector<std::vector<ItemRow>>& query_pages_for(const std::string& kc) const {
+        auto it = query_pages_.find(kc);
+        return it != query_pages_.end() ? it->second : pages_;
+    }
+
     std::optional<ValueMap> next_cursor(std::size_t page) const {
-        if (page + 1 >= pages_.size()) {
+        return next_cursor(page, pages_.size());
+    }
+
+    std::optional<ValueMap> next_cursor(std::size_t page, std::size_t page_count) const {
+        if (page + 1 >= page_count) {
             return std::nullopt;  // last (or only) page
         }
         ValueMap key;
@@ -707,6 +728,8 @@ private:
     std::map<std::string, Error> auto_scaling_errors_;
     std::optional<ItemRow> get_item_;
     std::vector<std::vector<ItemRow>> pages_;
+    std::map<std::string, std::vector<std::vector<ItemRow>>> query_pages_;
+    std::vector<QueryIn> query_requests_;
     std::optional<ConsumedCapacity> consumed_capacity_;
     SearchVectorsOut search_vectors_out_;
     std::optional<Error> search_vectors_error_;

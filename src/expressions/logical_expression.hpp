@@ -45,9 +45,20 @@ using KeyMap = std::map<std::string, Value>;
 /// lhs is in pk ∪ sk, else into the FilterExpression. A single-attribute key
 /// reduces to `pk == {p}`, `sk == {}` or `{r}` — byte-identical to the old
 /// scalar path.
+///
+/// A not-equal split (P15, D-P15-8 Rule 2): when the clause's only predicate
+/// on the last sort-key prefix attribute is a not-equal, the Query is issued
+/// twice, once for each side of the value. `ne_split` names that attribute;
+/// `leg` says which side this rendering is for (`lower` renders `#sk < :v`,
+/// `upper` renders `#sk > :v`). The defaults (no split) keep every other call
+/// site's meaning.
+enum class NeLeg { none, lower, upper };
+
 struct KeySchemaView {
     const std::vector<std::string>& pk;
     const std::vector<std::string>& sk;
+    const std::string* ne_split = nullptr;
+    NeLeg leg = NeLeg::none;
 };
 
 /// Membership test: is `name` one of the attributes in `list`?
@@ -80,7 +91,7 @@ public:
     std::string query_key_condition_expression(const KeySchemaView& ks, SymbolTable* st) {
         std::string rv = do_query_key_condition_expression(ks, st);
         if (!rv.empty()) {
-            return m_negate ? "NOT (" + rv + ")" : rv;
+            return negate_in_key_condition() ? "NOT (" + rv + ")" : rv;
         }
         return rv;
     }
@@ -126,6 +137,12 @@ public:
     virtual KeyMap get_gud_key(const std::string& /*pk*/, const std::string& /*rk*/) const {
         return {};
     }
+    /// The right-hand value of a not-equal on `lhs` (`lhs <> v`, `lhs != v`,
+    /// `NOT lhs = v`) that is a conjunct of the top-level, non-negated AND
+    /// chain, or nullptr. A not-equal under OR or a negated AND is never
+    /// found. The planner uses it to split a Query on a sort-key not-equal
+    /// (P15, D-P15-8 Rule 2). Overridden in comparison and AND.
+    virtual const Value* ne_key_value(const std::string& /*lhs*/) const { return nullptr; }
 
     /// True if the whole subtree is legal inside a Query for the given key
     /// schema (arch §8); AND/OR descend, leaves answer for their own lhs. The
@@ -159,6 +176,12 @@ public:
     }
 
 protected:
+    /// Whether query_key_condition_expression wraps this node's key condition
+    /// in `NOT (...)`. Default: when the node is negated (the original's
+    /// template method). A comparison overrides it so a not-equal split leg
+    /// and a `NOT x <> v` key equality render without the wrapper (P15).
+    virtual bool negate_in_key_condition() const { return m_negate; }
+
     bool m_negate = false;
     bool m_parens = false;
     std::string m_node_type;

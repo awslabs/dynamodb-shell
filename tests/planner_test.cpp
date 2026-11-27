@@ -472,4 +472,175 @@ TEST(Planner, MissingIndexIsNoSuchTable) {
     EXPECT_EQ(plan.error().code, ddbsh::Errc::no_such_table);
 }
 
+// ---- not-equal on a sort key (P15, B6, D-P15-8) --------------------------------
+//
+// `<>`, `!=` and `NOT x = v` are one operator. With the hash key `=` and a
+// single not-equal on the (last) sort key, the plan is two Queries: `< v`, then
+// `> v`, otherwise identical. The tables mirror the `ine-*` golden family's
+// seed (tests/golden/families/not-equal.txt).
+
+// ddbsh_ne: (pk N HASH, sk N RANGE), LSI ne_lsi (pk, l), GSI ne_gsi (g, h),
+// composite GSI ne_cgsi ((g, q) HASH, (h, r) RANGE); declared types as the
+// real table reports them.
+DescribeTableOut ne_table() {
+    DescribeTableOut t;
+    t.table_name = "ddbsh_ne";
+    t.key_schema = TableKeySchema{{"pk"}, {"sk"}};
+    t.local_secondary_indexes.push_back(
+        SecondaryIndexSchema{.index_name = "ne_lsi", .key_schema = TableKeySchema{{"pk"}, {"l"}}});
+    t.global_secondary_indexes.push_back(
+        SecondaryIndexSchema{.index_name = "ne_gsi", .key_schema = TableKeySchema{{"g"}, {"h"}}});
+    t.global_secondary_indexes.push_back(SecondaryIndexSchema{
+        .index_name = "ne_cgsi", .key_schema = TableKeySchema{{"g", "q"}, {"h", "r"}}});
+    using ddbsh::AttributeDef;
+    using ddbsh::ScalarType;
+    t.attribute_definitions = {AttributeDef{"pk", ScalarType::n}, AttributeDef{"sk", ScalarType::n},
+                               AttributeDef{"l", ScalarType::n},  AttributeDef{"g", ScalarType::s},
+                               AttributeDef{"h", ScalarType::n},  AttributeDef{"q", ScalarType::s},
+                               AttributeDef{"r", ScalarType::n}};
+    return t;
+}
+
+// The two legs differ only in the key condition.
+void expect_legs_match(const ddbsh::QueryIn& lower, const ddbsh::QueryIn& upper) {
+    EXPECT_EQ(lower.table_name, upper.table_name);
+    EXPECT_EQ(lower.index_name, upper.index_name);
+    EXPECT_EQ(lower.filter_expression, upper.filter_expression);
+    EXPECT_EQ(lower.projection_expression, upper.projection_expression);
+    EXPECT_EQ(lower.expression_attribute_names, upper.expression_attribute_names);
+    ASSERT_EQ(lower.expression_attribute_values.size(), upper.expression_attribute_values.size());
+    for (std::size_t i = 0; i < lower.expression_attribute_values.size(); ++i) {
+        EXPECT_EQ(lower.expression_attribute_values[i].first,
+                  upper.expression_attribute_values[i].first);
+        EXPECT_EQ(lower.expression_attribute_values[i].second.s,
+                  upper.expression_attribute_values[i].second.s);
+    }
+    EXPECT_EQ(lower.consistent_read, upper.consistent_read);
+    EXPECT_EQ(lower.return_consumed_capacity, upper.return_consumed_capacity);
+    EXPECT_FALSE(upper.exclusive_start_key.has_value());
+}
+
+struct NeCase {
+    const char* sql;
+    SelectApi api;
+    bool split;
+    const char* lower_kc;  // the (lower) key condition, when api == query
+};
+
+TEST(PlannerNotEqual, SplitAndNoSplitTable) {
+    const NeCase cases[] = {
+        {"select * from ddbsh_ne where pk = 1 and sk <> 5;", SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2"},
+        {"select * from ddbsh_ne where pk = 1 and sk != 5;", SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2"},
+        {"select * from ddbsh_ne where pk = 1 and not sk = 5;", SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2"},
+        {"select * from ddbsh_ne where sk <> 5 and pk = 1;", SelectApi::query, true,
+         "#aaaa1 < :vaaa1 AND #aaaa2 = :vaaa2"},
+        {"select * from ddbsh_ne where pk = 1 and sk <> 5 and x = 3;", SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2"},
+        {"select * from ddbsh_ne where pk = 1 and x <> 3;", SelectApi::query, false,
+         "#aaaa1 = :vaaa1"},
+        {"select * from ddbsh_ne where pk = 1 and not sk <> 5;", SelectApi::get_item, false, ""},
+        {"select * from ddbsh_ne where pk <> 1;", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk <> 1 and sk = 5;", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk = 1 and sk <> 5 and sk > 2;", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk = 1 and sk <> 5 and sk <> 7;", SelectApi::scan, false,
+         ""},
+        {"select * from ddbsh_ne where pk = 1 and sk <> 5 and begins_with(sk, \"1\");",
+         SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk = 1 and (sk <> 5 or x = 1);", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where not (pk = 1 and sk <> 5);", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk = 1 and sk <> \"x\";", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk = 1 and sk <> null;", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne where pk = 1 and sk is not null;", SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne.ne_lsi where pk = 1 and l <> 5;", SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2"},
+        {"select * from ddbsh_ne.ne_gsi where g = \"a\" and h <> 5;", SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2"},
+        {"select * from ddbsh_ne.ne_gsi where g = \"a\" and sk <> 5;", SelectApi::query, false,
+         "#aaaa1 = :vaaa1"},
+        {"select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5;",
+         SelectApi::query, true, "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 < :vaaa3"},
+        {"select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h = 5 and r <> 5;",
+         SelectApi::query, true,
+         "#aaaa1 = :vaaa1 AND #aaaa2 = :vaaa2 AND #aaaa3 = :vaaa3 AND #aaaa4 < :vaaa4"},
+        {"select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5 and r = 5;",
+         SelectApi::scan, false, ""},
+        {"select * from ddbsh_ne.ne_cgsi where g = \"a\" and h <> 5;", SelectApi::scan, false, ""},
+    };
+    for (const auto& c : cases) {
+        SCOPED_TRACE(c.sql);
+        ddbsh::test::FakeDDBClient client;
+        client.set_table(ne_table());
+        ddbsh::Session session = make_session(client);
+        SelectPlan plan = plan_ok(session, client, c.sql);
+        ASSERT_EQ(plan.api, c.api);
+        EXPECT_EQ(plan.query_upper.has_value(), c.split);
+        if (c.api != SelectApi::query) {
+            continue;
+        }
+        EXPECT_EQ(plan.query.key_condition_expression, c.lower_kc);
+        if (c.split) {
+            std::string upper = c.lower_kc;
+            upper.replace(upper.find(" < "), 3, " > ");
+            EXPECT_EQ(plan.query_upper->key_condition_expression, upper);
+            expect_legs_match(plan.query, *plan.query_upper);
+        }
+    }
+}
+
+TEST(PlannerNotEqual, LegsShareFilterProjectionConsistencyAndCapacity) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(ne_table());
+    ddbsh::Session session = make_session(client);
+    SelectPlan plan =
+        plan_ok(session, client,
+                "select consistent x, sk from ddbsh_ne where pk = 1 and sk <> 5 and x <> 30 "
+                "return consumed capacity total;");
+    ASSERT_EQ(plan.api, SelectApi::query);
+    ASSERT_TRUE(plan.query_upper.has_value());
+    const auto& lo = plan.query;
+    EXPECT_EQ(lo.projection_expression, std::optional<std::string>("#aaaa1, #aaaa2"));
+    EXPECT_EQ(lo.key_condition_expression, "#aaaa3 = :vaaa1 AND #aaaa2 < :vaaa2");
+    EXPECT_EQ(lo.filter_expression, std::optional<std::string>("#aaaa1 <> :vaaa3"));
+    EXPECT_TRUE(lo.consistent_read);
+    EXPECT_EQ(lo.return_consumed_capacity, ReturnConsumedCapacity::total);
+    EXPECT_EQ(plan.query_upper->key_condition_expression, "#aaaa3 = :vaaa1 AND #aaaa2 > :vaaa2");
+    expect_legs_match(lo, *plan.query_upper);
+}
+
+TEST(PlannerNotEqual, BangFilterKeepsItsSpellingOnBothLegs) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(ne_table());
+    ddbsh::Session session = make_session(client);
+    SelectPlan plan =
+        plan_ok(session, client, "select * from ddbsh_ne where pk = 1 and sk != 5 and x != 30;");
+    ASSERT_TRUE(plan.query_upper.has_value());
+    EXPECT_EQ(plan.query.filter_expression, std::optional<std::string>("NOT (#aaaa3 = :vaaa3)"));
+    expect_legs_match(plan.query, *plan.query_upper);
+}
+
+TEST(PlannerNotEqual, IndexLegsCarryIndexName) {
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(ne_table());
+    ddbsh::Session session = make_session(client);
+    SelectPlan plan =
+        plan_ok(session, client, "select * from ddbsh_ne.ne_gsi where g = \"a\" and h <> 5;");
+    ASSERT_TRUE(plan.query_upper.has_value());
+    EXPECT_EQ(plan.query.index_name, std::optional<std::string>("ne_gsi"));
+    EXPECT_EQ(plan.query_upper->index_name, std::optional<std::string>("ne_gsi"));
+}
+
+TEST(PlannerNotEqual, NoDeclaredTypeSplitsAnyScalar) {
+    // FakeDDBClient fixtures without AttributeDefinitions: the type rule has
+    // nothing to check, so a string literal on a sort key splits.
+    ddbsh::test::FakeDDBClient client;
+    client.set_table(table_a_b("t"));
+    ddbsh::Session session = make_session(client);
+    SelectPlan plan = plan_ok(session, client, "select * from t where a = 1 and b <> \"x\";");
+    ASSERT_EQ(plan.api, SelectApi::query);
+    EXPECT_TRUE(plan.query_upper.has_value());
+}
+
 }  // namespace

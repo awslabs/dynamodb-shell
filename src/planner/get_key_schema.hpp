@@ -14,11 +14,13 @@
 #ifndef DDBSH_SRC_PLANNER_GET_KEY_SCHEMA_HPP
 #define DDBSH_SRC_PLANNER_GET_KEY_SCHEMA_HPP
 
+#include <map>
 #include <string>
 #include <vector>
 
 #include "ddbsh/iddbclient.hpp"
 #include "ddbsh/result.hpp"
+#include "ddbsh/table_schema.hpp"
 
 namespace ddbsh::engine {
 
@@ -32,6 +34,10 @@ struct ResolvedKeySchema {
     /// DescribeTable response (equal to pk + rk when no index is named). The
     /// output formats show them first (P12, SelectOutcome::column_hint).
     std::vector<std::string> table_keys{};
+    /// Declared scalar types from the same response's AttributeDefinitions, by
+    /// attribute name (empty when the client reports none). The planner's
+    /// not-equal split checks a literal against them (P15, D-P15-8).
+    std::map<std::string, ScalarType> key_types{};
 };
 
 /// Resolve the key schema for `table` (when `index` is empty) or for the named

@@ -9,10 +9,14 @@ namespace ddbsh::engine {
 
 namespace {
 
-ResolvedKeySchema from_table_key(const TableKeySchema& ks, const TableKeySchema& table) {
+ResolvedKeySchema from_table_key(const TableKeySchema& ks, const DescribeTableOut& desc) {
+    const TableKeySchema& table = desc.key_schema;
     ResolvedKeySchema out{ks.hash_keys, ks.range_keys};
     out.table_keys = table.hash_keys;
     out.table_keys.insert(out.table_keys.end(), table.range_keys.begin(), table.range_keys.end());
+    for (const auto& def : desc.attribute_definitions) {
+        out.key_types.emplace(def.name, def.type);
+    }
     return out;
 }
 
@@ -27,18 +31,18 @@ Result<ResolvedKeySchema> get_key_schema(IDDBClient& client, const std::string& 
     const DescribeTableOut& desc = described.value();
 
     if (index.empty()) {
-        return from_table_key(desc.key_schema, desc.key_schema);
+        return from_table_key(desc.key_schema, desc);
     }
 
     // A named index: LSIs are searched before GSIs (arch §10).
     for (const auto& lsi : desc.local_secondary_indexes) {
         if (lsi.index_name == index) {
-            return from_table_key(lsi.key_schema, desc.key_schema);
+            return from_table_key(lsi.key_schema, desc);
         }
     }
     for (const auto& gsi : desc.global_secondary_indexes) {
         if (gsi.index_name == index) {
-            return from_table_key(gsi.key_schema, desc.key_schema);
+            return from_table_key(gsi.key_schema, desc);
         }
     }
 

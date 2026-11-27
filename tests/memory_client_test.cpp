@@ -255,6 +255,85 @@ TEST(MemoryClientPaging, PagedQueryCrossesBoundaries) {
     EXPECT_EQ(rows->size(), 5u);
 }
 
+// ---- Not-equal (P15, D-P15-8) ------------------------------------------------
+
+// The `ine-*` golden seed's base table: pk 1 with sk 1..9 (x = 10 * sk, except
+// sk 4, which has no x), and pk 2 with sk 3 (x = 30).
+void seed_ne_table(Connection& db) {
+    ASSERT_TRUE(
+        db.exec("create table ne ( pk number, sk number ) primary key ( pk hash, sk range );")
+            .has_value());
+    for (int sk = 1; sk <= 9; ++sk) {
+        const std::string n = std::to_string(sk);
+        const std::string stmt = sk == 4 ? "insert into ne ( pk, sk ) values ( 1, 4 );"
+                                         : "insert into ne ( pk, sk, x ) values ( 1, " + n + ", " +
+                                               std::to_string(10 * sk) + " );";
+        ASSERT_TRUE(db.exec(stmt).has_value());
+    }
+    ASSERT_TRUE(db.exec("insert into ne ( pk, sk, x ) values ( 2, 3, 30 );").has_value());
+}
+
+std::string sks(const ddbsh::RowSet& rows) {
+    std::string out;
+    for (const ddbsh::Row& r : rows) {
+        out += std::to_string(r.get_int("sk").value_or(-1)) + " ";
+    }
+    return out;
+}
+
+TEST(MemoryClientNotEqual, SortKeySplitReturnsTheRowsRealDynamoDbReturns) {
+    // The rows ine-ne-rows / ine-bang-rows pin on real DynamoDB, in order.
+    for (const char* op : {"<>", "!="}) {
+        SCOPED_TRACE(op);
+        MemoryClient client;
+        Connection db(SessionConfig{"us-east-1", ""}, client);
+        seed_ne_table(db);
+        auto rows = db.query(std::string("select * from ne where pk = 1 and sk ") + op + " 5;");
+        ASSERT_TRUE(rows.has_value());
+        EXPECT_EQ(sks(*rows), "1 2 3 4 6 7 8 9 ");
+    }
+}
+
+TEST(MemoryClientNotEqual, SplitAcrossPagesKeepsEveryRow) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    seed_ne_table(db);
+    client.set_page_size(3);
+    auto rows = db.query("select * from ne where pk = 1 and sk <> 5;");
+    ASSERT_TRUE(rows.has_value());
+    EXPECT_EQ(sks(*rows), "1 2 3 4 6 7 8 9 ");
+}
+
+TEST(MemoryClientNotEqual, FilterSpellingsAgreeOnAMissingAttribute) {
+    // sk 4 has no x: `x <> 40` and `x != 40` both keep it, as DynamoDB does
+    // (ine-ne-missing / ine-bang-missing; ivecf-ne-s and ivecf-bang-ne-s).
+    for (const char* op : {"<>", "!="}) {
+        SCOPED_TRACE(op);
+        MemoryClient client;
+        Connection db(SessionConfig{"us-east-1", ""}, client);
+        seed_ne_table(db);
+        auto rows = db.query(std::string("select * from ne where pk = 1 and x ") + op + " 40;");
+        ASSERT_TRUE(rows.has_value());
+        EXPECT_EQ(sks(*rows), "1 2 3 4 5 6 7 8 9 ");
+        auto split =
+            db.query(std::string("select * from ne where pk = 1 and sk <> 5 and x ") + op + " 30;");
+        ASSERT_TRUE(split.has_value());
+        EXPECT_EQ(sks(*split), "1 2 4 6 7 8 9 ");
+    }
+}
+
+TEST(MemoryClientNotEqual, BulkDeleteOverASplitCountsBothLegs) {
+    MemoryClient client;
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    seed_ne_table(db);
+    auto r = db.exec("delete from ne where pk = 1 and sk != 5;");
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->render(), "DELETE (8 read, 8 modified, 0 ccf)\n");
+    auto left = db.query("select * from ne where pk = 1;");
+    ASSERT_TRUE(left.has_value());
+    EXPECT_EQ(sks(*left), "5 ");
+}
+
 // ---- Transactions (Tier 2) -------------------------------------------------
 
 TEST(MemoryClientTxn, WriteTransactionCommits) {

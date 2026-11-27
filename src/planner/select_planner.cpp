@@ -210,7 +210,7 @@ Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
     // base table or the index), its absence falls through to Scan.
     const bool can_getitem = !has_index && where != nullptr && where->can_getitem(pk, rk);
     const std::optional<QueryKeyPlan> qplan =
-        (where != nullptr) ? where->plan_query(pk, rk) : std::nullopt;
+        (where != nullptr) ? where->plan_query(pk, rk, &resolved->key_types) : std::nullopt;
 
     // One symbol table per SELECT (matching one CSymbolTable per request). The
     // aliasing call order — projection, then key condition, then filter —
@@ -241,23 +241,37 @@ Result<SelectPlan> plan_select(const SelectCmd& cmd, IDDBClient& client,
 
     if (qplan.has_value()) {
         plan.api = SelectApi::query;
-        QueryIn& r = plan.query;
-        r.table_name = cmd.table;
-        if (has_index) {
-            r.index_name = cmd.index;
+        // A not-equal split (P15, D-P15-8 Rule 2) renders each leg from its own
+        // copy of the fresh symbol table, in the same order, so both legs carry
+        // the same tokens and differ only in `<` / `>`; the statement still
+        // uses one alias prefix.
+        const SymbolTable fresh = st;
+        const auto build = [&](SymbolTable& leg_st, NeLeg leg) {
+            QueryIn r;
+            r.table_name = cmd.table;
+            if (has_index) {
+                r.index_name = cmd.index;
+            }
+            r.consistent_read = cmd.consistent;
+            r.return_consumed_capacity = rcc;
+            if (!cmd.projection.empty()) {
+                r.projection_expression = serialize_projection(cmd.projection, leg_st);
+            }
+            r.key_condition_expression =
+                where->query_key_condition_expression(*qplan, &leg_st, leg);
+            std::string filter = where->query_filter_expression(*qplan, &leg_st);
+            if (!filter.empty()) {
+                r.filter_expression = std::move(filter);
+            }
+            r.expression_attribute_names = names_of(leg_st);
+            r.expression_attribute_values = values_of(leg_st);
+            return r;
+        };
+        plan.query = build(st, NeLeg::lower);
+        if (qplan->ne_split.has_value()) {
+            SymbolTable upper_st = fresh;
+            plan.query_upper = build(upper_st, NeLeg::upper);
         }
-        r.consistent_read = cmd.consistent;
-        r.return_consumed_capacity = rcc;
-        if (!cmd.projection.empty()) {
-            r.projection_expression = serialize_projection(cmd.projection, st);
-        }
-        r.key_condition_expression = where->query_key_condition_expression(*qplan, &st);
-        std::string filter = where->query_filter_expression(*qplan, &st);
-        if (!filter.empty()) {
-            r.filter_expression = std::move(filter);
-        }
-        r.expression_attribute_names = names_of(st);
-        r.expression_attribute_values = values_of(st);
         return plan;
     }
 

@@ -63,6 +63,9 @@ enum class WriteReadApi { query, scan };
 struct WriteReadPlan {
     WriteReadApi api = WriteReadApi::scan;
     QueryIn query;
+    /// The upper leg of a not-equal split (P15, D-P15-8): enumerated after
+    /// `query` (the lower leg) is exhausted. Unset otherwise.
+    std::optional<QueryIn> query_upper;
     ScanIn scan;
 };
 
@@ -126,21 +129,33 @@ inline WriteReadPlan build_write_read(const std::string& table,
     WriteReadPlan plan;
     if (qplan.has_value()) {
         plan.api = WriteReadApi::query;
-        QueryIn& r = plan.query;
-        r.table_name = table;
-        if (index.has_value()) {
-            r.index_name = index;
+        // A not-equal split renders its upper leg from a copy of the table as
+        // it is now, so both legs carry the same tokens (as the SELECT planner).
+        const SymbolTable fresh = st;
+        const auto build = [&](SymbolTable& leg_st, NeLeg leg) {
+            QueryIn r;
+            r.table_name = table;
+            if (index.has_value()) {
+                r.index_name = index;
+            }
+            r.consistent_read = false;
+            r.return_consumed_capacity = rcc;
+            r.projection_expression = project_base_keys(base_pk, base_rk, leg_st);
+            r.key_condition_expression =
+                where->query_key_condition_expression(*qplan, &leg_st, leg);
+            std::string filter = where->query_filter_expression(*qplan, &leg_st);
+            if (!filter.empty()) {
+                r.filter_expression = std::move(filter);
+            }
+            r.expression_attribute_names = names_of(leg_st);
+            r.expression_attribute_values = values_of(leg_st);
+            return r;
+        };
+        plan.query = build(st, NeLeg::lower);
+        if (qplan->ne_split.has_value()) {
+            SymbolTable upper_st = fresh;
+            plan.query_upper = build(upper_st, NeLeg::upper);
         }
-        r.consistent_read = false;
-        r.return_consumed_capacity = rcc;
-        r.projection_expression = project_base_keys(base_pk, base_rk, st);
-        r.key_condition_expression = where->query_key_condition_expression(*qplan, &st);
-        std::string filter = where->query_filter_expression(*qplan, &st);
-        if (!filter.empty()) {
-            r.filter_expression = std::move(filter);
-        }
-        r.expression_attribute_names = names_of(st);
-        r.expression_attribute_values = values_of(st);
         return plan;
     }
 

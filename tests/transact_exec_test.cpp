@@ -200,6 +200,26 @@ TEST(TransactRead, NonReducibleSelectAbortsWithDiagnostic) {
     EXPECT_EQ(client.transact_get_requests().size(), 0u);
 }
 
+TEST(TransactRead, SortKeyNotEqualSelectAbortsInBothSpellings) {
+    // A not-equal on the sort key plans two Queries outside a transaction
+    // (P15, D-P15-8); it never reduces to a GetItem, so the read transaction
+    // still aborts with the existing diagnostic.
+    for (const char* op : {"<>", "!="}) {
+        SCOPED_TRACE(op);
+        ddbsh::test::FakeDDBClient client;
+        register_tables(client);
+        ddbsh::Session session = make_session(client);
+        auto out = session.run(std::string("begin; select * from itxt2 where a = 1 and b ") + op +
+                               " 2; commit;");
+        ASSERT_TRUE(out.has_value());
+        EXPECT_EQ(render(*out), "ABORT\n");
+        EXPECT_EQ(render_stderr(*out),
+                  "The SELECT cannot be used in a transaction (it cannot be reduced to a GetItem() "
+                  "request).\n");
+        EXPECT_EQ(client.transact_get_requests().size(), 0u);
+    }
+}
+
 TEST(TransactRead, MissingResponseRendersBlankLineInRequestOrder) {
     // Fidelity (reviewer must-fix 514bb00 / D-2d §7): the original's
     // transact-read run() loop prints `show_item(item)` unconditionally for

@@ -21,6 +21,7 @@
 #ifndef DDBSH_SRC_PLANNER_SELECT_PLANNER_HPP
 #define DDBSH_SRC_PLANNER_SELECT_PLANNER_HPP
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,10 @@ struct SelectPlan {
     SelectApi api = SelectApi::scan;
     GetItemIn get_item;
     QueryIn query;
+    /// The upper leg of a not-equal split (P15, D-P15-8 Rule 2): set when
+    /// `query` is the lower leg (`#sk < :v`) and this Query (`#sk > :v`) runs
+    /// after it. Otherwise unset.
+    std::optional<QueryIn> query_upper;
     ScanIn scan;
     SearchVectorsIn search_vectors;  ///< phase 4b (api == search_vectors)
     /// The columns the output formats show first (P12,

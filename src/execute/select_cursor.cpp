@@ -31,6 +31,7 @@ Result<SelectRowCursor> open_select_cursor(const SelectCmd& cmd, IDDBClient& cli
     cursor.api_ = plan.api;
     cursor.get_item_ = std::move(plan.get_item);
     cursor.query_ = std::move(plan.query);
+    cursor.query_upper_ = std::move(plan.query_upper);
     cursor.scan_ = std::move(plan.scan);
     cursor.report_capacity_ = (cmd.rcc != ReturnConsumedCapacity::none);
     cursor.column_hint_ = std::move(plan.column_hint);
@@ -118,7 +119,17 @@ Result<const std::vector<ItemRow>*> SelectRowCursor::next_page() {
         // (Query/Scan only — GetItem already cleared more_).
         if (api_ == SelectApi::query || api_ == SelectApi::scan) {
             if (!last_evaluated_key.has_value() || last_evaluated_key->empty()) {
-                more_ = false;
+                if (api_ == SelectApi::query && query_upper_.has_value()) {
+                    // The lower leg of a not-equal split is exhausted: the next
+                    // fetch starts the upper leg from its first page (P15,
+                    // D-P15-8). It is metered like any next page: the read
+                    // bucket is charged before its first request.
+                    query_ = std::move(*query_upper_);
+                    query_upper_.reset();
+                    throttle_pending_ = limiter_.has_value();
+                } else {
+                    more_ = false;
+                }
             } else {
                 if (api_ == SelectApi::query) {
                     query_.exclusive_start_key = std::move(last_evaluated_key);
