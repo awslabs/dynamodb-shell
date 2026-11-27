@@ -20,7 +20,7 @@
 //     >=, begins_with, BETWEEN), and a scan of the whole table all work.
 //   * FilterExpressions ARE evaluated (phase 5a, D-P5-4 Tier 1). A query/scan
 //     applies the serialized FilterExpression the engine emits over its alias
-//     maps: comparisons (=, <, <=, >, >=; `!=` arrives as `NOT (#a = :v)`),
+//     maps: comparisons (=, <>, <, <=, >, >=; `!=` arrives as `NOT (#a = :v)`),
 //     AND / OR / NOT and parenthesized groups, attribute_exists /
 //     attribute_not_exists, begins_with, contains, IN, attribute_type, BETWEEN,
 //     and the size(#a) left-hand-side form. (Only the forms the engine emits;
@@ -1053,10 +1053,15 @@ private:
             }
             return found;
         }
-        // Binary comparison `OP :v` (op is the raw token: = < <= > >=).
+        // Binary comparison `OP :v` (op is the raw token: = <> < <= > >=).
         std::string raw_op = t[p];
         ++p;
         Value rhs = next_operand_value(t, p, ctx);
+        if (raw_op == "<>") {
+            // As `NOT (#a = :v)`: true for an item without the attribute
+            // (DynamoDB treats the two spellings alike; P15, D-P15-8).
+            return !lhs.has_value() || !value_equal(*lhs, rhs);
+        }
         if (!lhs.has_value()) {
             return false;
         }

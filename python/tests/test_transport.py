@@ -66,6 +66,34 @@ def test_query_rows_and_request(movies_wire: tuple) -> None:
     assert doc["ExpressionAttributeValues"] == {":vaaa1": {"N": "2"}, ":vaaa2": {"N": "3"}}
 
 
+def test_not_equal_on_sort_key_sends_two_queries() -> None:
+    """P15, D-P15-8: `b <> v` with the hash key `=` reads `b < v`, then
+    `b > v`, through the wire path, and the rows come back in that order."""
+
+    def query(doc: dict) -> str:
+        below = " < " in doc["KeyConditionExpression"]
+        b = "1" if below else "7"
+        items = [{"a": {"N": "2"}, "b": {"N": b}}]
+        return json.dumps({"Items": items, "Count": 1, "ScannedCount": 1})
+
+    for op in ("<>", "!="):
+        fake = isel1()
+        fake.handlers["Query"] = query
+        conn = ddbsh.connect(transport=fake)
+        cur = conn.cursor()
+        cur.execute(f"select * from isel1 where a = ? and b {op} ?;", [2, 5])
+        assert cur.fetchall() == [{"a": 2, "b": 1}, {"a": 2, "b": 7}], op
+        queries = [doc for name, doc in fake.requests if name == "Query"]
+        assert [d["KeyConditionExpression"] for d in queries] == [
+            "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2",
+            "#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2",
+        ], op
+        values = {":vaaa1": {"N": "2"}, ":vaaa2": {"N": "5"}}
+        assert all(d["ExpressionAttributeValues"] == values for d in queries)
+        assert all("ExclusiveStartKey" not in d for d in queries)
+        conn.close()
+
+
 @pytest.fixture
 def movies_wire() -> tuple:
     fake = isel1()

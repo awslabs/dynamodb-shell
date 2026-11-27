@@ -1,0 +1,153 @@
+# Copyright 2026 ddbsh reimplementation contributors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# not-equal.txt — LIVE real-DynamoDB goldens for a not-equal on a key (P15, B6,
+# D-P15-2 and D-P15-8).
+#
+# `<>`, `!=` and `NOT x = v` are one operator. A filter or condition keeps the
+# spelling the user typed (`#a <> :v` for `<>`, `NOT (#a = :v)` for `!=`). With
+# the partition key `=` and a single not-equal on the (last) sort key, the read
+# is two Queries, `sk < v` then `sk > v`, with the same filter; EXPLAIN prints
+# both. Otherwise (the sort key referenced twice, the not-equal under OR or a
+# negated AND, a literal of another type than the key, a not-equal on the
+# partition key or on a non-last composite component) the plan stays a Scan,
+# as in v0.8.1. v0.8.1 put `<>` on the sort key into the KeyConditionExpression,
+# which DynamoDB rejects (B6).
+#
+# The seed ${DATA}/ddbsh-ne.sql builds three tables:
+#
+#   ddbsh_ne (pk N HASH, sk N RANGE), LSI ne_lsi (pk, l), GSI ne_gsi (g, h),
+#   composite GSI ne_cgsi ((g, q) HASH, (h, r) RANGE):
+#     pk  sk  g  q  h  r  l  x
+#      1   1  a  z  1  1  9  10
+#      1   2  a  z  2  2  8  20
+#      1   3  a  z  3  3  7  30
+#      1   4  a  z  4  4  6  --  (no x)
+#      1   5  a  z  5  5  5  50
+#      1   6  a  z  6  6  4  60
+#      1   7  a  z  7  7  3  70
+#      1   8  a  z  8  8  2  80
+#      1   9  a  z  9  9  1  90
+#      2   3  b  z  3  3  7  30
+#   ddbsh_ne_w (pk N HASH, sk N RANGE): pk 1 with sk 1..9, and (2, 3).
+#   ddbsh_ne_s (pk N HASH, sk S RANGE): (1, apple), (1, banana), (1, cherry).
+#
+# Expected rows, worked out from the seed (the data goldens must show these):
+#   ine-ne-rows, ine-bang-rows, ine-not-rows   pk 1, sk 1 2 3 4 6 7 8 9
+#   ine-ne-filter-rows, ine-bang-filter-rows   sk 1 2 4 6 7 8 9 (sk 3 has x = 30;
+#                                              sk 4 has no x, which is not equal)
+#   ine-ne-missing, ine-bang-missing           sk 1 2 3 4 5 6 7 8 9 (no item has
+#                                              x = 40; sk 4, without x, is kept)
+#   ine-ne-nonkey-rows                         sk 1 2 4 5 6 7 8 9 (x <> 30)
+#   ine-ne-pk-rows                             (2, 3)
+#   ine-ne-range-rows                          sk 3 4 6 7 8 9 (a Scan)
+#   ine-ne-lsi-rows                            l <> 5: sk 1 2 3 4 6 7 8 9
+#   ine-ne-gsi-rows, ine-ne-cgsi-rows          h <> 5: sk 1 2 3 4 6 7 8 9
+#   ine-ne-cgsi-last-rows                      h = 5 and r <> 5: none
+#   ine-ne-cgsi-last-hit-rows                  h = 5 and r <> 4: sk 5
+#   ine-ne-string-rows                         apple, cherry
+#   ine-ne-type-rows                           pk 2: sk 3 (a Scan)
+#   ine-ne-order, ine-ne-json                  sk 1 2 3 4 6 7 8 9, in that order
+#   ine-ne-capacity                            the rows, then one SELECT line
+#   ine-update-rows                            UPDATE (8 read, 8 modified, 0 ccf),
+#                                              then sk 1 2 3 4 6 7 8 9 have u = 1
+#   ine-delete-rows                            DELETE (8 read, 8 modified, 0 ccf),
+#                                              then (1, 5) and (2, 3) remain
+#   ine-update-ccf, ine-bang-update-ccf        UPDATE (0 read, 0 modified, 1 ccf)
+#   ine-txn-read                               the non-reducible-SELECT ABORT
+#   ine-txn-write                              the cancelled-transaction ABORT
+#
+# Order: the setup, then the EXPLAIN goldens (deterministic, unsorted; the two
+# write EXPLAINs read the seeded ddbsh_ne_w, and EXPLAIN never writes), then
+# the data goldens (-s, except the two order goldens), then the write goldens,
+# each reseeding ddbsh_ne_w with REPLACE first so it runs on its own.
+#
+# Self-contained: it drops its tables if present, creates and seeds them, and
+# drops them at the end. test-cleanup also drops them (if exists nowait).
+#
+# AUTHORED goldens (the not-equal split postdates v0.8.1), recorded against
+# real DynamoDB (632195519165, us-east-1) and checked by hand against the seed.
+#
+# WARNING: creates and drops REAL DynamoDB tables (ddbsh_ne, ddbsh_ne_w,
+# ddbsh_ne_s) per run.
+
+add_test(NAME ine-setup-drop COMMAND ddbshtest -c "drop table if exists ddbsh_ne; drop table if exists ddbsh_ne_w; drop table if exists ddbsh_ne_s;")
+add_test(NAME ine-setup COMMAND ddbshtest -e -f ${DATA}/ddbsh-ne.sql)
+
+# --- EXPLAIN: split, both spellings and NOT x = v print the same bytes ---------
+add_test(NAME ine-explain-ne COMMAND ddbshtest -q -T ${RD}/ine-explain-ne.exp -c "explain select * from ddbsh_ne where pk = 1 and sk <> 5;")
+add_test(NAME ine-explain-bang COMMAND ddbshtest -q -T ${RD}/ine-explain-ne.exp -c "explain select * from ddbsh_ne where pk = 1 and sk != 5;")
+add_test(NAME ine-explain-not COMMAND ddbshtest -q -T ${RD}/ine-explain-ne.exp -c "explain select * from ddbsh_ne where pk = 1 and not sk = 5;")
+add_test(NAME ine-explain-ne-filter COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-filter.exp -c "explain select * from ddbsh_ne where pk = 1 and sk <> 5 and x <> 30;")
+add_test(NAME ine-explain-bang-filter COMMAND ddbshtest -q -T ${RD}/ine-explain-bang-filter.exp -c "explain select * from ddbsh_ne where pk = 1 and sk != 5 and x != 30;")
+add_test(NAME ine-explain-ne-proj COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-proj.exp -c "explain select consistent x, sk from ddbsh_ne where pk = 1 and sk <> 5;")
+add_test(NAME ine-explain-ne-lsi COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-lsi.exp -c "explain select * from ddbsh_ne.ne_lsi where pk = 1 and l <> 5;")
+add_test(NAME ine-explain-ne-gsi COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-gsi.exp -c "explain select * from ddbsh_ne.ne_gsi where g = \"a\" and h <> 5;")
+add_test(NAME ine-explain-ne-cgsi COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-cgsi.exp -c "explain select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5;")
+add_test(NAME ine-explain-ne-cgsi-last COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-cgsi-last.exp -c "explain select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h = 5 and r <> 5;")
+add_test(NAME ine-explain-ne-string COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-string.exp -c "explain select * from ddbsh_ne_s where pk = 1 and sk <> \"banana\";")
+
+# --- EXPLAIN: no split ------------------------------------------------------------
+add_test(NAME ine-explain-ne-nonkey COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-nonkey.exp -c "explain select * from ddbsh_ne where pk = 1 and x <> 30;")
+add_test(NAME ine-explain-ne-pk COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-pk.exp -c "explain select * from ddbsh_ne where pk <> 1;")
+add_test(NAME ine-explain-ne-range COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-range.exp -c "explain select * from ddbsh_ne where pk = 1 and sk <> 5 and sk > 2;")
+add_test(NAME ine-explain-ne-twice COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-twice.exp -c "explain select * from ddbsh_ne where pk = 1 and sk <> 5 and sk <> 7;")
+add_test(NAME ine-explain-ne-or COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-or.exp -c "explain select * from ddbsh_ne where pk = 1 and (sk <> 5 or x = 10);")
+add_test(NAME ine-explain-ne-notgroup COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-notgroup.exp -c "explain select * from ddbsh_ne where not (pk = 1 and sk <> 5);")
+add_test(NAME ine-explain-not-ne COMMAND ddbshtest -q -T ${RD}/ine-explain-not-ne.exp -c "explain select * from ddbsh_ne where pk = 1 and not sk <> 5;")
+add_test(NAME ine-explain-ne-type COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-type.exp -c "explain select * from ddbsh_ne where pk = 1 and sk <> \"5\";")
+add_test(NAME ine-explain-ne-cgsi-mid COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-cgsi-mid.exp -c "explain select * from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5 and r = 5;")
+add_test(NAME ine-explain-ne-cgsi-partial COMMAND ddbshtest -q -T ${RD}/ine-explain-ne-cgsi-partial.exp -c "explain select * from ddbsh_ne.ne_cgsi where g = \"a\" and h <> 5;")
+
+# --- EXPLAIN: bulk writes show both legs ---------------------------------------------
+# UPDATE prints per leg the Query block, then that leg's UpdateItem blocks.
+# DELETE prints both Query blocks (lower leg, then upper) and no DeleteItem
+# blocks: v0.8.1's EXPLAIN DELETE via QUERY prints the Query and runs nothing.
+add_test(NAME ine-explain-update COMMAND ddbshtest -q -T ${RD}/ine-explain-update.exp -c "explain update ddbsh_ne_w set u = 1 where pk = 1 and sk <> 5;")
+add_test(NAME ine-explain-delete COMMAND ddbshtest -q -T ${RD}/ine-explain-delete.exp -c "explain delete from ddbsh_ne_w where pk = 1 and sk != 5;")
+
+# --- Data: the rows each plan returns ----------------------------------------------
+add_test(NAME ine-ne-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-rows.exp -c "select pk, sk from ddbsh_ne where pk = 1 and sk <> 5;")
+add_test(NAME ine-bang-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-rows.exp -c "select pk, sk from ddbsh_ne where pk = 1 and sk != 5;")
+add_test(NAME ine-not-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-rows.exp -c "select pk, sk from ddbsh_ne where pk = 1 and not sk = 5;")
+add_test(NAME ine-ne-filter-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-filter-rows.exp -c "select sk from ddbsh_ne where pk = 1 and sk <> 5 and x <> 30;")
+add_test(NAME ine-bang-filter-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-filter-rows.exp -c "select sk from ddbsh_ne where pk = 1 and sk != 5 and x != 30;")
+add_test(NAME ine-ne-missing COMMAND ddbshtest -q -s -T ${RD}/ine-ne-missing.exp -c "select sk from ddbsh_ne where pk = 1 and x <> 40;")
+add_test(NAME ine-bang-missing COMMAND ddbshtest -q -s -T ${RD}/ine-ne-missing.exp -c "select sk from ddbsh_ne where pk = 1 and x != 40;")
+add_test(NAME ine-ne-nonkey-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-nonkey-rows.exp -c "select sk from ddbsh_ne where pk = 1 and x <> 30;")
+add_test(NAME ine-ne-pk-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-pk-rows.exp -c "select pk, sk from ddbsh_ne where pk <> 1;")
+add_test(NAME ine-ne-range-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-range-rows.exp -c "select sk from ddbsh_ne where pk = 1 and sk <> 5 and sk > 2;")
+add_test(NAME ine-ne-lsi-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-lsi-rows.exp -c "select sk from ddbsh_ne.ne_lsi where pk = 1 and l <> 5;")
+add_test(NAME ine-ne-gsi-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-gsi-rows.exp -c "select sk from ddbsh_ne.ne_gsi where g = \"a\" and h <> 5;")
+add_test(NAME ine-ne-cgsi-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-gsi-rows.exp -c "select sk from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h <> 5;")
+add_test(NAME ine-ne-cgsi-last-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-cgsi-last-rows.exp -c "select sk from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h = 5 and r <> 5;")
+add_test(NAME ine-ne-cgsi-last-hit-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-cgsi-last-hit-rows.exp -c "select sk from ddbsh_ne.ne_cgsi where g = \"a\" and q = \"z\" and h = 5 and r <> 4;")
+add_test(NAME ine-ne-string-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-string-rows.exp -c "select sk from ddbsh_ne_s where pk = 1 and sk <> \"banana\";")
+add_test(NAME ine-ne-type-rows COMMAND ddbshtest -q -s -T ${RD}/ine-ne-type-rows.exp -c "select sk from ddbsh_ne where pk = 2 and sk <> \"x\";")
+add_test(NAME ine-ne-order COMMAND ddbshtest -q -T ${RD}/ine-ne-order.exp -c "select sk from ddbsh_ne where pk = 1 and sk <> 5;")
+add_test(NAME ine-ne-json COMMAND ddbshtest -q -o json -T ${RD}/ine-ne-json.exp -c "select sk from ddbsh_ne where pk = 1 and sk <> 5;")
+add_test(NAME ine-ne-capacity COMMAND ddbshtest -q -T ${RD}/ine-ne-capacity.exp -c "select sk from ddbsh_ne where pk = 1 and sk <> 5 return consumed capacity total;")
+
+# --- Writes: each reseeds ddbsh_ne_w, writes, then reads the result ------------------
+add_test(NAME ine-update-rows COMMAND ddbshtest -q -s -T ${RD}/ine-update-rows.exp -c "replace into ddbsh_ne_w ( pk, sk ) values ( 1, 1 ), ( 1, 2 ), ( 1, 3 ), ( 1, 4 ), ( 1, 5 ), ( 1, 6 ), ( 1, 7 ), ( 1, 8 ), ( 1, 9 ), ( 2, 3 ); \
+    update ddbsh_ne_w set u = 1 where pk = 1 and sk <> 5; \
+    select pk, sk, u from ddbsh_ne_w;")
+add_test(NAME ine-delete-rows COMMAND ddbshtest -q -s -T ${RD}/ine-delete-rows.exp -c "replace into ddbsh_ne_w ( pk, sk ) values ( 1, 1 ), ( 1, 2 ), ( 1, 3 ), ( 1, 4 ), ( 1, 5 ), ( 1, 6 ), ( 1, 7 ), ( 1, 8 ), ( 1, 9 ), ( 2, 3 ); \
+    delete from ddbsh_ne_w where pk = 1 and sk != 5; \
+    select pk, sk from ddbsh_ne_w;")
+add_test(NAME ine-update-ccf COMMAND ddbshtest -q -T ${RD}/ine-update-ccf.exp -c "replace into ddbsh_ne_w ( pk, sk ) values ( 1, 2 ); \
+    update ddbsh_ne_w set u = 2 where pk = 1 and sk = 2 and sk <> 2; \
+    select pk, sk, u from ddbsh_ne_w where pk = 1 and sk = 2;")
+add_test(NAME ine-bang-update-ccf COMMAND ddbshtest -q -T ${RD}/ine-update-ccf.exp -c "replace into ddbsh_ne_w ( pk, sk ) values ( 1, 2 ); \
+    update ddbsh_ne_w set u = 2 where pk = 1 and sk = 2 and sk != 2; \
+    select pk, sk, u from ddbsh_ne_w where pk = 1 and sk = 2;")
+add_test(NAME ine-txn-read COMMAND ddbshtest -q -T ${RD}/ine-txn-read.exp -c "begin; select * from ddbsh_ne where pk = 1 and sk <> 5; commit;")
+# The cancellation message carries a per-request id, so ine-txn-write matches
+# by regex (as icont-txn-abort does): the ABORT, the ConditionalCheckFailed
+# reason, and the item left unchanged (no u).
+add_test(NAME ine-txn-write COMMAND ddbshtest -q -c "replace into ddbsh_ne_w ( pk, sk ) values ( 1, 2 ); \
+    begin; update ddbsh_ne_w set u = 3 where pk = 1 and sk = 2 and sk <> 2; commit; \
+    select pk, sk, u from ddbsh_ne_w where pk = 1 and sk = 2;")
+set_property(TEST ine-txn-write PROPERTY PASS_REGULAR_EXPRESSION "REPLACE[\r\n]+ABORT[\r\n]+Transaction failed\\. TransactionCanceledException\\. [A-Z0-9]*\\. Transaction cancelled, please refer cancellation reasons for specific reasons \\[ConditionalCheckFailed\\][\r\n]+[{]pk: 1, sk: 2[}]")
+
+add_test(NAME ine-drop COMMAND ddbshtest -c "drop table ddbsh_ne; drop table ddbsh_ne_w; drop table ddbsh_ne_s;")

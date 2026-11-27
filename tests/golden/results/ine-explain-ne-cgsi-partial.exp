@@ -1,0 +1,19 @@
+Scan({
+   "TableName":   "ddbsh_ne",
+   "IndexName":   "ne_cgsi",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 <> :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "g",
+      "#aaaa2":   "h"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "S":   "a"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   },
+   "ConsistentRead":   false
+})

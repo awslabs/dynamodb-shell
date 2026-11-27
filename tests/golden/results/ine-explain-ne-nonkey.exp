@@ -1,0 +1,19 @@
+Query({
+   "TableName":   "ddbsh_ne",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa2 <> :vaaa2",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk",
+      "#aaaa2":   "x"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "30"
+      }
+   }
+})

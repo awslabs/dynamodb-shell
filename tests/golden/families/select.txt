@@ -298,11 +298,15 @@ add_test(NAME isel-166 COMMAND ddbshtest -T ${RD}/isel-166.exp -s -c "select * f
 add_test(NAME isel-167 COMMAND ddbshtest -T ${RD}/isel-167.exp -c "explain select * from isel1 where a = 1 and b = 2 and c = 3")
 add_test(NAME isel-168 COMMAND ddbshtest -T ${RD}/isel-168.exp -s -c "select * from isel1 where a = 2 and b = 3 and c = 4")
 
-# these should result in Scan()
+# P15 (D-P15-8, tenet-2 divergence approved by the human): a single not-equal
+# on the sort key with the hash key `=` plans two Queries, `b < v` then `b > v`,
+# with the same filter. v0.8.1 planned a Scan. The EXPLAIN goldens below were
+# re-recorded on real DynamoDB; their result twins return the same rows
+# (isel-169: decision P-1 in P15-01).
 add_test(NAME isel-169 COMMAND ddbshtest -T ${RD}/isel-169.exp -c "explain select * from isel1 where a = 1 and b != 2 and c = 3")
 add_test(NAME isel-170 COMMAND ddbshtest -T ${RD}/isel-170.exp -s -c "select * from isel1 where a = 2 and b != 2 and c = 4")
 
-# these should result in Scan()
+# these were Scan() in v0.8.1; two Query() since P15
 add_test(NAME isel-171 COMMAND ddbshtest -T ${RD}/isel-171.exp -c "explain select * from isel1 where a = 2 and b != 2")
 add_test(NAME isel-172 COMMAND ddbshtest -T ${RD}/isel-172.exp -s -c "select * from isel1 where a = 2 and b != 2")
 
@@ -314,7 +318,7 @@ add_test(NAME isel-174 COMMAND ddbshtest -T ${RD}/isel-174.exp -s -c "select * f
 add_test(NAME isel-175 COMMAND ddbshtest -T ${RD}/isel-175.exp -c "explain select * from isel1 where a = 2 and b < 5 and c = 4")
 add_test(NAME isel-176 COMMAND ddbshtest -T ${RD}/isel-176.exp -s -c "select * from isel1 where a = 2 and b < 5 and c = 4")
 
-# add negation into the range key to ensure that we don't Query
+# negation on the range key: a Scan() in v0.8.1; two Query() since P15
 add_test(NAME isel-177 COMMAND ddbshtest -T ${RD}/isel-177.exp -c "explain select * from isel1 where a = 2 and b != 3")
 add_test(NAME isel-178 COMMAND ddbshtest -T ${RD}/isel-178.exp -c "select * from isel1 where a = 2 and b != 3")
 

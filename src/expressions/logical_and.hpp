@@ -85,6 +85,19 @@ public:
         return ct;
     }
 
+    const Value* ne_key_value(const std::string& lhs) const override {
+        // A not-equal under a negated AND is not a conjunct of the clause.
+        if (is_negated()) {
+            return nullptr;
+        }
+        for (const auto& child : m_exprlist) {
+            if (const Value* v = child->ne_key_value(lhs)) {
+                return v;
+            }
+        }
+        return nullptr;
+    }
+
     KeyMap get_gud_key(const std::string& pk, const std::string& rk) const override {
         KeyMap rv;
         for (const auto& child : m_exprlist) {

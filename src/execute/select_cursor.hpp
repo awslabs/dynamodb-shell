@@ -86,6 +86,10 @@ private:
     SelectApi api_ = SelectApi::scan;
     GetItemIn get_item_{};
     QueryIn query_{};
+    /// The upper leg of a not-equal split (P15, D-P15-8): issued, from its
+    /// first page, once `query_` is exhausted, and only if the caller asks
+    /// for the next page then. Unset otherwise, and once it has started.
+    std::optional<QueryIn> query_upper_{};
     ScanIn scan_{};
     std::optional<RateLimiter> limiter_{};
     ConsumedCapacityTotalizer totalizer_{};

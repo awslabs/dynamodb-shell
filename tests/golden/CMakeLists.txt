@@ -17,7 +17,7 @@
 #                 select, insert-replace, update, delete, transactions, pitr,
 #                 symbol-table, return-values, composite-gsi, vector,
 #                 vector-filters, cross-account, explain, show, help, formats,
-#                 contains, statement-end,
+#                 contains, not-equal, statement-end,
 #                 global-tables, test-cleanup, test-cleanup-last). The
 #                 original add_test lines are reused verbatim; `ddbshtest` is
 #                 an IMPORTED target that resolves to the harness (see below).
@@ -107,7 +107,7 @@ set(DATA "${GOLDEN_DIR}/data")
 #     (D-2h-1 §7).
 #   * cross-account uses its own account's tables and is unaffected by cleanup.
 #   * vector-filters / explain / show / help / formats / contains /
-#     statement-end are self-contained (each
+#     not-equal / statement-end are self-contained (each
 #     creates+drops its own tables or needs none), so their position is
 #     independent.
 #   * global-tables is self-contained (its own `gttest` table in
@@ -138,6 +138,7 @@ set(GOLDEN_FAMILIES
     show
     formats
     contains
+    not-equal
     statement-end
     global-tables
     test-cleanup-last)

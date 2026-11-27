@@ -1,0 +1,14 @@
+Scan({
+   "TableName":   "ddbsh_ne",
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa1 <> :vaaa1",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "pk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      }
+   },
+   "ConsistentRead":   false
+})

@@ -371,4 +371,46 @@ TEST(Prepared, ParseErrorAtPrepare) {
     EXPECT_EQ(prep.error().code, ddbsh::Errc::parse_error);
 }
 
+// ---- A bound sort-key not-equal re-plans per execution (P15, D-P15-8) -------
+
+TEST(Prepared, NotEqualSplitReplansFromTheBoundValue) {
+    ddbsh::DescribeTableOut schema;
+    schema.table_name = "t";
+    schema.key_schema = ddbsh::TableKeySchema{{"pk"}, {"sk"}};
+    schema.attribute_definitions = {ddbsh::AttributeDef{"pk", ddbsh::ScalarType::n},
+                                    ddbsh::AttributeDef{"sk", ddbsh::ScalarType::n}};
+    FakeDDBClient client;
+    client.set_table(schema);
+    Connection db(SessionConfig{"us-east-1", ""}, client);
+    auto prep = db.prepare("explain select * from t where pk = ? and sk <> ?;");
+    ASSERT_TRUE(prep.has_value());
+
+    // (1, 5): two Queries, both carrying 5.
+    prep->bind(1, 1LL).bind(2, 5LL);
+    ASSERT_TRUE(db.exec(*prep).has_value());
+    ASSERT_EQ(client.explain_requests().size(), 2u);
+    for (std::size_t i = 0; i < 2; ++i) {
+        const auto* q = std::get_if<ddbsh::QueryIn>(&client.explain_requests()[i]);
+        ASSERT_NE(q, nullptr);
+        ASSERT_EQ(q->expression_attribute_values.size(), 2u);
+        EXPECT_EQ(q->expression_attribute_values[1].second.s, "5");
+    }
+
+    // (1, 3): re-planned with 3.
+    prep->bind(2, 3LL);
+    ASSERT_TRUE(db.exec(*prep).has_value());
+    ASSERT_EQ(client.explain_requests().size(), 4u);
+    for (std::size_t i = 2; i < 4; ++i) {
+        const auto* q = std::get_if<ddbsh::QueryIn>(&client.explain_requests()[i]);
+        ASSERT_NE(q, nullptr);
+        EXPECT_EQ(q->expression_attribute_values[1].second.s, "3");
+    }
+
+    // (1, "x") on a Number sort key: the type rule keeps one Scan.
+    prep->bind(2, std::string("x"));
+    ASSERT_TRUE(db.exec(*prep).has_value());
+    ASSERT_EQ(client.explain_requests().size(), 5u);
+    EXPECT_NE(std::get_if<ddbsh::ScanIn>(&client.explain_requests()[4]), nullptr);
+}
+
 }  // namespace

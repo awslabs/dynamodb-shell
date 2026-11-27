@@ -42,7 +42,9 @@ The engine drives this command set end to end against real DynamoDB:
   deletes every item. Reports `(n read, m modified, k ccf)`.
 - `SELECT` — the full SQL→API decision matrix (GetItem vs Query vs Scan, base
   table and `.index`), the WHERE expression tree, `CONSISTENT`, projections, and
-  `RETURN CONSUMED CAPACITY`.
+  `RETURN CONSUMED CAPACITY`. A not-equal (`<>` or `!=`) on the sort key, with
+  the partition key `=`, runs two Queries (below, then above the value) where
+  v0.8.1 ran a Scan.
 - `ALTER TABLE` — billing mode / throughput, GSI create/update/drop, stream,
   table class, SSE, deletion protection, warm throughput, `SET TTL`, `SET PITR`,
   and replica updates (UpdateTable / UpdateTimeToLive / UpdateContinuousBackups).

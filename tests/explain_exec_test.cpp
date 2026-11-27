@@ -125,6 +125,32 @@ TEST(ExplainSelect, HashEqualityOnlySelectsQuery) {
     EXPECT_EQ(e.blocks[0].api_name, "Query");
 }
 
+TEST(ExplainSelect, SortKeyNotEqualPrintsTwoQueryBlocks) {
+    // P15, D-P15-8: one Query below the value, then one above it.
+    for (const char* op : {"<>", "!="}) {
+        SCOPED_TRACE(op);
+        ddbsh::test::FakeDDBClient client;
+        client.set_table(table_pk_rk("t"));
+        auto session = make_session(client);
+        auto outcome =
+            session.run(std::string("explain select * from t where a = 3 and b ") + op + " 4;");
+        ASSERT_TRUE(outcome.has_value());
+        const auto& e = std::get<ExplainOutcome>(*outcome);
+        ASSERT_EQ(e.blocks.size(), 2u);
+        EXPECT_EQ(e.blocks[0].api_name, "Query");
+        EXPECT_EQ(e.blocks[1].api_name, "Query");
+        EXPECT_EQ(render(*outcome),
+                  std::string("Query(") + kPrettyBody + ")\nQuery(" + kPrettyBody + ")\n");
+        ASSERT_EQ(client.explain_requests().size(), 2u);
+        const auto* lo = std::get_if<ddbsh::QueryIn>(&client.explain_requests()[0]);
+        const auto* hi = std::get_if<ddbsh::QueryIn>(&client.explain_requests()[1]);
+        ASSERT_NE(lo, nullptr);
+        ASSERT_NE(hi, nullptr);
+        EXPECT_EQ(lo->key_condition_expression, "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2");
+        EXPECT_EQ(hi->key_condition_expression, "#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2");
+    }
+}
+
 TEST(ExplainSelect, NoWhereSelectsScan) {
     ddbsh::test::FakeDDBClient client;
     client.set_table(table_pk("t"));

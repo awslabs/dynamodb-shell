@@ -116,13 +116,15 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
     // ---- bulk enumeration --------------------------------------------------
     std::optional<QueryKeyPlan> qplan;
     if (!cmd.index.has_value()) {
-        qplan = where != nullptr ? where->plan_query(base_pk_list, base_rk_list) : std::nullopt;
+        qplan = where != nullptr ? where->plan_query(base_pk_list, base_rk_list, &base->key_types)
+                                 : std::nullopt;
     } else {
         auto idx = get_key_schema(client, cmd.table, *cmd.index);
         if (!idx.has_value()) {
             return fail(idx.error());
         }
-        qplan = where != nullptr ? where->plan_query(idx->pk, idx->rk) : std::nullopt;
+        qplan =
+            where != nullptr ? where->plan_query(idx->pk, idx->rk, &idx->key_types) : std::nullopt;
     }
 
     SymbolTable read_st(next_prefix());
@@ -141,13 +143,22 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
 
     // EXPLAIN DELETE via QUERY: emit the Query block ONLY and do not run it
     // (delete.cpp do_query guards the loop behind !explaining()). This is the
-    // reproduced asymmetry (§8.3).
+    // reproduced asymmetry (§8.3). A sort-key not-equal split (D-P15-8) runs
+    // two Queries, so EXPLAIN prints both Query blocks, lower leg first, and
+    // still no DeleteItem blocks.
     if (explain && read.api == WriteReadApi::query) {
         auto body = client.explain_request(read.query);
         if (!body.has_value()) {
             return fail(body.error());
         }
         emit_explain_block(sink, "Query", std::move(*body));
+        if (read.query_upper.has_value()) {
+            auto upper = client.explain_request(*read.query_upper);
+            if (!upper.has_value()) {
+                return fail(upper.error());
+            }
+            emit_explain_block(sink, "Query", std::move(*upper));
+        }
         return {};
     }
 
@@ -234,7 +245,15 @@ Result<void> execute_delete(const DeleteCmd& cmd, IDDBClient& client,
         }
 
         if (!last_key.has_value() || last_key->empty()) {
-            break;
+            if (read.api != WriteReadApi::query || !read.query_upper.has_value()) {
+                break;
+            }
+            // The lower leg of a not-equal split is exhausted: enumerate the
+            // upper leg from its first page, metered like a next page (P15,
+            // D-P15-8). The counts and EXPLAIN blocks continue across legs.
+            read.query = std::move(*read.query_upper);
+            read.query_upper.reset();
+            last_key.reset();
         }
         start_key = std::move(last_key);
         // Throttle before fetching the next page (readlimit() after setting the

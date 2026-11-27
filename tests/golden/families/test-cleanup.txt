@@ -29,7 +29,10 @@ add_test(NAME test-cleanup COMMAND ddbshtest -c "drop table if exists nowait ddb
                                               drop table if exists nowait icdwarmthroughput0; \
                                               drop table if exists icdwarmthroughput1; \
                                               drop table if exists nowait ddbsh_vec_f; \
-                                              drop table if exists nowait ddbsh_contains; ")
+                                              drop table if exists nowait ddbsh_contains; \
+                                              drop table if exists nowait ddbsh_ne; \
+                                              drop table if exists nowait ddbsh_ne_w; \
+                                              drop table if exists nowait ddbsh_ne_s; ")
 
 # DEV-P11-17: while icd-create-table-35's GSI is still being built, DynamoDB
 # refuses to delete icdwarmthroughput0, so the nowait drop above can fail. This

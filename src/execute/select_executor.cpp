@@ -177,6 +177,15 @@ Result<ExecOutcome> execute_select_explain(const SelectCmd& cmd, IDDBClient& cli
     ExplainOutcome outcome;
     outcome.blocks.push_back(
         ExplainBlock{std::move(api_name), std::move(*body), ExplainBlock::Format::pretty});
+    // A not-equal split (P15, D-P15-8) prints its second Query after the first.
+    if (plan.api == SelectApi::query && plan.query_upper.has_value()) {
+        auto upper = client.explain_request(ExplainRequest{*plan.query_upper});
+        if (!upper.has_value()) {
+            return fail(upper.error());
+        }
+        outcome.blocks.push_back(
+            ExplainBlock{"Query", std::move(*upper), ExplainBlock::Format::pretty});
+    }
     return ExecOutcome{std::move(outcome)};
 }
 

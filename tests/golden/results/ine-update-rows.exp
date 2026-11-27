@@ -1,0 +1,21 @@
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+REPLACE
+UPDATE (8 read, 8 modified, 0 ccf)
+{pk: 1, sk: 1, u: 1}
+{pk: 1, sk: 2, u: 1}
+{pk: 1, sk: 3, u: 1}
+{pk: 1, sk: 4, u: 1}
+{pk: 1, sk: 5}
+{pk: 1, sk: 6, u: 1}
+{pk: 1, sk: 7, u: 1}
+{pk: 1, sk: 8, u: 1}
+{pk: 1, sk: 9, u: 1}
+{pk: 2, sk: 3}

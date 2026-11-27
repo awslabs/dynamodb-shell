@@ -19,7 +19,9 @@
 //   T7  bulk UPDATE/DELETE with RETURN VALUES — each item right after its
 //       write, the accounting line last;
 //   T9  bulk EXPLAIN UPDATE/DELETE — the read block before its read call;
-//   T10 multi-row INSERT — unchanged, one status per row.
+//   T10 multi-row INSERT — unchanged, one status per row;
+//   T11 a not-equal on the sort key: both Query legs stream, are metered and
+//       enumerate in order, and leg 2 never starts if the caller stops (P15).
 // Plus: end_statement() exactly once per execute, on success and on failure
 // (D-P12-16); partial output on a later failure (D-P12-14); the buffering
 // Session::execute(stmt) keeps each command's single-outcome shape and the
@@ -836,6 +838,301 @@ TEST(TimelyOutput, MultiRowInsertEmitsEachRowBeforeTheNextPut) {
     const Log expected{"call:DescribeTable:t", "call:PutItem", "emit:INSERT|",
                        "call:PutItem",         "emit:INSERT|", "end"};
     EXPECT_EQ(log, expected);
+}
+
+// ---- T11: a not-equal on the sort key reads two Queries (P15, D-P15-8) -------
+//
+// `pk = 1 and sk <> 5` plans `sk < 5` then `sk > 5`. Both legs stream through
+// the same loop: each page is emitted before the next request, the leg change
+// is metered like a next page, and leg 2 is never requested if the caller
+// stops during leg 1.
+
+ItemRow pk_sk_row(const std::string& sk) {
+    return ItemRow{ValueMap{{"pk", num("1")}, {"sk", num(sk)}}};
+}
+
+void seed_split(RecordingClient& client, const std::string& prefix) {
+    client.set_table(table("t", TableKeySchema{{"pk"}, {"sk"}}));
+    const std::string head = "#a" + prefix + "1 = :v" + prefix + "1 AND #a" + prefix + "2 ";
+    const std::string tail = " :v" + prefix + "2";
+    client.set_query_pages(head + "<" + tail, {{pk_sk_row("1"), pk_sk_row("2")}, {pk_sk_row("3")}});
+    client.set_query_pages(head + ">" + tail, {{pk_sk_row("6")}, {pk_sk_row("7")}});
+}
+
+TEST(TimelyOutput, SplitSelectStreamsBothLegsInOrder) {
+    Log log;
+    RecordingClient client(log);
+    seed_split(client, "aaa");
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+
+    ASSERT_TRUE(stream(session, "select * from t where pk = 1 and sk <> 5;", sink).has_value());
+    const Log expected{
+        "call:DescribeTable:t",
+        "call:Query",
+        "emit:{pk: 1, sk: 1}|{pk: 1, sk: 2}|",
+        "call:Query",
+        "emit:{pk: 1, sk: 3}|",
+        "call:Query",
+        "emit:{pk: 1, sk: 6}|",
+        "call:Query",
+        "emit:{pk: 1, sk: 7}|",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+    const auto& q = client.query_requests();
+    ASSERT_EQ(q.size(), 4u);
+    EXPECT_FALSE(q[0].exclusive_start_key.has_value());
+    EXPECT_TRUE(q[1].exclusive_start_key.has_value());
+    EXPECT_FALSE(q[2].exclusive_start_key.has_value());  // leg 2 starts from its first page
+    EXPECT_TRUE(q[3].exclusive_start_key.has_value());
+    EXPECT_NE(q[1].key_condition_expression.find(" < "), std::string::npos);
+    EXPECT_NE(q[2].key_condition_expression.find(" > "), std::string::npos);
+}
+
+TEST(TimelyOutput, SplitSelectRatelimitChargesTheLegChangeLikeANextPage) {
+    Log log;
+    RecordingClient client(log);
+    seed_split(client, "aaa");
+    ConsumedCapacity cc;
+    cc.table_name = "t";
+    cc.capacity_units = 2.0;  // 2 CU per page against a 1 RCU limit
+    client.set_consumed_capacity(cc);
+    double now = 0.0;
+    auto clock = [&now] { return std::chrono::duration<double>(now); };
+    std::vector<double> sleeps;
+    auto sleep = [&now, &log, &sleeps](std::chrono::duration<double> d) {
+        now += d.count();
+        sleeps.push_back(d.count());
+        log.push_back("sleep");
+    };
+
+    ddbsh::engine::Driver driver(
+        "select * from t where pk = 1 and sk <> 5 with ratelimit (1 rcu);");
+    ASSERT_TRUE(driver.parse());
+    auto ast = driver.release_result();
+    ASSERT_NE(ast.ast(), nullptr);
+    const auto& cmd = std::get<ddbsh::engine::SelectCmd>(ast.ast()->command);
+    auto cursor = ddbsh::engine::open_select_cursor(cmd, client, "aaa", clock, sleep);
+    ASSERT_TRUE(cursor.has_value());
+    for (;;) {
+        auto page = cursor->next_page();
+        ASSERT_TRUE(page.has_value());
+        if (*page == nullptr) {
+            break;
+        }
+        log.push_back("emit:" + std::to_string((*page)->size()));
+    }
+    // One token bucket across both legs: a sleep before every request but the
+    // first, including the leg change; none after the last page.
+    const Log expected{
+        "call:DescribeTable:t",
+        "call:Query",
+        "emit:2",
+        "sleep",
+        "call:Query",
+        "emit:1",
+        "sleep",
+        "call:Query",
+        "emit:1",
+        "sleep",
+        "call:Query",
+        "emit:1",
+    };
+    EXPECT_EQ(log, expected);
+
+    // The same sleeps as one Query whose pages are leg 1's then leg 2's.
+    Log log2;
+    RecordingClient client2(log2);
+    client2.set_table(table("t", TableKeySchema{{"pk"}, {"sk"}}));
+    client2.set_pages(
+        {{pk_sk_row("1"), pk_sk_row("2")}, {pk_sk_row("3")}, {pk_sk_row("6")}, {pk_sk_row("7")}});
+    client2.set_consumed_capacity(cc);
+    double now2 = 0.0;
+    std::vector<double> sleeps2;
+    auto clock2 = [&now2] { return std::chrono::duration<double>(now2); };
+    auto sleep2 = [&now2, &sleeps2](std::chrono::duration<double> d) {
+        now2 += d.count();
+        sleeps2.push_back(d.count());
+    };
+    ddbsh::engine::Driver driver2("select * from t where pk = 1 with ratelimit (1 rcu);");
+    ASSERT_TRUE(driver2.parse());
+    auto ast2 = driver2.release_result();
+    const auto& cmd2 = std::get<ddbsh::engine::SelectCmd>(ast2.ast()->command);
+    auto cursor2 = ddbsh::engine::open_select_cursor(cmd2, client2, "aaa", clock2, sleep2);
+    ASSERT_TRUE(cursor2.has_value());
+    for (;;) {
+        auto page = cursor2->next_page();
+        ASSERT_TRUE(page.has_value());
+        if (*page == nullptr) {
+            break;
+        }
+    }
+    EXPECT_EQ(sleeps, sleeps2);
+}
+
+TEST(TimelyOutput, SplitSelectStoppedDuringLegOneNeverStartsLegTwo) {
+    Log log;
+    RecordingClient client(log);
+    seed_split(client, "aaa");
+    ddbsh::engine::Driver driver("select * from t where pk = 1 and sk <> 5;");
+    ASSERT_TRUE(driver.parse());
+    auto ast = driver.release_result();
+    const auto& cmd = std::get<ddbsh::engine::SelectCmd>(ast.ast()->command);
+    {
+        auto cursor = ddbsh::engine::open_select_cursor(cmd, client, "aaa");
+        ASSERT_TRUE(cursor.has_value());
+        auto page = cursor->next_page();  // the caller reads one page and stops
+        ASSERT_TRUE(page.has_value());
+        ASSERT_NE(*page, nullptr);
+    }
+    EXPECT_EQ(client.query_requests().size(), 1u);
+    {
+        // Stopping after leg 1 is exhausted: still no leg-2 request.
+        auto cursor = ddbsh::engine::open_select_cursor(cmd, client, "aaa");
+        ASSERT_TRUE(cursor.has_value());
+        ASSERT_TRUE(cursor->next_page().has_value());
+        ASSERT_TRUE(cursor->next_page().has_value());
+    }
+    EXPECT_EQ(client.query_requests().size(), 3u);
+    EXPECT_NE(client.query_requests().back().key_condition_expression.find(" < "),
+              std::string::npos);
+}
+
+TEST(TimelyOutput, SplitSelectEmptyLowerLegMovesToTheUpperLeg) {
+    Log log;
+    RecordingClient client(log);
+    client.set_table(table("t", TableKeySchema{{"pk"}, {"sk"}}));
+    client.set_query_pages("#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2", {{}});
+    client.set_query_pages("#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2", {{pk_sk_row("9")}});
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(stream(session, "select * from t where pk = 1 and sk != 5;", sink).has_value());
+    const Log expected{"call:DescribeTable:t", "call:Query", "call:Query", "emit:{pk: 1, sk: 9}|",
+                       "end"};
+    EXPECT_EQ(log, expected);
+}
+
+TEST(TimelyOutput, SplitSelectCapacityIsOneLineSummedAcrossLegs) {
+    Log log;
+    RecordingClient client(log);
+    seed_split(client, "aaa");
+    ConsumedCapacity cc;
+    cc.table_name = "t";
+    cc.capacity_units = 0.5;
+    client.set_consumed_capacity(cc);
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(stream(session,
+                       "select * from t where pk = 1 and sk <> 5 return consumed capacity total;",
+                       sink)
+                    .has_value());
+    // Four pages at 0.5 each, one SELECT line after the rows.
+    ASSERT_FALSE(sink.parts.empty());
+    EXPECT_EQ(render(sink.parts.back()), "SELECT (t, 2, 0, 0)\n");
+    int capacity_lines = 0;
+    for (const auto& part : sink.parts) {
+        if (render(part).starts_with("SELECT (")) {
+            ++capacity_lines;
+        }
+    }
+    EXPECT_EQ(capacity_lines, 1);
+}
+
+TEST(TimelyOutput, SplitBulkUpdateEnumeratesBothLegsAndSumsTheCounts) {
+    Log log;
+    RecordingClient client(log);
+    seed_split(client, "baa");  // the read prefix follows the write prefix (D-2c-10)
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(stream(session, "update t set u = 1 where pk = 1 and sk <> 5;", sink).has_value());
+    const Log expected{
+        "call:DescribeTable:t",
+        "call:Query",
+        "call:UpdateItem",
+        "call:UpdateItem",
+        "call:Query",
+        "call:UpdateItem",
+        "call:Query",
+        "call:UpdateItem",
+        "call:Query",
+        "call:UpdateItem",
+        "emit:UPDATE (5 read, 5 modified, 0 ccf)|",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+    // The per-item condition keeps the not-equal (site 9) on every write.
+    ASSERT_FALSE(client.update_requests().empty());
+    EXPECT_EQ(client.update_requests().front().condition_expression,
+              std::optional<std::string>("attribute_exists(#aaaa2) AND #aaaa3 <> :vaaa2"));
+}
+
+TEST(TimelyOutput, SplitBulkDeleteEnumeratesBothLegs) {
+    Log log;
+    RecordingClient client(log);
+    seed_split(client, "baa");
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(stream(session, "delete from t where pk = 1 and sk != 5;", sink).has_value());
+    EXPECT_EQ(log.back(), "end");
+    EXPECT_EQ(log[log.size() - 2], "emit:DELETE (5 read, 5 modified, 0 ccf)|");
+    EXPECT_EQ(client.query_requests().size(), 4u);
+}
+
+TEST(TimelyOutput, SplitExplainBulkUpdatePrintsEachLegsBlocksInOrder) {
+    Log log;
+    RecordingClient client(log);
+    client.set_table(table("t", TableKeySchema{{"pk"}, {"sk"}}));
+    client.set_query_pages("#abaa1 = :vbaa1 AND #abaa2 < :vbaa2", {{pk_sk_row("1")}});
+    client.set_query_pages("#abaa1 = :vbaa1 AND #abaa2 > :vbaa2",
+                           {{pk_sk_row("6"), pk_sk_row("7")}});
+    client.set_explain_body("{}");
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(
+        stream(session, "explain update t set u = 1 where pk = 1 and sk <> 5;", sink).has_value());
+    const Log expected{
+        "call:DescribeTable:t",
+        "emit:Query({})|",
+        "call:Query",
+        "emit:UpdateItem({})|",
+        "emit:Query({})|",
+        "call:Query",
+        "emit:UpdateItem({})|UpdateItem({})|",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+}
+
+TEST(TimelyOutput, SplitExplainBulkDeletePrintsBothQueryBlocksAndRunsNothing) {
+    // EXPLAIN DELETE via QUERY prints the Query blocks only and runs nothing
+    // (the v0.8.1 asymmetry, §8.3). A sort-key not-equal split runs two
+    // Queries, so both blocks print: lower leg, then upper leg (D-P15-8).
+    Log log;
+    RecordingClient client(log);
+    client.set_table(table("t", TableKeySchema{{"pk"}, {"sk"}}));
+    client.set_explain_body("{}");
+    ddbsh::Session session = make_session(client);
+    LogSink sink(log);
+    ASSERT_TRUE(
+        stream(session, "explain delete from t where pk = 1 and sk <> 5;", sink).has_value());
+    const Log expected{
+        "call:DescribeTable:t",
+        "emit:Query({})|",
+        "emit:Query({})|",
+        "end",
+    };
+    EXPECT_EQ(log, expected);
+    EXPECT_TRUE(client.query_requests().empty());
+    EXPECT_TRUE(client.delete_item_requests().empty());
+    const auto& explained = client.explain_requests();
+    ASSERT_EQ(explained.size(), 2u);
+    const auto* lower = std::get_if<ddbsh::QueryIn>(&explained[0]);
+    const auto* upper = std::get_if<ddbsh::QueryIn>(&explained[1]);
+    ASSERT_NE(lower, nullptr);
+    ASSERT_NE(upper, nullptr);
+    EXPECT_EQ(lower->key_condition_expression, "#abaa1 = :vbaa1 AND #abaa2 < :vbaa2");
+    EXPECT_EQ(upper->key_condition_expression, "#abaa1 = :vbaa1 AND #abaa2 > :vbaa2");
 }
 
 // ---- Buffered shapes (D-P12-15) ---------------------------------------------

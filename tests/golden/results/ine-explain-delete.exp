@@ -1,0 +1,38 @@
+Query({
+   "TableName":   "ddbsh_ne_w",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1, #abaa2",
+   "KeyConditionExpression":   "#abaa1 = :vbaa1 AND #abaa2 < :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "1"
+      },
+      ":vbaa2":   {
+         "N":   "5"
+      }
+   }
+})
+Query({
+   "TableName":   "ddbsh_ne_w",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "ProjectionExpression":   "#abaa1, #abaa2",
+   "KeyConditionExpression":   "#abaa1 = :vbaa1 AND #abaa2 > :vbaa2",
+   "ExpressionAttributeNames":   {
+      "#abaa1":   "pk",
+      "#abaa2":   "sk"
+   },
+   "ExpressionAttributeValues":   {
+      ":vbaa1":   {
+         "N":   "1"
+      },
+      ":vbaa2":   {
+         "N":   "5"
+      }
+   }
+})

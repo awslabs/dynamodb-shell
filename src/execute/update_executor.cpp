@@ -171,13 +171,15 @@ Result<void> execute_update(const UpdateCmd& cmd, IDDBClient& client,
     // otherwise. A present plan selects Query enumeration, its absence Scan.
     std::optional<QueryKeyPlan> qplan;
     if (!cmd.index.has_value()) {
-        qplan = where != nullptr ? where->plan_query(base_pk_list, base_rk_list) : std::nullopt;
+        qplan = where != nullptr ? where->plan_query(base_pk_list, base_rk_list, &base->key_types)
+                                 : std::nullopt;
     } else {
         auto idx = get_key_schema(client, cmd.table, *cmd.index);
         if (!idx.has_value()) {
             return fail(idx.error());
         }
-        qplan = where != nullptr ? where->plan_query(idx->pk, idx->rk) : std::nullopt;
+        qplan =
+            where != nullptr ? where->plan_query(idx->pk, idx->rk, &idx->key_types) : std::nullopt;
     }
 
     // Enumeration read SymbolTable from the NEXT prefix (D-2c-10).
@@ -283,7 +285,15 @@ Result<void> execute_update(const UpdateCmd& cmd, IDDBClient& client,
         }
 
         if (!last_key.has_value() || last_key->empty()) {
-            break;
+            if (read.api != WriteReadApi::query || !read.query_upper.has_value()) {
+                break;
+            }
+            // The lower leg of a not-equal split is exhausted: enumerate the
+            // upper leg from its first page, metered like a next page (P15,
+            // D-P15-8). The counts and EXPLAIN blocks continue across legs.
+            read.query = std::move(*read.query_upper);
+            read.query_upper.reset();
+            last_key.reset();
         }
         start_key = std::move(last_key);
         // Throttle before fetching the next page (do_query/do_scan: readlimit()

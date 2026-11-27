@@ -169,6 +169,20 @@ def test_contains_parameter(mem: ddbsh.Connection) -> None:
         assert sorted(r["id"] for r in cur.fetchall()) == expected, operand
 
 
+def test_not_equal_spellings_agree(mem: ddbsh.Connection) -> None:
+    """P15, D-P15-8: `<>` and `!=` on the sort key return the same rows in
+    the same order (two Queries, below then above the value)."""
+    cur = mem.cursor()
+    cur.execute("create table ne ( pk number, sk number ) primary key ( pk hash, sk range );")
+    cur.executemany("insert into ne ( pk, sk ) values ( ?, ? );", [[1, sk] for sk in range(1, 10)])
+    results = []
+    for op in ("<>", "!="):
+        cur.execute(f"select sk from ne where pk = ? and sk {op} ?;", [1, 5])
+        results.append([int(r["sk"]) for r in cur.fetchall()])
+    assert results[0] == [1, 2, 3, 4, 6, 7, 8, 9]
+    assert results[0] == results[1]
+
+
 def test_bulk_write_counts(movies: ddbsh.Connection) -> None:
     cur = movies.cursor()
     cur.execute("update movies set rating = ? where yr > ?;", [5, 2000])

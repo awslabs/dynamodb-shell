@@ -1,7 +1,9 @@
-Scan({
+Query({
    "TableName":   "isel1",
+   "ConsistentRead":   false,
    "ReturnConsumedCapacity":   "NONE",
-   "FilterExpression":   "#aaaa1 = :vaaa1 AND NOT (#aaaa2 = :vaaa2) AND #aaaa3 = :vaaa3",
+   "FilterExpression":   "#aaaa3 = :vaaa3",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2",
    "ExpressionAttributeNames":   {
       "#aaaa1":   "a",
       "#aaaa2":   "b",
@@ -17,6 +19,28 @@ Scan({
       ":vaaa3":   {
          "N":   "3"
       }
+   }
+})
+Query({
+   "TableName":   "isel1",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "FilterExpression":   "#aaaa3 = :vaaa3",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "a",
+      "#aaaa2":   "b",
+      "#aaaa3":   "c"
    },
-   "ConsistentRead":   false
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "N":   "1"
+      },
+      ":vaaa2":   {
+         "N":   "2"
+      },
+      ":vaaa3":   {
+         "N":   "3"
+      }
+   }
 })

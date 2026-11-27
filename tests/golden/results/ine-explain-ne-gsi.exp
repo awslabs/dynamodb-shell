@@ -1,0 +1,38 @@
+Query({
+   "TableName":   "ddbsh_ne",
+   "IndexName":   "ne_gsi",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 < :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "g",
+      "#aaaa2":   "h"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "S":   "a"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
+Query({
+   "TableName":   "ddbsh_ne",
+   "IndexName":   "ne_gsi",
+   "ConsistentRead":   false,
+   "ReturnConsumedCapacity":   "NONE",
+   "KeyConditionExpression":   "#aaaa1 = :vaaa1 AND #aaaa2 > :vaaa2",
+   "ExpressionAttributeNames":   {
+      "#aaaa1":   "g",
+      "#aaaa2":   "h"
+   },
+   "ExpressionAttributeValues":   {
+      ":vaaa1":   {
+         "S":   "a"
+      },
+      ":vaaa2":   {
+         "N":   "5"
+      }
+   }
+})
