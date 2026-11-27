@@ -16,6 +16,9 @@
 //   - credentialEnvironmentProblem: whether this window may take credentials
 //                             at all (secure context, not framed, not opened
 //                             by another page's script; P10, G1).
+//   - createCredentialNotice: holds checked credentials until the user
+//                             accepts the "experimental software" notice
+//                             (P14, B9).
 //   - fileToSubmission:       file text -> one submission (the `-f`/source path).
 //   - createHistory:          the command-history ring (push/cap/dedup/traverse/clear).
 //   - historyRemovedElsewhere: whether a `storage` event means another tab
@@ -669,6 +672,57 @@ export function credentialEnvironmentProblem({ secureContext, framed, opened } =
             "serve over HTTPS or use an SSH tunnel";
     }
     return null;
+}
+
+/**
+ * The "experimental software" notice between "Use credentials" and the
+ * credentials taking effect (P14, B9; D-P14-2 / D-P14-3).
+ *
+ * Every submission that passes the existing checks (the window environment and
+ * parseCredentials) is held here, in memory, and the notice is shown. Only
+ * accept() hands the held credentials to `apply`. There is no decline: a user
+ * who does not accept closes the tab, and the held credentials go with it
+ * (app.js also calls discard() on pagehide). Nothing records that the notice
+ * was seen, so the next submission shows it again. This object touches no
+ * storage and no cookie; it holds one value and calls the two functions it is
+ * given.
+ *
+ * @param {{show: function(): void,
+ *          apply: function(object): *}} deps
+ *   show:  display the notice (app.js: the modal <dialog>);
+ *   apply: use the credentials (app.js: bridge.setCredentials and the rest of
+ *          the old "Use credentials" path); its return value is accept()'s.
+ * @returns {{request: function(object): void, accept: function(): *,
+ *            discard: function(): void, readonly pending: boolean}}
+ *   request(credentials): hold the credentials (replacing any held ones) and
+ *                         show the notice;
+ *   accept():  apply the held credentials once and stop holding them; returns
+ *              apply's result, or undefined when nothing is held;
+ *   discard(): stop holding the credentials without applying them;
+ *   pending:   true while credentials are held.
+ */
+export function createCredentialNotice({ show, apply }) {
+    let held = null;
+    return {
+        request(credentials) {
+            held = credentials;
+            show();
+        },
+        accept() {
+            if (held === null) {
+                return undefined;
+            }
+            const credentials = held;
+            held = null;
+            return apply(credentials);
+        },
+        discard() {
+            held = null;
+        },
+        get pending() {
+            return held !== null;
+        },
+    };
 }
 
 /**

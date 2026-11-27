@@ -4,7 +4,8 @@
  *
  * styles.css — minimal styling for the ddbsh browser edition (P6e UI; P9
  * credentials panel; P10 header Help link, busy indicator and input height;
- * P12 busy indicator retry states, output dropdowns and HTML result tables).
+ * P12 busy indicator retry states, output dropdowns and HTML result tables;
+ * P14 the "experimental software" notice).
  *
  * Monospace throughout so the engine Renderer's byte-exact alignment survives
  * (O-2). Zero runtime dependencies (O-4): plain CSS, no framework.
@@ -460,4 +461,49 @@ body {
     background: rgba(0, 0, 0, 0.35);
     padding: 1px 4px;
     border-radius: 3px;
+}
+
+/* ---- the "experimental software" notice (P14, B9) ------------------------ */
+.notice {
+    max-width: 40rem;
+    background: var(--panel-bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.notice::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.notice p {
+    margin: 0 0 10px 0;
+}
+
+.notice a {
+    color: var(--link);
+}
+
+.notice-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.notice-actions button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 16px;
+    font-family: var(--mono);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.notice-actions button:hover {
+    background: var(--accent-hover);
 }

@@ -138,6 +138,37 @@
         </div>
     </footer>
 
+    <!-- The notice shown on every "Use credentials" (P14, B9; D-P14-2..4).
+         app.js opens it with showModal() after the credentials pass the
+         checks, and applies them only on Accept. There is no other button,
+         and Escape does not close it (app.js). The text is D-P14-4, verbatim;
+         app-core.test.mjs checks it word for word. If the page's history or
+         credential behavior changes, this text changes with it. -->
+    <dialog id="notice" class="notice" aria-labelledby="notice-title" aria-describedby="notice-body">
+        <div id="notice-body">
+            <p><strong id="notice-title">dynamodb-shell (ddbsh) is experimental software.</strong>
+                Use it at your own risk.</p>
+            <p><strong>Credentials.</strong> Your credentials are kept in this tab's memory only.
+                ddbsh never saves them to local storage or anywhere else, and never logs them. It
+                uses them only to sign requests to AWS. They are wiped when you close or leave this
+                page.</p>
+            <p><strong>Command history.</strong> ddbsh sets no cookies. It saves the statements you
+                type in the editor (the last 500, in full, including any values in them) in your
+                browser's local storage for this site, so they are still there the next time you
+                open the page. Statements run from an uploaded file are not saved. Each open tab
+                keeps its own history while it is open, and the tab that saved last is the one
+                stored. "Clear history" deletes the stored history and clears every open ddbsh
+                tab.</p>
+            <p><strong>No warranty.</strong> ddbsh is open-source software under the Apache License
+                2.0. It is provided "as is", without warranties or conditions of any kind. The source
+                code is at <a href="https://github.com/awslabs/dynamodb-shell" target="_blank"
+                rel="noopener noreferrer">https://github.com/awslabs/dynamodb-shell</a>.</p>
+        </div>
+        <div class="notice-actions">
+            <button id="notice-accept-btn" type="button" autofocus>Accept</button>
+        </div>
+    </dialog>
+
     <script type="module" src="./app.js"></script>
 </body>
 </html>
